@@ -1,0 +1,65 @@
+[
+  {
+    "time": "14:30",
+    "event": "ISM Manufacturing PMI",
+    "importance": "high",
+    "expected": 50.5,
+    "previous": 50.2,
+    "unit": "points",
+    "notes": "경기 지표. 50 이상 = 확장, 50 이하 = 수축"
+  },
+  {
+    "time": "16:00",
+    "event": "Fed 멤버 Powell 발언",
+    "importance": "high",
+    "notes": "금리 인상/인하 신호 주시"
+  },
+  {
+    "time": "09:30",
+    "event": "Apple 실적 발표",
+    "importance": "medium",
+    "notes": "AAPL 영향 → 나스닥/S&P500 파급"
+  },
+  {
+    "time": "15:00",
+    "event": "국제유가 (WTI) 재고 변화",
+    "importance": "medium",
+    "expected": -2.5,
+    "previous": 1.2,
+    "unit": "백만배럴",
+    "notes": "감소 시 유가 상승 신호"
+  },
+  {
+    "time": "22:00",
+    "event": "중국 경제 지표",
+    "importance": "medium",
+    "notes": "세계 경기 판단 자료. 약세 시 위험자산 약화"
+  }
+]
+
+/*
+사용법:
+1. 매일 아침 8:00 이전에 이 파일을 업데이트하세요.
+2. 오늘의 중요 경제 지표/이벤트를 입력합니다.
+3. 자동화가 이 파일을 읽어 이벤트 발표 시간에 주목합니다.
+
+필드 설명:
+- time: 한국 시간 (HH:MM 형식)
+- event: 이벤트명
+- importance: high/medium/low (높을수록 분석 우선순위 높음)
+- expected: 예상값 (있는 경우)
+- previous: 이전 값 (있는 경우)
+- unit: 단위 (있는 경우)
+- notes: 추가 설명
+
+예제 추가 방법:
+{
+  "time": "14:30",
+  "event": "미국 초기실업청구",
+  "importance": "high",
+  "expected": 220000,
+  "previous": 225000,
+  "unit": "건",
+  "notes": "노동시장 강도 판단. 높을수록 약세"
+}
+*/
