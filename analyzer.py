@@ -3,7 +3,9 @@ analyzer.py
 수집된 데이터를 Claude AI로 분석하는 모듈
 """
 
+import os
 import json
+os.environ["ANTHROPIC_API_KEY"] = "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"
 from anthropic import Anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 import logging
@@ -18,7 +20,7 @@ class MarketAnalyzer:
         if not ANTHROPIC_API_KEY:
             raise ValueError("❌ ANTHROPIC_API_KEY 환경변수 설정 필요")
         
-        self.client = Anthropic()
+        self.client = Anthropic(api_key=ANTHROPIC_API_KEY.strip())
         self.model = CLAUDE_MODEL
         self.max_tokens = 1000
         

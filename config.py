@@ -7,7 +7,10 @@ import os
 from dotenv import load_dotenv
 
 # 환경변수 로드
-load_dotenv()
+import os.path
+dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+
+load_dotenv(dotenv_path)
 
 # ============================================
 # API 키 설정
