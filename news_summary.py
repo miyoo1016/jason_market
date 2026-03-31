@@ -357,8 +357,9 @@ def generate_html(news_list, summary):
             title_ko = n.get('title_ko', n['title'])
             article_url = n.get('url', '')
             if article_url:
-                ko_url = f'https://translate.google.com/translate?sl=en&tl=ko&u={quote(article_url)}'
-                title_html = f'<a class="ntitle" href="{ko_url}" target="_blank">{title_ko}</a>'
+                papago_url = f'https://papago.naver.com/website?locale=ko&source=en&target=ko&url={quote(article_url)}'
+                title_html = (f'<a class="ntitle" href="{papago_url}" target="_blank">{title_ko}</a>'
+                              f'<a class="pago-btn" href="{article_url}" target="_blank" title="원문 보기">🔗</a>')
             else:
                 title_html = f'<span class="ntitle">{title_ko}</span>'
             news_rows += f"""
@@ -412,8 +413,11 @@ h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
 .ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:200px;text-decoration:none}}
 a.ntitle{{color:#1a237e;text-decoration:none;cursor:pointer}}
 a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
-.nsrc{{font-size:10px;color:#bbb;flex-shrink:0;padding-top:3px;
+.nsrc{{font-size:10px;color:#bbb;flex-shrink:0;
   background:#f5f6f8;border-radius:3px;padding:1px 5px}}
+.pago-btn{{font-size:13px;flex-shrink:0;text-decoration:none;
+  opacity:0.5;transition:opacity .15s;padding:0 2px}}
+.pago-btn:hover{{opacity:1}}
 /* 범례 */
 .legend{{font-size:12px;color:#888;margin-bottom:14px}}
 .legend span{{margin-right:14px}}
@@ -428,6 +432,10 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 .ref-item:hover{{box-shadow:0 2px 8px rgba(0,0,0,.1);background:#eef1f8}}
 .ref-name{{font-size:13px;font-weight:600;color:#1a237e;margin-bottom:3px}}
 .ref-desc{{font-size:11px;color:#777;line-height:1.4}}
+.ref-link{{color:#1a237e;text-decoration:none}}
+.ref-link:hover{{text-decoration:underline}}
+.ref-pago{{font-size:13px;text-decoration:none;opacity:0.5;transition:opacity .15s}}
+.ref-pago:hover{{opacity:1}}
 </style>
 </head>
 <body>
@@ -438,50 +446,54 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 </div>
 {summary_html}
 
-<!-- 참고 사이트 빠른 링크 (모두 구글 번역 경유 → 한국어로 열림) -->
+<!-- 참고 사이트 빠른 링크 -->
 <div class="ref-panel">
-  <div class="ref-title">📌 투자 참고 사이트 바로가기 <span style="font-size:11px;font-weight:400;color:#888">(클릭 시 한국어로 번역되어 열림)</span></div>
+  <div class="ref-title">📌 투자 참고 사이트 바로가기
+    <span style="font-size:11px;font-weight:400;color:#888">
+      &nbsp;— 사이트명 클릭: 원문 &nbsp;|&nbsp; 🔤 클릭: 파파고 한국어 번역
+    </span>
+  </div>
   <div class="ref-grid">
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://www.reuters.com/business/" target="_blank">
-      <span class="ref-name">Reuters 비즈니스</span>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://www.reuters.com/business/" target="_blank" class="ref-link">Reuters 비즈니스</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.reuters.com/business/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">전 세계 가장 중립적·빠른 팩트 뉴스. 정책·분쟁 뉴스 1순위</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://www.cnbc.com/markets/" target="_blank">
-      <span class="ref-name">CNBC Markets</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://www.cnbc.com/markets/" target="_blank" class="ref-link">CNBC Markets</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.cnbc.com/markets/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">개장 전후 실시간 변동성 보도. '5 Things to Know'로 하루 흐름 파악</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://www.investing.com/economic-calendar/" target="_blank">
-      <span class="ref-name">Investing.com 경제 캘린더</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://www.investing.com/economic-calendar/" target="_blank" class="ref-link">Investing.com 경제 캘린더</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.investing.com/economic-calendar/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">전 세계 경제 지표 발표 일정. 지표 발표 전 알람 설정 필수</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank">
-      <span class="ref-name">JP Morgan 시장 가이드</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank" class="ref-link">JP Morgan 시장 가이드</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">분기별 기관투자자용 매크로 차트 정석. 복잡한 거시를 한 장으로 요약</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://www.goldmansachs.com/insights/" target="_blank">
-      <span class="ref-name">Goldman Sachs Insights</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://www.goldmansachs.com/insights/" target="_blank" class="ref-link">Goldman Sachs Insights</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.goldmansachs.com/insights/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">월가의 솔직한 뷰. AI·공급망 등 현재 시장 핵심 테마 분석</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank">
-      <span class="ref-name">BlackRock 주간 논평</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank" class="ref-link">BlackRock 주간 논평</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">매주 월요일 발행. 자산군별 과열·저평가 명확히 제시</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://fred.stlouisfed.org/" target="_blank">
-      <span class="ref-name">FRED 경제 데이터</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://fred.stlouisfed.org/" target="_blank" class="ref-link">FRED 경제 데이터</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://fred.stlouisfed.org/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">미국 연준 공식 데이터. 금리·인플레·고용 장기 추세 확인</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://money.cnn.com/data/fear-and-greed/" target="_blank">
-      <span class="ref-name">CNN 공포·탐욕 지수</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://money.cnn.com/data/fear-and-greed/" target="_blank" class="ref-link">CNN 공포·탐욕 지수</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://money.cnn.com/data/fear-and-greed/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">VIX와 병행 활용. '극도 공포' 시 역발상 매수 기회 포착</span>
-    </a>
-    <a class="ref-item" href="https://finviz.com/map.ashx" target="_blank">
-      <span class="ref-name">Finviz S&amp;P500 히트맵</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://finviz.com/map.ashx" target="_blank" class="ref-link">Finviz S&amp;P500 히트맵</a></span>
       <span class="ref-desc">시각적 히트맵 — 번역 불필요. 섹터별 강세를 3초에 파악</span>
-    </a>
-    <a class="ref-item" href="https://translate.google.com/translate?sl=en&tl=ko&u=https://finance.yahoo.com/" target="_blank">
-      <span class="ref-name">Yahoo Finance</span>
+    </div>
+    <div class="ref-item">
+      <span class="ref-name"><a href="https://finance.yahoo.com/" target="_blank" class="ref-link">Yahoo Finance</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://finance.yahoo.com/" target="_blank" class="ref-pago">🔤</a></span>
       <span class="ref-desc">종목별 실시간 시세·뉴스·재무제표 빠르게 확인</span>
-    </a>
+    </div>
   </div>
 </div>
 
