@@ -157,12 +157,44 @@ def get_gnews(query, max_items=4):
         return results
     except: return []
 
+# ── 글로벌 미디어 RSS (고정 채널) ────────────────────────────
+MEDIA_RSS = [
+    ('CNBC',         'https://www.cnbc.com/id/100003114/device/rss/rss.html',                 8),
+    ('MarketWatch',  'https://feeds.content.dowjones.io/public/rss/mw_topstories',            8),
+    ('Investing.com','https://www.investing.com/rss/news.rss',                                8),
+    ('Seeking Alpha','https://seekingalpha.com/market_currents.xml',                           6),
+    ('FT Markets',   'https://www.ft.com/markets?format=rss',                                 8),
+]
+
+def get_media_rss(name, url, max_items):
+    """미디어 RSS 수집 (고정 채널)"""
+    try:
+        r = requests.get(url, timeout=8,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+        root = ET.fromstring(r.content)
+        results = []
+        for item in root.findall('.//item')[:max_items]:
+            title = item.findtext('title', '').strip()
+            link  = item.findtext('link',  '').strip()
+            pub   = item.findtext('pubDate', '')
+            if not title: continue
+            try:
+                dt = datetime.strptime(pub[:25], '%a, %d %b %Y %H:%M:%S')
+                ts = dt.strftime('%m/%d %H:%M')
+            except: ts = ''
+            results.append({'title': title, 'time': ts,
+                            'src': name, 'url': link,
+                            'asset': name, 'ticker': ''})
+        return results
+    except: return []
+
 def collect_all_news():
     """전체 자산 뉴스 수집 + 중복 제거 + 감성 분류"""
     all_news, seen = [], set()
+
+    # 1) 자산별 뉴스 (Yahoo Finance + Google News RSS)
     for name, ticker in ASSETS.items():
         items = get_yf_news(ticker)
-        # Google News RSS 추가 수집
         query = _GNEWS_QUERY.get(ticker, name)
         items += get_gnews(query, max_items=3)
 
@@ -173,6 +205,15 @@ def collect_all_news():
             item['asset']  = name
             item['ticker'] = ticker
             item['sent']   = sentiment(item['title'])
+            all_news.append(item)
+
+    # 2) 글로벌 미디어 RSS (CNBC, MarketWatch, Investing.com, SA, FT)
+    for m_name, m_url, m_max in MEDIA_RSS:
+        for item in get_media_rss(m_name, m_url, m_max):
+            key = item['title'][:35].lower()
+            if key in seen: continue
+            seen.add(key)
+            item['sent'] = sentiment(item['title'])
             all_news.append(item)
 
     # 최신순 정렬 (시간 있는 것 우선)
@@ -375,6 +416,17 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 /* 범례 */
 .legend{{font-size:12px;color:#888;margin-bottom:14px}}
 .legend span{{margin-right:14px}}
+/* 참고 사이트 패널 */
+.ref-panel{{background:#fff;border-radius:10px;padding:16px 20px;
+  border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:18px}}
+.ref-title{{font-size:14px;font-weight:700;color:#1a237e;margin-bottom:12px}}
+.ref-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}}
+.ref-item{{display:flex;flex-direction:column;padding:10px 12px;border-radius:8px;
+  background:#f5f6f8;border:1px solid #e8eaf0;text-decoration:none;
+  transition:box-shadow .15s}}
+.ref-item:hover{{box-shadow:0 2px 8px rgba(0,0,0,.1);background:#eef1f8}}
+.ref-name{{font-size:13px;font-weight:600;color:#1a237e;margin-bottom:3px}}
+.ref-desc{{font-size:11px;color:#777;line-height:1.4}}
 </style>
 </head>
 <body>
@@ -384,6 +436,54 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
   <span>🟢 강세 신호</span><span>🔴 약세 신호</span><span>⚪ 중립</span>
 </div>
 {summary_html}
+
+<!-- 참고 사이트 빠른 링크 -->
+<div class="ref-panel">
+  <div class="ref-title">📌 투자 참고 사이트 바로가기</div>
+  <div class="ref-grid">
+    <a class="ref-item" href="https://www.reuters.com/business/" target="_blank">
+      <span class="ref-name">Reuters 비즈니스</span>
+      <span class="ref-desc">전 세계 가장 중립적·빠른 팩트 뉴스. 정책·분쟁 뉴스 1순위</span>
+    </a>
+    <a class="ref-item" href="https://www.cnbc.com/markets/" target="_blank">
+      <span class="ref-name">CNBC Markets</span>
+      <span class="ref-desc">개장 전후 실시간 변동성 보도. '5 Things to Know'로 하루 흐름 파악</span>
+    </a>
+    <a class="ref-item" href="https://www.investing.com/economic-calendar/" target="_blank">
+      <span class="ref-name">Investing.com 경제 캘린더</span>
+      <span class="ref-desc">전 세계 경제 지표 발표 일정. 지표 발표 전 알람 설정 필수</span>
+    </a>
+    <a class="ref-item" href="https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank">
+      <span class="ref-name">JP Morgan 시장 가이드</span>
+      <span class="ref-desc">분기별 기관투자자용 매크로 차트 정석. 복잡한 거시를 한 장으로 요약</span>
+    </a>
+    <a class="ref-item" href="https://www.goldmansachs.com/insights/" target="_blank">
+      <span class="ref-name">Goldman Sachs Insights</span>
+      <span class="ref-desc">월가의 솔직한 뷰. AI·공급망 등 현재 시장 핵심 테마 분석</span>
+    </a>
+    <a class="ref-item" href="https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank">
+      <span class="ref-name">BlackRock 주간 논평</span>
+      <span class="ref-desc">매주 월요일 발행. 자산군별 과열·저평가 명확히 제시</span>
+    </a>
+    <a class="ref-item" href="https://fred.stlouisfed.org/" target="_blank">
+      <span class="ref-name">FRED 경제 데이터</span>
+      <span class="ref-desc">미국 연준 공식 데이터. 금리·인플레·고용 장기 추세 확인</span>
+    </a>
+    <a class="ref-item" href="https://money.cnn.com/data/fear-and-greed/" target="_blank">
+      <span class="ref-name">CNN 공포·탐욕 지수</span>
+      <span class="ref-desc">VIX와 병행 활용. '극도 공포' 시 역발상 매수 기회 포착</span>
+    </a>
+    <a class="ref-item" href="https://finviz.com/map.ashx" target="_blank">
+      <span class="ref-name">Finviz S&amp;P500 히트맵</span>
+      <span class="ref-desc">섹터별 강세를 3초에 파악. 오늘 어느 섹터가 살고 죽는지 한눈에</span>
+    </a>
+    <a class="ref-item" href="https://finance.yahoo.com/" target="_blank">
+      <span class="ref-name">Yahoo Finance</span>
+      <span class="ref-desc">종목별 실시간 시세·뉴스·재무제표 빠르게 확인</span>
+    </a>
+  </div>
+</div>
+
 <div class="grid">{cards}</div>
 </body>
 </html>"""
@@ -400,7 +500,7 @@ def main():
     print(f"\n{'━'*64}")
     print(f"  Jason 뉴스 수집   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'━'*64}")
-    print("  뉴스 수집 중 (Yahoo Finance + Google News RSS)...")
+    print("  뉴스 수집 중 (Yahoo·Google RSS + CNBC·MarketWatch·Investing·SA·FT)...")
 
     news_list = collect_all_news()
     summary   = make_summary(news_list)
