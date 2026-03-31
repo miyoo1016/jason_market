@@ -2,7 +2,7 @@
 """뉴스 수집 & 스마트 정리 - Jason Market
 완전 무료 (API 불필요): yfinance + Google News RSS + 키워드 감성분석"""
 
-import requests, json, webbrowser, tempfile, time
+import requests, json, webbrowser, tempfile, time, re
 import xml.etree.ElementTree as ET
 import yfinance as yf
 from datetime import datetime
@@ -126,7 +126,8 @@ def get_yf_news(ticker, max_items=4):
                 else: dt = None
                 ts = dt.strftime('%m/%d %H:%M') if dt else ''
             except: ts = ''
-            results.append({'title': title, 'time': ts, 'src': 'Yahoo', 'url': url})
+            desc = (c.get('summary') or c.get('description') or '').strip()[:200]
+            results.append({'title': title, 'time': ts, 'src': 'Yahoo', 'url': url, 'desc': desc})
         return results
     except: return []
 
@@ -152,8 +153,10 @@ def get_gnews(query, max_items=4):
                 dt = datetime.strptime(pub[:25], '%a, %d %b %Y %H:%M:%S')
                 ts = dt.strftime('%m/%d %H:%M')
             except: ts = ''
+            desc_raw = item.findtext('description', '')
+            desc = re.sub(r'<[^>]+>', '', desc_raw).strip()[:200]
             results.append({'title': title.strip(), 'time': ts,
-                            'src': pub_src or 'GNews', 'url': link})
+                            'src': pub_src or 'GNews', 'url': link, 'desc': desc})
         return results
     except: return []
 
@@ -182,8 +185,10 @@ def get_media_rss(name, url, max_items):
                 dt = datetime.strptime(pub[:25], '%a, %d %b %Y %H:%M:%S')
                 ts = dt.strftime('%m/%d %H:%M')
             except: ts = ''
+            desc_raw = item.findtext('description', '')
+            desc = re.sub(r'<[^>]+>', '', desc_raw).strip()[:200]
             results.append({'title': title, 'time': ts,
-                            'src': name, 'url': link,
+                            'src': name, 'url': link, 'desc': desc,
                             'asset': name, 'ticker': ''})
         return results
     except: return []
@@ -229,6 +234,20 @@ def collect_all_news():
     titles_ko = translate_batch(titles_en)
     for n, ko in zip(all_news, titles_ko):
         n['title_ko'] = ko
+
+    # 요약(description) 번역
+    descs_en = [n.get('desc', '') for n in all_news]
+    non_empty = [(i, d) for i, d in enumerate(descs_en) if d.strip()]
+    if non_empty:
+        idxs, texts = zip(*non_empty)
+        translated_descs = translate_batch(list(texts))
+        descs_ko = [''] * len(descs_en)
+        for i, ko in zip(idxs, translated_descs):
+            descs_ko[i] = ko
+    else:
+        descs_ko = [''] * len(descs_en)
+    for n, ko in zip(all_news, descs_ko):
+        n['desc_ko'] = ko
 
     return all_news
 
@@ -355,19 +374,20 @@ def generate_html(news_list, summary):
             ts_ = f'<span class="ntime">[{n["time"]}]</span>' if n['time'] else ''
             src = f'<span class="nsrc">{n["src"]}</span>'
             title_ko = n.get('title_ko', n['title'])
+            desc_ko  = n.get('desc_ko', '').strip()
             article_url = n.get('url', '')
             if article_url:
-                papago_url = f'https://papago.naver.com/website?locale=ko&source=en&target=ko&url={quote(article_url)}'
-                title_html = (f'<a class="ntitle" href="{papago_url}" target="_blank">{title_ko}</a>'
-                              f'<a class="pago-btn" href="{article_url}" target="_blank" title="원문 보기">🔗</a>')
+                title_html = f'<a class="ntitle" href="{article_url}" target="_blank">{title_ko}</a>'
             else:
                 title_html = f'<span class="ntitle">{title_ko}</span>'
+            desc_html = (f'<div class="ndesc">{desc_ko}</div>' if desc_ko else '')
             news_rows += f"""
         <div class="news-row">
           <span class="sent-dot" style="color:{sc}">{si}</span>
-          {ts_}
-          {title_html}
-          {src}
+          <div class="news-body">
+            <div class="news-top">{ts_}{title_html}{src}</div>
+            {desc_html}
+          </div>
         </div>"""
 
         cards += f"""
@@ -406,18 +426,19 @@ h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
 .ticker-badge{{font-size:10px;background:#eef1f8;color:#555;
   padding:2px 7px;border-radius:4px;font-weight:400}}
 .news-row{{display:flex;align-items:flex-start;gap:6px;
-  padding:7px 0;border-bottom:1px solid #f0f2f8;flex-wrap:wrap}}
+  padding:7px 0;border-bottom:1px solid #f0f2f8}}
 .news-row:last-child{{border-bottom:none}}
-.sent-dot{{font-size:14px;flex-shrink:0;margin-top:1px}}
-.ntime{{font-size:11px;color:#aaa;flex-shrink:0;padding-top:2px}}
-.ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:200px;text-decoration:none}}
+.sent-dot{{font-size:14px;flex-shrink:0;margin-top:2px}}
+.news-body{{flex:1;min-width:0}}
+.news-top{{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}}
+.ntime{{font-size:11px;color:#aaa;flex-shrink:0}}
+.ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:180px;text-decoration:none}}
 a.ntitle{{color:#1a237e;text-decoration:none;cursor:pointer}}
 a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 .nsrc{{font-size:10px;color:#bbb;flex-shrink:0;
   background:#f5f6f8;border-radius:3px;padding:1px 5px}}
-.pago-btn{{font-size:13px;flex-shrink:0;text-decoration:none;
-  opacity:0.5;transition:opacity .15s;padding:0 2px}}
-.pago-btn:hover{{opacity:1}}
+.ndesc{{font-size:11px;color:#777;line-height:1.4;margin-top:3px;
+  padding-left:2px;border-left:2px solid #e0e3ec}}
 /* 범례 */
 .legend{{font-size:12px;color:#888;margin-bottom:14px}}
 .legend span{{margin-right:14px}}
@@ -448,42 +469,38 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 
 <!-- 참고 사이트 빠른 링크 -->
 <div class="ref-panel">
-  <div class="ref-title">📌 투자 참고 사이트 바로가기
-    <span style="font-size:11px;font-weight:400;color:#888">
-      &nbsp;— 사이트명 클릭: 원문 &nbsp;|&nbsp; 🔤 클릭: 파파고 한국어 번역
-    </span>
-  </div>
+  <div class="ref-title">📌 투자 참고 사이트 바로가기</div>
   <div class="ref-grid">
     <div class="ref-item">
-      <span class="ref-name"><a href="https://www.reuters.com/business/" target="_blank" class="ref-link">Reuters 비즈니스</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.reuters.com/business/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://www.reuters.com/business/" target="_blank" class="ref-link">Reuters 비즈니스</a></span>
       <span class="ref-desc">전 세계 가장 중립적·빠른 팩트 뉴스. 정책·분쟁 뉴스 1순위</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://www.cnbc.com/markets/" target="_blank" class="ref-link">CNBC Markets</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.cnbc.com/markets/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://www.cnbc.com/markets/" target="_blank" class="ref-link">CNBC Markets</a></span>
       <span class="ref-desc">개장 전후 실시간 변동성 보도. '5 Things to Know'로 하루 흐름 파악</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://www.investing.com/economic-calendar/" target="_blank" class="ref-link">Investing.com 경제 캘린더</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.investing.com/economic-calendar/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://www.investing.com/economic-calendar/" target="_blank" class="ref-link">Investing.com 경제 캘린더</a></span>
       <span class="ref-desc">전 세계 경제 지표 발표 일정. 지표 발표 전 알람 설정 필수</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank" class="ref-link">JP Morgan 시장 가이드</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://am.jpmorgan.com/us/en/asset-management/adv/insights/market-insights/guide-to-the-markets/" target="_blank" class="ref-link">JP Morgan 시장 가이드</a></span>
       <span class="ref-desc">분기별 기관투자자용 매크로 차트 정석. 복잡한 거시를 한 장으로 요약</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://www.goldmansachs.com/insights/" target="_blank" class="ref-link">Goldman Sachs Insights</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.goldmansachs.com/insights/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://www.goldmansachs.com/insights/" target="_blank" class="ref-link">Goldman Sachs Insights</a></span>
       <span class="ref-desc">월가의 솔직한 뷰. AI·공급망 등 현재 시장 핵심 테마 분석</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank" class="ref-link">BlackRock 주간 논평</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://www.blackrock.com/us/individual/insights/blackrock-investment-institute/weekly-commentary" target="_blank" class="ref-link">BlackRock 주간 논평</a></span>
       <span class="ref-desc">매주 월요일 발행. 자산군별 과열·저평가 명확히 제시</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://fred.stlouisfed.org/" target="_blank" class="ref-link">FRED 경제 데이터</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://fred.stlouisfed.org/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://fred.stlouisfed.org/" target="_blank" class="ref-link">FRED 경제 데이터</a></span>
       <span class="ref-desc">미국 연준 공식 데이터. 금리·인플레·고용 장기 추세 확인</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://money.cnn.com/data/fear-and-greed/" target="_blank" class="ref-link">CNN 공포·탐욕 지수</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://money.cnn.com/data/fear-and-greed/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://money.cnn.com/data/fear-and-greed/" target="_blank" class="ref-link">CNN 공포·탐욕 지수</a></span>
       <span class="ref-desc">VIX와 병행 활용. '극도 공포' 시 역발상 매수 기회 포착</span>
     </div>
     <div class="ref-item">
@@ -491,7 +508,7 @@ a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
       <span class="ref-desc">시각적 히트맵 — 번역 불필요. 섹터별 강세를 3초에 파악</span>
     </div>
     <div class="ref-item">
-      <span class="ref-name"><a href="https://finance.yahoo.com/" target="_blank" class="ref-link">Yahoo Finance</a> <a href="https://papago.naver.com/website?locale=ko&source=en&target=ko&url=https://finance.yahoo.com/" target="_blank" class="ref-pago">🔤</a></span>
+      <span class="ref-name"><a href="https://finance.yahoo.com/" target="_blank" class="ref-link">Yahoo Finance</a></span>
       <span class="ref-desc">종목별 실시간 시세·뉴스·재무제표 빠르게 확인</span>
     </div>
   </div>

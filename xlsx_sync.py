@@ -6,13 +6,16 @@
 다른 스크립트에서 호출: from xlsx_sync import load_portfolio
 """
 
-import os, json, re, warnings, threading
+import os, json, re, warnings, threading, platform
 warnings.filterwarnings('ignore')
 
-XLSX_PATH = os.path.expanduser(
-    "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com"
-    "/내 드라이브/PF/자산 계산기(클로드).xlsx"
-)
+if platform.system() == "Windows":
+    XLSX_PATH = r"G:\내 드라이브\PF\자산 계산기(클로드).xlsx"
+else:
+    XLSX_PATH = os.path.expanduser(
+        "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com"
+        "/내 드라이브/PF/자산 계산기(클로드).xlsx"
+    )
 PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
 SHEET_NAME = "📊 자산 계산기"
 

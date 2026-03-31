@@ -24,13 +24,12 @@ MENU = [
     ('8',  '지지·저항선        — 주요 가격대 분석',          'support_resistance.py',       [], True),
     ('9',  '수익률 비교        — 자산별 성과 비교',          'returns_comparison.py',       [], True),
     ('10', '상관관계 매트릭스  — 자산 간 연관성',            'correlation_matrix.py',       [], True),
-    ('11', '자동 전체 분석     — 위 항목 일괄 실행 [API 다수]', 'auto_analysis.py',          [], True),
-    ('12', '멀티 에이전트 AI   — 6개 Claude 토론 후 판단 [API 6회]', 'multi_agent_analyst.py', [], True),
-    ('13', '차트 대시보드     — 16종목 5분봉/일봉 브라우저', 'chart_viewer.py',             [], True),
-    ('14', '옵션 모니터      — QQQ/GLD 1개월 배팅 현황',   'options_monitor.py',          [], True),
-    ('15', '섹터 흐름        — S&P500 11개 섹터 자금흐름', 'sector_flow.py',              [], True),
-    ('16', '포트폴리오 리스크 — VaR·Beta·변동성 분석',     'portfolio_risk.py',           [], True),
-    ('17', '시장 스트레스    — VIX구조·금리역전·신용스프레드', 'market_stress.py',           [], True),
+    ('11', '종합 AI 분석       — 기술+거시+리스크 멀티관점 [무료🆓]', 'auto_analysis.py',      [], True),
+    ('12', '차트 대시보드     — 16종목 5분봉/일봉 브라우저', 'chart_viewer.py',             [], True),
+    ('13', '옵션 모니터      — QQQ/GLD 1개월 배팅 현황',   'options_monitor.py',          [], True),
+    ('14', '섹터 흐름        — S&P500 11개 섹터 자금흐름', 'sector_flow.py',              [], True),
+    ('15', '포트폴리오 리스크 — VaR·Beta·변동성 분석',     'portfolio_risk.py',           [], True),
+    ('16', '시장 스트레스    — VIX구조·금리역전·신용스프레드', 'market_stress.py',           [], True),
 ]
 
 SEPARATOR = '─' * 58
@@ -60,14 +59,6 @@ def run(script, extra_args=None):
     subprocess.run(cmd)
 
 
-def ask_question(prompt_text):
-    q = input(f"  질문 입력 (예: BTC 지금 매수해야 해?): ").strip()
-    if q:
-        run('multi_agent_analyst.py', [q])
-    else:
-        print("  취소")
-
-
 def main():
     while True:
         print_menu()
@@ -84,13 +75,8 @@ def main():
             continue
 
         _, desc, script, args, _ = matched
-
-        # 멀티 에이전트는 질문을 별도 입력받음
-        if choice == '12':
-            ask_question(desc)
-        else:
-            print(f"\n  ▶ {desc.split('—')[0].strip()} 실행 중...\n")
-            run(script, args)
+        print(f"\n  ▶ {desc.split('—')[0].strip()} 실행 중...\n")
+        run(script, args)
 
         input("\n  Enter 키를 누르면 메뉴로 돌아갑니다...")
 

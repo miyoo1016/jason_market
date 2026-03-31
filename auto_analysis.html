@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Jason 종합 AI 분석</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f5f6f8;color:#222;font-family:'Segoe UI',Arial,sans-serif;padding:20px}
+h1{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}
+.ts{font-size:12px;color:#888;margin-bottom:16px}
+.badge{display:inline-block;background:#e8f5e9;color:#2e7d32;font-size:11px;
+  font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle}
+.section{background:#fff;border-radius:10px;padding:16px 20px;
+  border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px}
+.section-title{font-size:13px;font-weight:700;color:#1a237e;margin-bottom:12px;
+  text-transform:uppercase;letter-spacing:0.4px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;color:#888;text-align:right;padding:5px 10px;
+  border-bottom:1px solid #eee;font-weight:600;text-transform:uppercase}
+th.name-col{text-align:left}
+td{font-size:13px;padding:6px 10px;border-bottom:1px solid #f0f2f8;text-align:right}
+td.name-col{text-align:left;color:#333;font-weight:600}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbff}
+.ai-card{background:#fff;border-radius:10px;padding:18px 20px;
+  border:1px solid #dde3f0;border-left:4px solid #00838f;
+  box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:14px}
+.ai-title{font-size:14px;font-weight:700;color:#1a237e;margin-bottom:10px}
+.ai-sub{font-size:11px;font-weight:400;color:#888;margin-left:6px}
+.ai-body{font-size:13px;line-height:1.8;color:#333;
+  white-space:pre-wrap;word-break:break-word;
+  background:#f8f9fc;border-radius:6px;padding:14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>📊 Jason 종합 AI 분석<span class="badge">🆓 알고리즘 분석 (무료)</span></h1>
+<div class="ts">2026년 03월 31일 23:24:50</div>
+
+<div class="grid2">
+  <div class="section">
+    <div class="section-title">시세 요약</div>
+    <table>
+      <thead><tr>
+        <th class="name-col">자산</th><th>현재가</th>
+        <th>일간%</th><th>1주%</th><th>1달%</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="name-col">Bitcoin</td>
+          <td class="num-col">$67,626</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.40%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.94%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-3.67%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Gold</td>
+          <td class="num-col">$4,646.2</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+2.66%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+2.12%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-9.03%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Brent유</td>
+          <td class="num-col">$106.8</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-5.35%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+4.43%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+31.14%</td>
+        </tr>
+        <tr>
+          <td class="name-col">WTI원유</td>
+          <td class="num-col">$102.2</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-0.65%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+13.16%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+37.08%</td>
+        </tr>
+        <tr>
+          <td class="name-col">S&P선물</td>
+          <td class="num-col">6,482.2</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.47%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-2.39%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-5.02%</td>
+        </tr>
+        <tr>
+          <td class="name-col">나스닥선물</td>
+          <td class="num-col">23,521.2</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.65%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-3.47%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-4.99%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Google</td>
+          <td class="num-col">$281.98</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+3.10%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-3.08%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-7.05%</td>
+        </tr>
+        <tr>
+          <td class="name-col">QQQM</td>
+          <td class="num-col">$234.04</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.81%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-3.28%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-5.39%</td>
+        </tr>
+        <tr>
+          <td class="name-col">SPY</td>
+          <td class="num-col">$642.11</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.60%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-2.24%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-5.36%</td>
+        </tr>
+        <tr>
+          <td class="name-col">달러/원</td>
+          <td class="num-col">₩1,523.5</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.09%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.75%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+4.90%</td>
+        </tr>
+        <tr>
+          <td class="name-col">미국10년물</td>
+          <td class="num-col">4.32</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-0.48%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-0.16%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+6.53%</td>
+        </tr>
+        <tr>
+          <td class="name-col">VIX</td>
+          <td class="num-col">27.60</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-9.83%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+8.96%</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+17.10%</td>
+        </tr>
+        <tr>
+          <td class="name-col">코스피</td>
+          <td class="num-col">5,052.46</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-4.26%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-10.45%</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-12.77%</td>
+        </tr></tbody>
+    </table>
+  </div>
+  <div>
+    <div class="section">
+      <div class="section-title">기술지표</div>
+      <table>
+        <thead><tr>
+          <th class="name-col">자산</th><th>RSI</th>
+          <th>MACD</th><th>볼린저%B</th><th>52주위치</th>
+        </tr></thead>
+        <tbody>
+        <tr>
+          <td class="name-col">Bitcoin</td>
+          <td class="num-col" style="color:#555;font-weight:600">45</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#555">28%</span></td>
+          <td class="num-col">11%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Gold</td>
+          <td class="num-col" style="color:#555;font-weight:600">45</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#555">36%</span></td>
+          <td class="num-col">64%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Brent유</td>
+          <td class="num-col" style="color:#555;font-weight:600">60</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#555">66%</span></td>
+          <td class="num-col">79%</td>
+        </tr>
+        <tr>
+          <td class="name-col">WTI원유</td>
+          <td class="num-col" style="color:#555;font-weight:600">66</td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">▲양</span></td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">83% 과열</span></td>
+          <td class="num-col">73%</td>
+        </tr>
+        <tr>
+          <td class="name-col">S&P선물</td>
+          <td class="num-col" style="color:#555;font-weight:600">36</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">18% 침체</span></td>
+          <td class="num-col">75%</td>
+        </tr>
+        <tr>
+          <td class="name-col">나스닥선물</td>
+          <td class="num-col" style="color:#555;font-weight:600">36</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">11% 침체</span></td>
+          <td class="num-col">71%</td>
+        </tr>
+        <tr>
+          <td class="name-col">Google</td>
+          <td class="num-col" style="color:#555;font-weight:600">35</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">16% 침체</span></td>
+          <td class="num-col">68%</td>
+        </tr>
+        <tr>
+          <td class="name-col">QQQM</td>
+          <td class="num-col" style="color:#555;font-weight:600">37</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">14% 침체</span></td>
+          <td class="num-col">71%</td>
+        </tr>
+        <tr>
+          <td class="name-col">SPY</td>
+          <td class="num-col" style="color:#555;font-weight:600">37</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">19% 침체</span></td>
+          <td class="num-col">75%</td>
+        </tr>
+        <tr>
+          <td class="name-col">달러/원</td>
+          <td class="num-col" style="color:#555;font-weight:600">64</td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">▲양</span></td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">102% 과열</span></td>
+          <td class="num-col">94%</td>
+        </tr>
+        <tr>
+          <td class="name-col">미국10년물</td>
+          <td class="num-col" style="color:#555;font-weight:600">55</td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">▲양</span></td>
+          <td class="num-col"><span style="color:#555">63%</span></td>
+          <td class="num-col">59%</td>
+        </tr>
+        <tr>
+          <td class="name-col">VIX</td>
+          <td class="num-col" style="color:#555;font-weight:600">56</td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">▲양</span></td>
+          <td class="num-col"><span style="color:#555">65%</span></td>
+          <td class="num-col">30%</td>
+        </tr>
+        <tr>
+          <td class="name-col">코스피</td>
+          <td class="num-col" style="color:#555;font-weight:600">40</td>
+          <td class="num-col"><span style="color:#c62828;font-weight:600">▼음</span></td>
+          <td class="num-col"><span style="color:#00838f;font-weight:600">-3% 침체</span></td>
+          <td class="num-col">68%</td>
+        </tr></tbody>
+      </table>
+    </div>
+    <div class="section">
+      <div class="section-title">거시지표</div>
+      <table>
+        <thead><tr>
+          <th class="name-col">지표</th><th>현재값</th><th>변화%</th>
+        </tr></thead>
+        <tbody>
+        <tr>
+          <td class="name-col">VIX</td>
+          <td class="num-col">27.6</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-9.83%</td>
+        </tr>
+        <tr>
+          <td class="name-col">DXY</td>
+          <td class="num-col">100.08</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-0.43%</td>
+        </tr>
+        <tr>
+          <td class="name-col">US10Y</td>
+          <td class="num-col">4.321</td>
+          <td class="num-col" style="color:#c62828;font-weight:600">-0.48%</td>
+        </tr>
+        <tr>
+          <td class="name-col">USDKRW</td>
+          <td class="num-col">1523.31</td>
+          <td class="num-col" style="color:#00838f;font-weight:600">+1.08%</td>
+        </tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+
+    <div class="ai-card" style="border-left-color:#555">
+      <div class="ai-title">알고리즘 분석 <span class="ai-sub">무료 (API 불필요)</span></div>
+      <pre class="ai-body">[알고리즘 기술 분석]
+
+  Bitcoin     : 관망(중립)    (RSI 45 중립, MACD 음전환)
+  Gold        : 관망(중립)    (RSI 45 중립, MACD 음전환)
+  Brent유      : 관망(긍정)    (RSI 60 중립, MACD 음전환)
+  WTI원유       : 관망(긍정)    (RSI 66 중립, MACD 양전환, 볼린저 상단 근접)
+  S&amp;P선물       : 관망(중립)    (RSI 36 중립, MACD 음전환, 볼린저 하단 근접)
+  나스닥선물       : 관망(중립)    (RSI 36 중립, MACD 음전환, 볼린저 하단 근접)
+  Google      : 관망(중립)    (RSI 35 중립, MACD 음전환, 볼린저 하단 근접)
+  QQQM        : 관망(중립)    (RSI 37 중립, MACD 음전환, 볼린저 하단 근접)
+  SPY         : 관망(중립)    (RSI 37 중립, MACD 음전환, 볼린저 하단 근접)
+
+[거시환경]
+  VIX 27.6 → 시장심리 공포
+  미국10년물 4.32%  변화 -0.48%
+  달러/원 1,523.3  변화 +1.08%
+
+※ Groq API 키 없음 → 알고리즘 분석 (GROQ_API_KEY를 .env에 추가하면 AI 분석 활성화)</pre>
+    </div>
+</body>
+</html>
