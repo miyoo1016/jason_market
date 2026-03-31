@@ -1,196 +1,369 @@
 #!/usr/bin/env python3
-"""뉴스 AI 요약 - Jason Market
-포트폴리오 자산 관련 최신 뉴스를 수집하고 Claude가 한국어로 요약합니다."""
+"""뉴스 수집 & 스마트 정리 - Jason Market
+완전 무료 (API 불필요): yfinance + Google News RSS + 키워드 감성분석"""
 
-import os
+import requests, json, webbrowser, tempfile
+import xml.etree.ElementTree as ET
 import yfinance as yf
-from datetime import datetime, timezone
-from dotenv import load_dotenv
+from datetime import datetime
+from urllib.parse import quote
 from xlsx_sync import load_portfolio as _load_pf
 
-_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env_path, override=True)
-
-ALERT = '\033[38;5;203m'  # 연한 빨간색 (극단 경고에만)
+CYAN  = '\033[36m'
+AMBER = '\033[38;5;214m'
+ALERT = '\033[38;5;203m'
 RESET = '\033[0m'
 
-EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
+# ── 강세 / 약세 키워드 ────────────────────────────────────────
+BULL_KW = [
+    'surge','rally','gain','rise','jump','soar','climb','record',
+    'beat','strong','growth','positive','upgrade','buy','boost',
+    'optimism','recovery','bullish','outperform','high','up ',
+]
+BEAR_KW = [
+    'drop','fall','decline','plunge','crash','slip','tumble','low',
+    'miss','weak','sell','downgrade','recession','fear','risk',
+    'warning','loss','bearish','underperform','concern','down ',
+    'layoff','cut','debt','default','tariff','sanction',
+]
 
-def alert_line(text):
-    for kw in EXTREME:
-        if kw in text:
-            return ALERT + text + RESET
-    return text
+def sentiment(title):
+    tl = title.lower()
+    b = sum(1 for k in BULL_KW if k in tl)
+    s = sum(1 for k in BEAR_KW if k in tl)
+    if b > s: return 'bull'
+    if s > b: return 'bear'
+    return 'neutral'
 
-# news_summary: yfinance-compatible tickers only (skip XLSX_PRICE, GOLD_KRX, CASH)
-_NEWS_SKIP = {'XLSX_PRICE', 'GOLD_KRX', 'CASH'}
+def sent_icon(s):
+    return {'bull': '🟢', 'bear': '🔴', 'neutral': '⚪'}[s]
+
+def sent_color(s):
+    return {'bull': '#00838f', 'bear': '#c62828', 'neutral': '#888'}[s]
+
+# ── 자산 목록 ─────────────────────────────────────────────────
+_SKIP = {'XLSX_PRICE', 'GOLD_KRX', 'CASH'}
+_GNEWS_QUERY = {
+    'QQQM':     'QQQM Nasdaq ETF',
+    'SPY':      'SPY S&P500 ETF',
+    'GOOGL':    'Google Alphabet stock',
+    'BTC-USD':  'Bitcoin crypto',
+    'GC=F':     'Gold commodity',
+    'CL=F':     'WTI Oil price',
+    'BZ=F':     'Brent Oil price',
+    '^VIX':     'VIX volatility market',
+    'USDKRW=X': 'US Dollar Korean Won',
+    '^TNX':     'US 10 year treasury yield',
+    '^KS11':    'KOSPI Korea stock market',
+}
 
 def _build_assets():
-    assets = {}
-    seen = set()
+    assets, seen = {}, set()
     try:
-        holdings = _load_pf()
-        for h in holdings:
-            if h.get('is_cash') or h.get('ticker') == 'CASH':
-                continue
-            ticker = h['ticker']
-            if ticker in _NEWS_SKIP:
-                continue
-            name = h['name']
-            if ticker and ticker not in seen:
-                seen.add(ticker)
-                assets[name] = ticker
-    except Exception:
-        pass
-
-    market = {
-        'Bitcoin':  'BTC-USD',
-        'Gold':     'GC=F',
-        'Brent':    'BZ=F',
-        'Oil':      'CL=F',
-        'S&P500':   'SPY',
-        'Dow':      '^DJI',
-        'KOSPI200': '^KS11',
-    }
-    for k, v in market.items():
+        for h in _load_pf():
+            if h.get('is_cash') or h.get('ticker') in _SKIP: continue
+            t, n = h['ticker'], h['name']
+            if t and t not in seen:
+                seen.add(t); assets[n] = t
+    except Exception: pass
+    for k, v in {
+        'Bitcoin':'BTC-USD','Gold':'GC=F','WTI Oil':'CL=F',
+        'Brent Oil':'BZ=F','S&P500':'SPY','KOSPI':'^KS11',
+        'VIX':'^VIX','달러/원':'USDKRW=X','미국10년물':'^TNX',
+    }.items():
         if v not in seen:
-            seen.add(v)
-            assets[k] = v
+            seen.add(v); assets[k] = v
     return assets
 
 ASSETS = _build_assets()
 
-def get_news(ticker, max_items=4):
-    """yfinance .news 속성으로 뉴스 수집"""
+# ── 뉴스 수집 ─────────────────────────────────────────────────
+def get_yf_news(ticker, max_items=4):
+    """yfinance 뉴스"""
     try:
-        t = yf.Ticker(ticker)
-        news = t.news
-        if not news:
-            return []
+        news = yf.Ticker(ticker).news or []
         results = []
         for item in news[:max_items]:
-            # yfinance 1.x 뉴스 구조
-            content = item.get('content', item)
-            title   = (content.get('title') or item.get('title') or '').strip()
-            pub_ts  = (content.get('pubDate') or item.get('providerPublishTime') or 0)
-
-            if not title:
-                continue
-
-            # 시간 변환
+            c     = item.get('content', item)
+            title = (c.get('title') or item.get('title') or '').strip()
+            pub   = c.get('pubDate') or item.get('providerPublishTime') or 0
+            if not title: continue
             try:
-                if isinstance(pub_ts, str):
-                    dt_str = pub_ts[:19].replace('T', ' ')
-                    pub_dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
-                elif isinstance(pub_ts, (int, float)) and pub_ts > 0:
-                    pub_dt = datetime.fromtimestamp(pub_ts)
-                else:
-                    pub_dt = None
-                time_str = pub_dt.strftime('%m/%d %H:%M') if pub_dt else ''
-            except Exception:
-                time_str = ''
-
-            results.append({'title': title, 'time': time_str})
+                if isinstance(pub, str):
+                    dt = datetime.strptime(pub[:19].replace('T',' '), '%Y-%m-%d %H:%M:%S')
+                elif isinstance(pub, (int,float)) and pub > 0:
+                    dt = datetime.fromtimestamp(pub)
+                else: dt = None
+                ts = dt.strftime('%m/%d %H:%M') if dt else ''
+            except: ts = ''
+            results.append({'title': title, 'time': ts, 'src': 'Yahoo'})
         return results
-    except Exception as e:
-        return []
+    except: return []
+
+def get_gnews(query, max_items=4):
+    """Google News RSS (무료, API 불필요)"""
+    try:
+        url = (f"https://news.google.com/rss/search?"
+               f"q={quote(query)}&hl=en-US&gl=US&ceid=US:en")
+        r = requests.get(url, timeout=8,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+        root = ET.fromstring(r.content)
+        results = []
+        for item in root.findall('.//item')[:max_items]:
+            title = item.findtext('title','').strip()
+            # Google News 제목은 "헤드라인 - 출처" 형식
+            if ' - ' in title:
+                title, pub_src = title.rsplit(' - ', 1)
+            else:
+                pub_src = ''
+            pub = item.findtext('pubDate','')
+            if not title: continue
+            try:
+                dt = datetime.strptime(pub[:25], '%a, %d %b %Y %H:%M:%S')
+                ts = dt.strftime('%m/%d %H:%M')
+            except: ts = ''
+            results.append({'title': title.strip(), 'time': ts,
+                            'src': pub_src or 'GNews'})
+        return results
+    except: return []
 
 def collect_all_news():
-    """전체 자산 뉴스 수집 (중복 제거)"""
-    all_news = []
-    seen_titles = set()
+    """전체 자산 뉴스 수집 + 중복 제거 + 감성 분류"""
+    all_news, seen = [], set()
+    for name, ticker in ASSETS.items():
+        items = get_yf_news(ticker)
+        # Google News RSS 추가 수집
+        query = _GNEWS_QUERY.get(ticker, name)
+        items += get_gnews(query, max_items=3)
 
-    for asset_name, ticker in ASSETS.items():
-        items = get_news(ticker)
         for item in items:
-            title = item['title']
-            # 중복 체크 (앞 30자 기준)
-            key = title[:30].lower()
-            if key in seen_titles:
-                continue
-            seen_titles.add(key)
-            item['asset'] = asset_name
+            key = item['title'][:35].lower()
+            if key in seen: continue
+            seen.add(key)
+            item['asset']  = name
+            item['ticker'] = ticker
+            item['sent']   = sentiment(item['title'])
             all_news.append(item)
 
+    # 최신순 정렬 (시간 있는 것 우선)
+    def sort_key(n):
+        t = n.get('time','')
+        try: return datetime.strptime(f"2026/{t}", '%Y/%m/%d %H:%M')
+        except: return datetime.min
+    all_news.sort(key=sort_key, reverse=True)
     return all_news
 
-def summarize_with_ai(news_list):
-    """Claude로 뉴스 요약"""
-    api_key = os.getenv('ANTHROPIC_API_KEY')
-    if not api_key:
-        print("\n⚠ ANTHROPIC_API_KEY 없음 → AI 요약 생략")
-        return None
+# ── 요약 통계 (무료, 키워드 기반) ────────────────────────────
+def make_summary(news_list):
+    bull = [n for n in news_list if n['sent']=='bull']
+    bear = [n for n in news_list if n['sent']=='bear']
+    neu  = [n for n in news_list if n['sent']=='neutral']
+    total = len(news_list)
+    if total == 0: return None
 
-    try:
-        from anthropic import Anthropic
-        client = Anthropic(api_key=api_key.strip())
-    except Exception as e:
-        print(f"\n⚠ Claude 초기화 실패: {e}")
-        return None
+    # 자산별 감성 집계
+    asset_sent = {}
+    for n in news_list:
+        a = n['asset']
+        if a not in asset_sent: asset_sent[a] = {'bull':0,'bear':0,'neu':0}
+        asset_sent[a][n['sent'] if n['sent']!='neutral' else 'neu'] += 1
 
-    if not news_list:
-        return "수집된 뉴스가 없습니다."
+    # 시장 전체 방향
+    if len(bull) > len(bear)*1.5:  mood, mood_color = '강세 우세 🟢', '#00838f'
+    elif len(bear) > len(bull)*1.5: mood, mood_color = '약세 우세 🔴', '#c62828'
+    else:                           mood, mood_color = '중립 혼조 ⚪', '#666'
 
-    news_text = '\n'.join(
-        f"[{n['asset']}] ({n['time']}) {n['title']}"
-        for n in news_list
-    )
+    return {
+        'total': total, 'bull': len(bull), 'bear': len(bear), 'neu': len(neu),
+        'mood': mood, 'mood_color': mood_color,
+        'asset_sent': asset_sent,
+        'top_bull': bull[:3], 'top_bear': bear[:3],
+    }
 
-    prompt = f"""Jason의 포트폴리오(비트코인, 금, 브렌트유, WTI원유, 구글, 나스닥, S&P500, 다우) 관련 최신 뉴스입니다.
-({datetime.now().strftime('%Y-%m-%d %H:%M')} 기준)
+# ── 터미널 출력 ───────────────────────────────────────────────
+def print_terminal(news_list, summary):
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"\n{'━'*64}")
+    print(f"  Jason 뉴스 수집   {ts}  ({len(news_list)}건)")
+    print(f"{'━'*64}")
 
-{news_text}
+    if summary:
+        mc = CYAN if 'bull' in summary['mood'] else ALERT if 'bear' in summary['mood'] else AMBER
+        print(f"  시장 전반 분위기: {mc}{summary['mood']}{RESET}  "
+              f"({CYAN}강세 {summary['bull']}{RESET} / "
+              f"{ALERT}약세 {summary['bear']}{RESET} / "
+              f"중립 {summary['neu']})")
+        print(f"  {'─'*62}")
 
-다음 형식으로 한국어 요약해주세요:
+        # 자산별 감성 요약
+        print(f"  자산별 뉴스 분위기:")
+        for asset, cnt in summary['asset_sent'].items():
+            b, br, n = cnt['bull'], cnt['bear'], cnt['neu']
+            if b > br:   col, lbl = CYAN,  '강세▲'
+            elif br > b: col, lbl = ALERT, '약세▼'
+            else:        col, lbl = '',    '혼조 '
+            print(f"    {asset:<14} {col}{lbl}{RESET}  "
+                  f"(🟢{b} 🔴{br} ⚪{n})")
+        print(f"  {'─'*62}")
 
-## 핵심 뉴스 요약 (3줄)
-[가장 중요한 3가지 뉴스를 한 줄씩]
+    # 뉴스 목록
+    prev_asset = None
+    for n in news_list[:30]:
+        if n['asset'] != prev_asset:
+            print(f"\n  {CYAN}▌ {n['asset']}{RESET}")
+            prev_asset = n['asset']
+        icon  = sent_icon(n['sent'])
+        title = n['title'][:62] + ('…' if len(n['title'])>62 else '')
+        ts_s  = f"[{n['time']}]" if n['time'] else ''
+        print(f"    {icon} {ts_s:<12} {title}")
 
-## 자산별 영향
-[각 자산에 미치는 영향을 간결하게]
+    print(f"\n{'━'*64}")
+    print(f"  ※ 출처: Yahoo Finance + Google News RSS  |  무료·실시간\n")
 
-## Jason이 즉시 알아야 할 것
-[오늘 대응이 필요한 사항이 있다면 1-2줄]
+# ── HTML 생성 ─────────────────────────────────────────────────
+def generate_html(news_list, summary):
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-전체 400자 이내."""
+    # 자산별 뉴스 그룹
+    groups = {}
+    for n in news_list:
+        a = n['asset']
+        if a not in groups: groups[a] = []
+        groups[a].append(n)
 
-    try:
-        resp = client.messages.create(
-            model='claude-haiku-4-5-20251001',
-            max_tokens=800,
-            messages=[{'role': 'user', 'content': prompt}]
-        )
-        return resp.content[0].text
-    except Exception as e:
-        return f"AI 요약 오류: {e}"
+    # 요약 카드 HTML
+    if summary:
+        asset_bars = ''
+        for asset, cnt in summary['asset_sent'].items():
+            b, br, ne = cnt['bull'], cnt['bear'], cnt['neu']
+            tot = b + br + ne or 1
+            bp  = b/tot*100; sp = br/tot*100
+            if b > br:   lbl, lc = '강세', '#00838f'
+            elif br > b: lbl, lc = '약세', '#c62828'
+            else:        lbl, lc = '혼조', '#888'
+            asset_bars += f"""
+            <div class="abar">
+              <span class="aname">{asset}</span>
+              <div class="atrack">
+                <div style="width:{bp:.0f}%;background:#00838f;height:100%;display:inline-block;border-radius:3px 0 0 3px"></div>
+                <div style="width:{sp:.0f}%;background:#c62828;height:100%;display:inline-block"></div>
+              </div>
+              <span class="albl" style="color:{lc}">{lbl} 🟢{b}🔴{br}⚪{ne}</span>
+            </div>"""
 
+        summary_html = f"""
+    <div class="summary-card">
+      <div class="sum-header">
+        시장 전반 분위기: <span style="color:{summary['mood_color']};font-weight:700">{summary['mood']}</span>
+        &nbsp;|&nbsp; 총 {summary['total']}건 &nbsp;
+        <span style="color:#00838f">🟢강세 {summary['bull']}</span> &nbsp;
+        <span style="color:#c62828">🔴약세 {summary['bear']}</span> &nbsp;
+        <span style="color:#888">⚪중립 {summary['neu']}</span>
+      </div>
+      <div class="abar-wrap">{asset_bars}</div>
+    </div>"""
+    else:
+        summary_html = ''
+
+    # 뉴스 카드 HTML
+    cards = ''
+    for asset, items in groups.items():
+        news_rows = ''
+        for n in items:
+            sc  = sent_color(n['sent'])
+            si  = sent_icon(n['sent'])
+            ts_ = f'<span class="ntime">[{n["time"]}]</span>' if n['time'] else ''
+            src = f'<span class="nsrc">{n["src"]}</span>'
+            news_rows += f"""
+        <div class="news-row">
+          <span class="sent-dot" style="color:{sc}">{si}</span>
+          {ts_}
+          <span class="ntitle">{n['title']}</span>
+          {src}
+        </div>"""
+
+        cards += f"""
+    <div class="card">
+      <div class="card-title">{asset}
+        <span class="ticker-badge">{items[0]['ticker']}</span>
+      </div>
+      {news_rows}
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>뉴스 — Jason Market</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#f5f6f8;color:#222;font-family:'Segoe UI',Arial,sans-serif;padding:20px}}
+h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
+.ts{{font-size:12px;color:#888;margin-bottom:14px}}
+/* 요약 카드 */
+.summary-card{{background:#fff;border-radius:10px;padding:16px 20px;
+  border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:18px}}
+.sum-header{{font-size:14px;margin-bottom:12px}}
+.abar-wrap{{display:flex;flex-direction:column;gap:6px}}
+.abar{{display:flex;align-items:center;gap:10px}}
+.aname{{font-size:12px;color:#555;width:110px;flex-shrink:0}}
+.atrack{{flex:1;height:10px;background:#e8eaf0;border-radius:4px;overflow:hidden;display:flex}}
+.albl{{font-size:11px;width:120px;flex-shrink:0}}
+/* 뉴스 카드 그리드 */
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}}
+.card{{background:#fff;border-radius:10px;padding:16px 18px;
+  border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06)}}
+.card-title{{font-size:15px;font-weight:700;color:#1a237e;
+  margin-bottom:10px;display:flex;align-items:center;gap:8px}}
+.ticker-badge{{font-size:10px;background:#eef1f8;color:#555;
+  padding:2px 7px;border-radius:4px;font-weight:400}}
+.news-row{{display:flex;align-items:flex-start;gap:6px;
+  padding:7px 0;border-bottom:1px solid #f0f2f8;flex-wrap:wrap}}
+.news-row:last-child{{border-bottom:none}}
+.sent-dot{{font-size:14px;flex-shrink:0;margin-top:1px}}
+.ntime{{font-size:11px;color:#aaa;flex-shrink:0;padding-top:2px}}
+.ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:200px}}
+.nsrc{{font-size:10px;color:#bbb;flex-shrink:0;padding-top:3px;
+  background:#f5f6f8;border-radius:3px;padding:1px 5px}}
+/* 범례 */
+.legend{{font-size:12px;color:#888;margin-bottom:14px}}
+.legend span{{margin-right:14px}}
+</style>
+</head>
+<body>
+<h1>📰 뉴스 대시보드 — Jason Market</h1>
+<div class="ts">{ts} &nbsp;|&nbsp; Yahoo Finance + Google News RSS &nbsp;|&nbsp; 완전 무료</div>
+<div class="legend">
+  <span>🟢 강세 신호</span><span>🔴 약세 신호</span><span>⚪ 중립</span>
+</div>
+{summary_html}
+<div class="grid">{cards}</div>
+</body>
+</html>"""
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.html',
+                                     delete=False, encoding='utf-8') as f:
+        f.write(html)
+        path = f.name
+    webbrowser.open(f'file://{path}')
+    print(f"  🌐 브라우저로 열림\n")
+
+# ── 메인 ─────────────────────────────────────────────────────
 def main():
-    print(f"\n{'━'*60}")
-    print(f"  Jason 뉴스 AI 요약   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'━'*60}")
-    print("  뉴스 수집 중 (약 10-15초)...")
+    print(f"\n{'━'*64}")
+    print(f"  Jason 뉴스 수집   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'━'*64}")
+    print("  뉴스 수집 중 (Yahoo Finance + Google News RSS)...")
 
     news_list = collect_all_news()
+    summary   = make_summary(news_list)
 
-    # 수집된 뉴스 목록 출력
-    if news_list:
-        print(f"\n  수집된 뉴스 ({len(news_list)}개)")
-        print(f"  {'─'*56}")
-        for n in news_list:
-            time_str = f"[{n['time']}]" if n['time'] else ''
-            title    = n['title'][:60] + ('...' if len(n['title']) > 60 else '')
-            print(f"  [{n['asset']:<8}] {time_str:<12} {title}")
-    else:
-        print(f"\n  ⚠ 뉴스를 가져올 수 없습니다 (네트워크 확인)")
+    if not news_list:
+        print(f"\n  {ALERT}⚠ 뉴스를 가져올 수 없습니다 (네트워크 확인){RESET}\n")
+        return
 
-    # AI 요약
-    summary = summarize_with_ai(news_list)
-    if summary:
-        print(f"\n{'━'*60}")
-        print(f"  Claude AI 뉴스 요약")
-        print(f"{'━'*60}")
-        print(summary)
-        print(f"{'━'*60}\n")
+    print_terminal(news_list, summary)
+    generate_html(news_list, summary)
 
 if __name__ == '__main__':
     main()
