@@ -105,7 +105,7 @@ ASSETS = _build_assets()
 
 # ── 뉴스 수집 ─────────────────────────────────────────────────
 def get_yf_news(ticker, max_items=4):
-    """yfinance 뉴스"""
+    """yfinance 뉴스 (URL 포함)"""
     try:
         news = yf.Ticker(ticker).news or []
         results = []
@@ -113,6 +113,10 @@ def get_yf_news(ticker, max_items=4):
             c     = item.get('content', item)
             title = (c.get('title') or item.get('title') or '').strip()
             pub   = c.get('pubDate') or item.get('providerPublishTime') or 0
+            # URL 추출 (여러 위치에 있을 수 있음)
+            url = (c.get('canonicalUrl', {}).get('url') or
+                   c.get('clickThroughUrl', {}).get('url') or
+                   item.get('link') or '')
             if not title: continue
             try:
                 if isinstance(pub, str):
@@ -122,12 +126,12 @@ def get_yf_news(ticker, max_items=4):
                 else: dt = None
                 ts = dt.strftime('%m/%d %H:%M') if dt else ''
             except: ts = ''
-            results.append({'title': title, 'time': ts, 'src': 'Yahoo'})
+            results.append({'title': title, 'time': ts, 'src': 'Yahoo', 'url': url})
         return results
     except: return []
 
 def get_gnews(query, max_items=4):
-    """Google News RSS (무료, API 불필요)"""
+    """Google News RSS (무료, API 불필요, URL 포함)"""
     try:
         url = (f"https://news.google.com/rss/search?"
                f"q={quote(query)}&hl=en-US&gl=US&ceid=US:en")
@@ -136,8 +140,8 @@ def get_gnews(query, max_items=4):
         root = ET.fromstring(r.content)
         results = []
         for item in root.findall('.//item')[:max_items]:
-            title = item.findtext('title','').strip()
-            # Google News 제목은 "헤드라인 - 출처" 형식
+            title   = item.findtext('title','').strip()
+            link    = item.findtext('link','').strip()
             if ' - ' in title:
                 title, pub_src = title.rsplit(' - ', 1)
             else:
@@ -149,7 +153,7 @@ def get_gnews(query, max_items=4):
                 ts = dt.strftime('%m/%d %H:%M')
             except: ts = ''
             results.append({'title': title.strip(), 'time': ts,
-                            'src': pub_src or 'GNews'})
+                            'src': pub_src or 'GNews', 'url': link})
         return results
     except: return []
 
@@ -310,11 +314,16 @@ def generate_html(news_list, summary):
             ts_ = f'<span class="ntime">[{n["time"]}]</span>' if n['time'] else ''
             src = f'<span class="nsrc">{n["src"]}</span>'
             title_ko = n.get('title_ko', n['title'])
+            article_url = n.get('url', '')
+            if article_url:
+                title_html = f'<a class="ntitle" href="{article_url}" target="_blank">{title_ko}</a>'
+            else:
+                title_html = f'<span class="ntitle">{title_ko}</span>'
             news_rows += f"""
         <div class="news-row">
           <span class="sent-dot" style="color:{sc}">{si}</span>
           {ts_}
-          <span class="ntitle">{title_ko}</span>
+          {title_html}
           {src}
         </div>"""
 
@@ -358,7 +367,9 @@ h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
 .news-row:last-child{{border-bottom:none}}
 .sent-dot{{font-size:14px;flex-shrink:0;margin-top:1px}}
 .ntime{{font-size:11px;color:#aaa;flex-shrink:0;padding-top:2px}}
-.ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:200px}}
+.ntitle{{font-size:13px;color:#333;line-height:1.5;flex:1;min-width:200px;text-decoration:none}}
+a.ntitle{{color:#1a237e;text-decoration:none;cursor:pointer}}
+a.ntitle:hover{{text-decoration:underline;color:#0d47a1}}
 .nsrc{{font-size:10px;color:#bbb;flex-shrink:0;padding-top:3px;
   background:#f5f6f8;border-radius:3px;padding:1px 5px}}
 /* 범례 */
