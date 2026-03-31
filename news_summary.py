@@ -2,12 +2,38 @@
 """뉴스 수집 & 스마트 정리 - Jason Market
 완전 무료 (API 불필요): yfinance + Google News RSS + 키워드 감성분석"""
 
-import requests, json, webbrowser, tempfile
+import requests, json, webbrowser, tempfile, time
 import xml.etree.ElementTree as ET
 import yfinance as yf
 from datetime import datetime
 from urllib.parse import quote
 from xlsx_sync import load_portfolio as _load_pf
+
+# ── 구글 번역 (무료, API 키 불필요) ─────────────────────────
+def translate_batch(titles: list[str]) -> list[str]:
+    """영어 제목 리스트를 한국어로 일괄 번역 (Google Translate 비공식 endpoint)"""
+    if not titles:
+        return titles
+    # 구분자로 묶어서 한 번에 번역 (속도 개선)
+    SEP = ' ||| '
+    joined = SEP.join(titles)
+    try:
+        r = requests.get(
+            'https://translate.googleapis.com/translate_a/single',
+            params={'client':'gtx','sl':'en','tl':'ko','dt':'t','q': joined},
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=15,
+        )
+        data = r.json()
+        # 결과 조각들 이어붙이기
+        translated = ''.join(seg[0] for seg in data[0] if seg[0])
+        parts = translated.split(SEP)
+        # 개수 불일치 시 원본 반환
+        if len(parts) != len(titles):
+            return titles
+        return [p.strip() for p in parts]
+    except Exception:
+        return titles  # 번역 실패 시 원본 영어 그대로
 
 CYAN  = '\033[36m'
 AMBER = '\033[38;5;214m'
@@ -151,6 +177,14 @@ def collect_all_news():
         try: return datetime.strptime(f"2026/{t}", '%Y/%m/%d %H:%M')
         except: return datetime.min
     all_news.sort(key=sort_key, reverse=True)
+
+    # ── 한국어 번역 (구글 번역, 무료) ──────────────────────────
+    print("  한국어 번역 중...")
+    titles_en = [n['title'] for n in all_news]
+    titles_ko = translate_batch(titles_en)
+    for n, ko in zip(all_news, titles_ko):
+        n['title_ko'] = ko
+
     return all_news
 
 # ── 요약 통계 (무료, 키워드 기반) ────────────────────────────
@@ -213,7 +247,8 @@ def print_terminal(news_list, summary):
             print(f"\n  {CYAN}▌ {n['asset']}{RESET}")
             prev_asset = n['asset']
         icon  = sent_icon(n['sent'])
-        title = n['title'][:62] + ('…' if len(n['title'])>62 else '')
+        title = n.get('title_ko', n['title'])
+        title = title[:62] + ('…' if len(title)>62 else '')
         ts_s  = f"[{n['time']}]" if n['time'] else ''
         print(f"    {icon} {ts_s:<12} {title}")
 
@@ -274,11 +309,12 @@ def generate_html(news_list, summary):
             si  = sent_icon(n['sent'])
             ts_ = f'<span class="ntime">[{n["time"]}]</span>' if n['time'] else ''
             src = f'<span class="nsrc">{n["src"]}</span>'
+            title_ko = n.get('title_ko', n['title'])
             news_rows += f"""
         <div class="news-row">
           <span class="sent-dot" style="color:{sc}">{si}</span>
           {ts_}
-          <span class="ntitle">{n['title']}</span>
+          <span class="ntitle">{title_ko}</span>
           {src}
         </div>"""
 
