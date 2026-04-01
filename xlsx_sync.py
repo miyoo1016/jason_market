@@ -9,13 +9,16 @@
 import os, json, re, warnings, threading, platform
 warnings.filterwarnings('ignore')
 
-if platform.system() == "Windows":
+_sys = platform.system()
+if _sys == "Windows":
     XLSX_PATH = r"G:\내 드라이브\PF\자산 계산기(클로드).xlsx"
-else:
+elif _sys == "Darwin":  # macOS
     XLSX_PATH = os.path.expanduser(
         "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com"
         "/내 드라이브/PF/자산 계산기(클로드).xlsx"
     )
+else:  # Android(Termux) / Linux — Google Drive 없음, portfolio.json 직접 사용
+    XLSX_PATH = ""
 PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
 SHEET_NAME = "📊 자산 계산기"
 
@@ -77,6 +80,9 @@ KS_TICKER_MAP = {
 
 def read_xlsx():
     """xlsx에서 보유 종목 + 현금 데이터 추출"""
+    if not XLSX_PATH:  # Android/Termux
+        return None
+
     try:
         import pandas as pd
     except ImportError:
