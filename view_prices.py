@@ -106,26 +106,20 @@ def get_data(ticker):
         if not curr:
             return None
 
-        # ── 전일 종가 ─────────────────────────────────────────
-        if is_kr or is_equity:
+        # ── 전일 종가 (히스토리 기반 정밀 계산) ──────────────────
+        hist = t.history(period='5d')
+        if not hist.empty:
+            last_close = float(hist['Close'].iloc[-1])
+            # 현재가(curr)가 히스토리 마지막 종가와 거의 같으면 (장 마감 상태면)
+            # 기준은 그 전날 종가(iloc[-2])로 잡아야 함
+            if abs(curr - last_close) / last_close < 0.0001:
+                prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else last_close
+            else:
+                # 현재가가 장중에 변동 중이면, 히스토리 마지막 종가가 실제 '어제 종가'
+                prev = last_close
+        else:
             prev_fi = fi.get('previous_close') or fi.get('previousClose')
             prev    = float(prev_fi) if prev_fi else None
-            if not prev:
-                hist = t.history(period='5d')
-                prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else None
-        else:
-            # 선물/FX/지수/크립토: 일봉으로 직전 세션 종가 판단
-            hist = t.history(period='5d')
-            if hist.empty or len(hist) < 2:
-                prev_fi = fi.get('previous_close') or fi.get('previousClose')
-                prev    = float(prev_fi) if prev_fi else None
-            else:
-                daily_last = float(hist['Close'].iloc[-1])
-                # 현재가와 일봉 마지막값이 거의 같으면 장 마감 → 그 전날이 기준
-                if abs(curr - daily_last) / daily_last < 0.001:
-                    prev = float(hist['Close'].iloc[-2])
-                else:
-                    prev = daily_last
 
         if not prev:
             return None

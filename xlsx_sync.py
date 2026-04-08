@@ -95,7 +95,7 @@ def read_xlsx():
         return None
 
     try:
-        df = pd.read_excel(XLSX_PATH, sheet_name=SHEET_NAME, header=None)
+        df = pd.read_excel(XLSX_PATH, sheet_name=SHEET_NAME, header=None, engine='openpyxl')
     except Exception as e:
         print(f"  xlsx 읽기 실패: {e}")
         return None
@@ -136,7 +136,8 @@ def read_xlsx():
         
         wb.save(XLSX_PATH)
         print("  ✅ 엑셀 L열(매수원가)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
-    except Exception:
+    except Exception as e:
+        print(f"  ⚠️ 엑셀 스타일 조정 중 오류: {e}")
         pass
 
     # ── [NEW] 기준 환율(Base FX) 읽기: 14행 O열 (index 13, 14) ────────
@@ -263,6 +264,26 @@ def sync_to_json(holdings):
 
     return accounts
 
+def safe_save_xlsx(wb, path):
+    """임시 파일을 거쳐 안전하게 저장 (파일 손상 방지)"""
+    import os
+    tmp_path = path + ".tmp"
+    try:
+        wb.save(tmp_path)
+        if os.path.exists(tmp_path):
+            # 기존 파일 제거 후 교체
+            if os.path.exists(path):
+                os.remove(path)
+            os.rename(tmp_path, path)
+            return True
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        print(f"  ⚠️ 엑셀 저장 실패 (보안/접근권한 확인): {e}")
+        return False
+    return False
+
+
 def update_xlsx_live_fx(usdkrw):
     """엑셀 O14 셀에 실시간 환율을 자동으로 기입"""
     try:
@@ -276,8 +297,8 @@ def update_xlsx_live_fx(usdkrw):
         # 사용자 서식 유지 혹은 숫자형으로 강제
         fx_cell.number_format = '#,##0.00"원/달러"'
         
-        wb.save(XLSX_PATH)
-        print(f"  ✅ 엑셀 O14 셀에 실시간 환율(₩{usdkrw:,.2f})이 업데이트되었습니다.")
+        if safe_save_xlsx(wb, XLSX_PATH):
+            print(f"  ✅ 엑셀 O14 셀에 실시간 환율(₩{usdkrw:,.2f})이 업데이트되었습니다.")
     except Exception as e:
         print(f"  ⚠️ 엑셀 환율 업데이트 실패: {e}")
 
@@ -345,8 +366,8 @@ def restore_vlookup_formulas():
         restored += 1
 
     if restored:
-        wb.save(XLSX_PATH)
-        print(f"  🔧 G열 VLOOKUP 공식 {restored}개 복원 완료")
+        if safe_save_xlsx(wb, XLSX_PATH):
+            print(f"  🔧 G열 VLOOKUP 공식 {restored}개 복원 완료")
     return True
 
 
@@ -368,7 +389,10 @@ def fetch_and_write_prices():
     # ── 1. 환율 조회 ────────────────────────────────────────────
     print("  환율·시세 조회 중...", end=" ", flush=True)
     try:
-        usdkrw = float(yf.Ticker("USDKRW=X").history(period="2d")["Close"].iloc[-1])
+        tk_fx = yf.Ticker("USDKRW=X")
+        usdkrw = tk_fx.fast_info.get('last_price') or tk_fx.fast_info.get('lastPrice')
+        if not usdkrw:
+            usdkrw = float(tk_fx.history(period="2d")["Close"].iloc[-1])
     except Exception:
         usdkrw = 1450.0
     print(f"USDKRW={usdkrw:,.1f}")
@@ -500,9 +524,9 @@ def fetch_and_write_prices():
     ws["O14"] = round(usdkrw, 2)
 
     # ── 6. 저장 ─────────────────────────────────────────────────
-    wb.save(XLSX_PATH)
-    print("  " + "─" * 54)
-    print(f"  ✅ {len(written_names)}개 종목 시세 + 환율({usdkrw:,.1f}원) 업데이트 완료")
+    if safe_save_xlsx(wb, XLSX_PATH):
+        print("  " + "─" * 54)
+        print(f"  ✅ {len(written_names)}개 종목 시세 + 환율({usdkrw:,.1f}원) 업데이트 완료")
     if skipped_names:
         uniq = list(dict.fromkeys(skipped_names))
         print(f"  ⚠ 조회 실패: {', '.join(uniq)}")

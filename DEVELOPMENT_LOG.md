@@ -1,6 +1,6 @@
 # Development Log - Jason Market Portfolio Tracker
 
-## Last Updated: 2026-04-08 (19:10 KST)
+## Last Updated: 2026-04-08 (23:50 KST)
 
 ## 📌 Project Overview & System Status
 Currently, the system is a high-precision, real-time portfolio tracker that integrates with a Google Drive-synced Excel file (`자산 계산기(클로드).xlsx`). It handles both stock prices and FX fluctuations to provide a comprehensive view of KRW assets.
@@ -23,9 +23,23 @@ Currently, the system is a high-precision, real-time portfolio tracker that inte
 - **1-day PnL**: Includes both Price move and FX move: `(Price_today * FX_today) - (Price_yesterday * FX_yesterday)`.
 - **FX PnL**: Isolated gain/loss from currency movement relative to the base rate in Column L.
 
+### 4. Real-time FX Accuracy Fix (yfinance)
+- **Problem**: `history()` was returning a delayed "Close" price (1507 KRW), causing incorrect valuation.
+- **Fix**: Switched to `fast_info['last_price']`, which provides the actual current rate (~1476 KRW).
+- **Consistency**: Applied this fix to both `portfolio_tracker.py` and `xlsx_sync.py`.
+
+### 5. Exact Percentage Change Calculation
+- **Fix**: `view_prices.py` now calculates percentage changes (등락률) using the actual historical daily close instead of potentially unreliable real-time fields. 
+- **Result**: Verified accurate gains for QQQM (+2.78%) and GOOGL (+3.62%).
+
+### 6. Excel Corruption Prevention ("Safe Save")
+- **Mechanism**: Implemented atomic saving in `xlsx_sync.py`. It saves to a `.tmp` file first and replaces the original only if successful.
+- **Environment**: Fixed a Pandas 3.0.2 compatibility error by explicitly setting `engine='openpyxl'`.
+- **Recovery**: Restored the corrupted 1.5KB file from the 21KB original backup.
+
 ## 🚀 To-Do / Next Steps
-- Monitor the accuracy compared to brokers during market opening.
-- Any further refinements to the HTML dashboard styling.
+- Continue refortifying calculations as market opens tomorrow.
+- Finalize any additional UI/UX tweaks for the news dashboard if needed.
 
 ---
 **When resuming work on a new machine (Mac/Windows):**

@@ -60,11 +60,28 @@ def _fetch_gold_krx(usdkrw):
     return res
 
 def get_usdkrw():
+    """실시간 환율(FastInfo) 및 전일 종가 조회"""
     try:
-        h = yf.Ticker('USDKRW=X').history(period='2d')
-        if len(h) >= 2:
-            return float(h['Close'].iloc[-1]), float(h['Close'].iloc[-2])
-        return float(h['Close'].iloc[-1]), float(h['Close'].iloc[-1])
+        tk = yf.Ticker('USDKRW=X')
+        # 1. 실시간 가격 (FastInfo)
+        curr = tk.fast_info.get('last_price') or tk.fast_info.get('lastPrice')
+        
+        # 2. 전일 종가 및 백업 데이터 (History)
+        h = tk.history(period='3d')
+        if not h.empty:
+            # 실시간 가격이 없으면 history 마지막 값 사용
+            if not curr:
+                curr = h['Close'].iloc[-1]
+            
+            # 전일 종가 결정 (현재가가 오늘 데이터면 그 전날 데이터 사용)
+            if len(h) >= 2:
+                prev = h['Close'].iloc[-2]
+            else:
+                prev = h['Close'].iloc[-1]
+        else:
+            prev = curr or 1450.0
+            
+        return float(curr or 1450.0), float(prev or 1450.0)
     except Exception:
         return 1450.0, 1450.0
 
