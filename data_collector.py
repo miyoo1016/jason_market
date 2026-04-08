@@ -33,7 +33,7 @@ class DataCollector:
                     curr = fi.get('last_price') or fi.get('lastPrice')
                 elif is_equity:
                     try:
-                        h1m  = t.history(period='1d', interval='1m', prepost=True)
+                        h1m  = t.history(period='2d', interval='1m', prepost=True)
                         curr = float(h1m['Close'].iloc[-1]) if not h1m.empty else None
                     except Exception:
                         curr = None

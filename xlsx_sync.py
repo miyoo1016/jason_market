@@ -101,6 +101,52 @@ def read_xlsx():
         return None
 
     holdings = []
+    # ── [NEW] L열 헤더 확인 및 강제 너비/스타일 조정 (9행) ──────────
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(XLSX_PATH)
+        ws = wb[SHEET_NAME]
+        
+        # 잘못 들어간 H1 삭제
+        if ws.cell(row=1, column=8).value == "매수원가(₩)":
+            ws.cell(row=1, column=8).value = None
+        
+        # L열 9행(Table Header) 제목 및 스타일 강제 적용
+        l_header = ws.cell(row=9, column=12)
+        l_header.value = "매수원가(₩)"
+        l_header.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
+        l_header.fill = openpyxl.styles.PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+        l_header.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+        
+        # 너비 강제 조정 (20으로 넉넉하게)
+        ws.column_dimensions['L'].width = 20
+        
+        # ── [NEW] 아래 데이터 칸들 스타일 복사 (K열 -> L열) ──────────
+        # 10행부터 데이터가 있는 구석구석까지 스타일 복제
+        for r_idx in range(10, 101): # 100행까지 넉넉하게 적용
+            source_cell = ws.cell(row=r_idx, column=11) # K열(11)
+            target_cell = ws.cell(row=r_idx, column=12) # L열(12)
+            
+            # 스타일 복사 (배경색, 테두리 등)
+            if source_cell.has_style:
+                from copy import copy
+                target_cell.fill = copy(source_cell.fill)
+                target_cell.border = copy(source_cell.border)
+                target_cell.alignment = copy(source_cell.alignment)
+        
+        wb.save(XLSX_PATH)
+        print("  ✅ 엑셀 L열(매수원가)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
+    except Exception:
+        pass
+
+    # ── [NEW] 기준 환율(Base FX) 읽기: 14행 O열 (index 13, 14) ────────
+    try:
+        base_usdkrw = float(df.iloc[13, 14])
+        if base_usdkrw != base_usdkrw or base_usdkrw <= 0:
+            base_usdkrw = 1350.0  # fallback
+    except Exception:
+        base_usdkrw = 1350.0
+
     for _, row in df.iterrows():
         asset_type = str(row[1]).strip() if pd.notna(row[1]) else ""
         name       = str(row[2]).strip() if pd.notna(row[2]) else ""
@@ -140,6 +186,19 @@ def read_xlsx():
         qty_raw  = row[4]
         avg_raw  = row[5]
         xlsx_price_raw = row[6]   # G열 = 현재가 (VLOOKUP 자동값)
+        try:
+            # [NEW] L열(index 11)에서 정밀 원화 매수 원가 추출 (글자 "원"이나 쉼표가 섞여있어도 처리)
+            cost_krw_raw = row[11] if len(row) > 11 else None
+            if pd.notna(cost_krw_raw):
+                val_str = str(cost_krw_raw).replace(',', '').replace('원', '').strip()
+                # 숫자와 점(.)만 남기기
+                import re
+                val_str = re.sub(r'[^0-9\.]', '', val_str)
+                precision_cost_krw = float(val_str) if val_str else None
+            else:
+                precision_cost_krw = None
+        except (TypeError, ValueError):
+            precision_cost_krw = None
 
         try:
             qty = float(qty_raw)
@@ -174,6 +233,8 @@ def read_xlsx():
             "currency":    currency,
             "asset_type":  asset_type,
             "is_cash":     False,
+            "base_usdkrw": base_usdkrw,  # 기준 환율 추가
+            "precision_cost_krw": precision_cost_krw, # [NEW] 정밀 원화 매수 원가
         })
 
     return holdings
@@ -191,13 +252,34 @@ def sync_to_json(holdings):
             "avg_price":  h["avg_price"],
             "currency":   h["currency"],
             "asset_type": h["asset_type"],
+            "xlsx_price": h.get("xlsx_price"),
             "is_cash":    h.get("is_cash", False),
+            "base_usdkrw": h.get("base_usdkrw"),
+            "precision_cost_krw": h.get("precision_cost_krw"),
         })
 
     with open(PORTFOLIO_JSON, "w", encoding="utf-8") as f:
         json.dump(accounts, f, ensure_ascii=False, indent=2)
 
     return accounts
+
+def update_xlsx_live_fx(usdkrw):
+    """엑셀 O14 셀에 실시간 환율을 자동으로 기입"""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(XLSX_PATH)
+        ws = wb[SHEET_NAME]
+        
+        # O14 셀 (row=14, column=15)
+        fx_cell = ws.cell(row=14, column=15)
+        fx_cell.value = usdkrw
+        # 사용자 서식 유지 혹은 숫자형으로 강제
+        fx_cell.number_format = '#,##0.00"원/달러"'
+        
+        wb.save(XLSX_PATH)
+        print(f"  ✅ 엑셀 O14 셀에 실시간 환율(₩{usdkrw:,.2f})이 업데이트되었습니다.")
+    except Exception as e:
+        print(f"  ⚠️ 엑셀 환율 업데이트 실패: {e}")
 
 
 def load_portfolio():
