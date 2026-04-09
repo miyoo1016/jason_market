@@ -98,7 +98,39 @@ def calc_atr(hist, p=14):
     curr = float(hist['Close'].iloc[-1])
     return v, (v/curr*100 if v and curr else None)
 
+def calc_adx(hist, p=14):
+    """ADX + DI 지표 (Wilder's smoothing)"""
+    h = hist['High'].values
+    l = hist['Low'].values
+    c = hist['Close'].values
+    n = len(c)
+    if n < p + 1:
+        return None, None, None
+    plus_dm  = np.zeros(n)
+    minus_dm = np.zeros(n)
+    tr       = np.zeros(n)
+    for i in range(1, n):
+        up   = h[i] - h[i-1]
+        down = l[i-1] - l[i]
+        plus_dm[i]  = up   if up > down and up > 0   else 0
+        minus_dm[i] = down if down > up  and down > 0 else 0
+        tr[i] = max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+    # Wilder smoothing via ewm
+    s = pd.Series
+    atr_s  = s(tr).ewm(span=p, adjust=False).mean()
+    pdm_s  = s(plus_dm).ewm(span=p, adjust=False).mean()
+    mdm_s  = s(minus_dm).ewm(span=p, adjust=False).mean()
+    pdi = (pdm_s / atr_s.replace(0, np.nan) * 100).fillna(0)
+    mdi = (mdm_s / atr_s.replace(0, np.nan) * 100).fillna(0)
+    dx  = ((pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan) * 100).fillna(0)
+    adx = dx.ewm(span=p, adjust=False).mean()
+    adx_val   = float(adx.iloc[-1]) if not adx.empty else None
+    plus_di   = float(pdi.iloc[-1]) if not pdi.empty else None
+    minus_di  = float(mdi.iloc[-1]) if not mdi.empty else None
+    return adx_val, plus_di, minus_di
+
 def calc_obv(hist):
+    """OBV 추세 + 다이버전스 탐지. Returns (trend_str, divergence_str)"""
     c = hist['Close'].values
     vol = hist['Volume'].values if 'Volume' in hist.columns else np.ones(len(c))
     obv = np.zeros(len(c))
@@ -106,25 +138,45 @@ def calc_obv(hist):
         if   c[i] > c[i-1]: obv[i] = obv[i-1] + vol[i]
         elif c[i] < c[i-1]: obv[i] = obv[i-1] - vol[i]
         else:                obv[i] = obv[i-1]
+    trend = 'flat'
     if len(obv) >= 20:
         r, m = obv[-5:].mean(), obv[-20:-5].mean()
-        if   r > m*1.01:  return 'up'
-        elif r < m*0.99:  return 'down'
-    return 'flat'
+        if   r > m*1.01: trend = 'up'
+        elif r < m*0.99: trend = 'down'
+    # 다이버전스 탐지 (최근 5일 가격 vs 이전 15일 가격)
+    divergence = None
+    if len(c) >= 20:
+        price_recent = c[-5:].mean()
+        price_prev   = c[-20:-5].mean()
+        obv_recent   = obv[-5:].mean()
+        obv_prev     = obv[-20:-5].mean()
+        price_up = price_recent > price_prev * 1.005
+        price_dn = price_recent < price_prev * 0.995
+        obv_up   = obv_recent > obv_prev * 1.001
+        obv_dn   = obv_recent < obv_prev * 0.999
+        if price_up and obv_dn:
+            divergence = '⚠ 하락다이버전스 (가격↑·OBV↓)'
+        elif price_dn and obv_up:
+            divergence = '✅ 상승다이버전스 (가격↓·OBV↑)'
+    return trend, divergence
 
-def calc_pivot(hist):
-    if len(hist) < 2: return None
-    p = hist.iloc[-2]
-    H, L, C = float(p['High']), float(p['Low']), float(p['Close'])
+def calc_pivot_weekly(hist):
+    """주간 피봇 포인트 (지난 주 5거래일 데이터 사용)"""
+    if len(hist) < 10: return None
+    week = hist.tail(10).head(5)
+    H = float(week['High'].max())
+    L = float(week['Low'].min())
+    C = float(week['Close'].iloc[-1])
     P = (H+L+C)/3
     return {'P':P,'R1':2*P-L,'R2':P+(H-L),'S1':2*P-H,'S2':P-(H-L)}
 
 def calc_volume_profile(hist, bins=12):
+    """매물대 분석. Returns (profile_list, poc_price)"""
     c = hist['Close'].values
     v = hist['Volume'].values if 'Volume' in hist.columns else np.ones(len(c))
     v = np.where(v > 0, v, 1)
     mn, mx = c.min(), c.max()
-    if mx == mn: return []
+    if mx == mn: return [], None
     edges = np.linspace(mn, mx, bins+1)
     profile = []
     for i in range(bins):
@@ -134,7 +186,52 @@ def calc_volume_profile(hist, bins=12):
         profile.append({'price': round((lo+hi)/2, 4), 'volume': vol})
     mx_v = max(p['volume'] for p in profile) or 1
     for p in profile: p['pct'] = round(p['volume']/mx_v*100, 1)
-    return profile
+    poc_price = max(profile, key=lambda x: x['volume'])['price'] if profile else None
+    return profile, poc_price
+
+def calc_composite_score(r):
+    """종합 매매신호 점수 (-7 ~ +7)"""
+    # 추세 점수
+    trend_score = 0
+    if r.get('ma20'):
+        trend_score += 1 if r['curr'] > r['ma20'] else -1
+    if r.get('ma60'):
+        trend_score += 1 if r['curr'] > r['ma60'] else -1
+    if r.get('ma200'):
+        trend_score += 1 if r['curr'] > r['ma200'] else -1
+    # 모멘텀 점수
+    mom = 0
+    rsi = r.get('rsi')
+    if rsi is not None:
+        if   rsi < 30:  mom += 2
+        elif rsi < 45:  mom += 1
+        elif rsi > 70:  mom -= 2
+        elif rsi > 55:  mom -= 1
+    if r.get('macd') is not None and r.get('macd_sig') is not None:
+        mom += 1 if r['macd'] > r['macd_sig'] else -1
+    mom = max(-3, min(3, mom))
+    # 거래량 점수
+    obv_trend = r.get('obv_trend', 'flat')
+    vol_score = 1 if obv_trend == 'up' else (-1 if obv_trend == 'down' else 0)
+    total = trend_score + mom + vol_score
+    # 레이블
+    if   total >= 5:  label, color = '강한매수', '#00838f'
+    elif total >= 3:  label, color = '매수',     '#26a69a'
+    elif total >= 1:  label, color = '약매수',   '#80cbc4'
+    elif total >= -1: label, color = '중립',     '#90a4ae'
+    elif total >= -3: label, color = '약매도',   '#ff8a65'
+    elif total >= -5: label, color = '매도',     '#e65100'
+    else:             label, color = '강한매도', '#c62828'
+    bar_pct = int((total + 7) / 14 * 100)
+    return {
+        'trend_score':    trend_score,
+        'momentum_score': mom,
+        'volume_score':   vol_score,
+        'total':          total,
+        'label':          label,
+        'color':          color,
+        'bar_pct':        bar_pct,
+    }
 
 def safe_float(s):
     return round(float(s), 6) if not pd.isna(s) else None
@@ -169,9 +266,10 @@ def analyze_asset(name, ticker):
         bb_u, bb_m, bb_l, pct_b = calc_bollinger(close)
         stoch_k, stoch_d = calc_stochastic(hist)
         atr_val, atr_pct = calc_atr(hist)
-        obv_trend        = calc_obv(hist)
-        pivot            = calc_pivot(hist)
-        vol_profile      = calc_volume_profile(hist.tail(90))
+        obv_trend, obv_div = calc_obv(hist)
+        adx_val, plus_di, minus_di = calc_adx(hist)
+        pivot            = calc_pivot_weekly(hist)
+        vol_profile, poc_price = calc_volume_profile(hist.tail(90))
 
         def gma(p): return float(close.rolling(p).mean().iloc[-1]) if len(close)>=p else None
 
@@ -191,7 +289,7 @@ def analyze_asset(name, ticker):
             'ma200':  ma_series(close, 200),
         }
 
-        return {
+        base = {
             'name':name.strip(),'ticker':ticker,
             'curr':curr,'pct':pct,
             'rsi':rsi,'macd':macd,'macd_sig':sig,'macd_hist':hst,
@@ -200,10 +298,13 @@ def analyze_asset(name, ticker):
             'ma60':gma(60),'ma120':gma(120),'ma200':gma(200),
             'stoch_k':stoch_k,'stoch_d':stoch_d,
             'atr_val':atr_val,'atr_pct':atr_pct,
-            'obv_trend':obv_trend,
-            'pivot':pivot,'vol_profile':vol_profile,
+            'obv_trend':obv_trend,'obv_div':obv_div,
+            'adx_val':adx_val,'plus_di':plus_di,'minus_di':minus_di,
+            'pivot':pivot,'vol_profile':vol_profile,'poc_price':poc_price,
             'chart':chart,
         }
+        base['score'] = calc_composite_score(base)
+        return base
     except Exception as e:
         print(f"  ⚠ {name.strip()} 오류: {e}")
         return None
@@ -229,12 +330,16 @@ def ai_analysis(results):
         stk_s = f"{r['stoch_k']:.0f}" if r['stoch_k'] else '-'
         std_s = f"{r['stoch_d']:.0f}" if r['stoch_d'] else '-'
         atp_s = f"{r['atr_pct']:.1f}" if r['atr_pct'] else '-'
+        score = r.get('score', {})
+        sc_label = score.get('label', '중립')
+        sc_total = score.get('total', 0)
         lines.append(
             f"{r['name']}: {r['curr']:,.2f} ({r['pct']:+.2f}%), "
             f"RSI={rsi_s}, Stoch={stk_s}/{std_s}, "
             f"MACD={'양' if r['macd']>r['macd_sig'] else '음'}, "
             f"BB={r['pct_b']:.0f}%, OBV={r['obv_trend']}, "
-            f"ATR={atp_s}%, MA=[{' '.join(ma_st) or '모두하위'}]"
+            f"ATR={atp_s}%, MA=[{' '.join(ma_st) or '모두하위'}], "
+            f"종합점수={sc_label}({sc_total:+d})"
         )
 
     prompt = f"""Jason의 포트폴리오 기술분석 ({datetime.now().strftime('%Y-%m-%d %H:%M')}):
@@ -273,34 +378,37 @@ def generate_html(results, ai_text=""):
         if t in ('^TNX','^VIX','^KS11'):         return f"{v:,.2f}"
         return f"${v:,.2f}"
 
-    def c_chg(p):  return '#2ecc71' if p>=0 else '#e74c3c'
+    def c_chg(p):  return '#00838f' if p>=0 else '#c62828'
     def c_rsi(v):
         if v is None: return '#888'
-        return '#e74c3c' if v>=70 else '#2ecc71' if v<=30 else '#3498db'
-    def c_bb(v):   return '#e74c3c' if v>80 else '#2ecc71' if v<20 else '#3498db'
-    def c_obv(v):  return '#2ecc71' if v=='up' else '#e74c3c' if v=='down' else '#aaa'
+        return '#c62828' if v>=70 else '#00838f' if v<=30 else '#1565c0'
+    def c_bb(v):   return '#c62828' if v>80 else '#00838f' if v<20 else '#1565c0'
+    def c_obv(v):  return '#00838f' if v=='up' else '#c62828' if v=='down' else '#90a4ae'
 
     def ma_badge(curr, ma, lbl):
         if not ma: return ''
         pct = (curr-ma)/ma*100
-        col = '#2ecc71' if curr>ma else '#e74c3c'
+        col = '#00838f' if curr>ma else '#c62828'
         return f'<span class="badge" style="background:{col}">{lbl} {pct:+.1f}%</span>'
 
     def pivot_row(pivot, curr):
         if not pivot: return ''
         def pc(k, v):
-            col = '#2ecc71' if v<curr else '#e74c3c' if v>curr else '#f39c12'
+            col = '#00838f' if v<curr else '#c62828' if v>curr else '#e65100'
             return f'<span class="pvt" style="border-color:{col};color:{col}">{k}<br><small>{v:,.2f}</small></span>'
         return f"""<div class="pivot-row">
           {pc('S2',pivot['S2'])}{pc('S1',pivot['S1'])}{pc('P',pivot['P'])}{pc('R1',pivot['R1'])}{pc('R2',pivot['R2'])}
         </div>"""
 
-    def vol_profile_bars(vp, curr):
+    def vol_profile_bars(vp, curr, poc_price=None):
         if not vp: return ''
         bars = ""
         for b in reversed(vp):
             is_curr = abs(b['price']-curr)/curr < 0.02
-            col  = '#e67e22' if is_curr else '#5c85d6'
+            is_poc  = (poc_price is not None and abs(b['price']-poc_price)/max(poc_price,0.001) < 0.001)
+            if is_curr:   col = '#e67e22'
+            elif is_poc:  col = '#e65100'
+            else:         col = '#b0bec5'
             bars += f"""<div class="vp-row">
               <span class="vp-price">{b['price']:,.2f}</span>
               <div class="vp-bar-wrap"><div class="vp-bar" style="width:{b['pct']}%;background:{col}"></div></div>
@@ -319,6 +427,33 @@ def generate_html(results, ai_text=""):
         sk    = r['stoch_k'] or 50
         sd    = r['stoch_d'] or 50
 
+        score       = r.get('score', {})
+        score_color = score.get('color', '#90a4ae')
+        score_label = score.get('label', '중립')
+        score_total = score.get('total', 0)
+        bar_pct     = score.get('bar_pct', 50)
+        trend_sc    = score.get('trend_score', 0)
+        mom_sc      = score.get('momentum_score', 0)
+        vol_sc      = score.get('volume_score', 0)
+        obv_div     = r.get('obv_div')
+        div_warn    = (f'<span style="color:#e65100;font-weight:600">{obv_div}</span>' if obv_div else '')
+
+        # ADX 해석
+        adx_val  = r.get('adx_val')
+        plus_di  = r.get('plus_di')
+        minus_di = r.get('minus_di')
+        if adx_val is not None:
+            if   adx_val >= 40: adx_lbl = '매우강한추세'
+            elif adx_val >= 25: adx_lbl = '강한추세'
+            elif adx_val >= 20: adx_lbl = '추세형성중'
+            else:               adx_lbl = '추세없음'
+            di_lbl = '상승추세' if (plus_di or 0) > (minus_di or 0) else '하락추세'
+            adx_str = f"{adx_val:.1f} ({adx_lbl} / {di_lbl})"
+        else:
+            adx_str = 'N/A'
+
+        poc_fmt = f"{r['poc_price']:,.2f}" if r.get('poc_price') else 'N/A'
+
         cards += f"""
     <div class="card">
       <div class="card-header">
@@ -328,6 +463,20 @@ def generate_html(results, ai_text=""):
       <div class="price-row">
         <span class="price">{price_fmt(r)}</span>
         <span style="color:{c_chg(r['pct'])};font-weight:600">{r['pct']:+.2f}% {'▲' if r['pct']>=0 else '▼'}</span>
+      </div>
+
+      <!-- 종합신호 스코어 바 -->
+      <div class="score-section">
+        <div class="score-label">종합신호 <strong style="color:{score_color}">{score_label}</strong> <small>({score_total:+d}점)</small></div>
+        <div class="score-bar-wrap">
+          <div class="score-bar-fill" style="width:{bar_pct}%;background:{score_color}"></div>
+        </div>
+        <div class="score-details">
+          <span>추세 {trend_sc:+d}</span>
+          <span>모멘텀 {mom_sc:+d}</span>
+          <span>거래량 {vol_sc:+d}</span>
+          {div_warn}
+        </div>
       </div>
 
       <!-- 가격 차트 + 이동평균 -->
@@ -348,8 +497,8 @@ def generate_html(results, ai_text=""):
       </div>
 
       <!-- 매물대 (Volume Profile) -->
-      <div class="section-title">📊 매물대 (최근 90일)</div>
-      {vol_profile_bars(r['vol_profile'], r['curr'])}
+      <div class="section-title">📊 매물대 — POC: {poc_fmt} (최다거래 가격)</div>
+      {vol_profile_bars(r['vol_profile'], r['curr'], r.get('poc_price'))}
 
       <!-- 이동평균 뱃지 -->
       <div class="ma-row">
@@ -374,11 +523,11 @@ def generate_html(results, ai_text=""):
       <div class="bb-lbl"><span>하단매수</span><span>중간</span><span>상단과열</span></div>
 
       <!-- MACD -->
-      <div class="ind-label">MACD <b style="color:{'#2ecc71' if r['macd']>r['macd_sig'] else '#e74c3c'}">{'▲ 매수' if r['macd']>r['macd_sig'] else '▼ 매도'}</b> <small style="color:#888">히스토그램 {r['macd_hist']:+.4f}</small></div>
-      <div class="macd-bar"><div style="width:{min(100,abs(r['macd_hist'])/(abs(r['macd_hist'])+1e-9)*100):.0f}%;height:100%;background:{'#2ecc71' if r['macd']>r['macd_sig'] else '#e74c3c'};border-radius:3px;opacity:0.8"></div></div>
+      <div class="ind-label">MACD <b style="color:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828'}">{'▲ 매수' if r['macd']>r['macd_sig'] else '▼ 매도'}</b> <small style="color:#888">히스토그램 {r['macd_hist']:+.4f}</small></div>
+      <div class="macd-bar"><div style="width:{min(100,abs(r['macd_hist'])/(abs(r['macd_hist'])+1e-9)*100):.0f}%;height:100%;background:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828'};border-radius:3px;opacity:0.8"></div></div>
 
-      <!-- ATR / OBV -->
-      <div class="row2">
+      <!-- ATR / OBV / ADX -->
+      <div class="row3">
         <div class="mini-box">
           <div class="mini-title">ATR (변동성)</div>
           <div class="mini-val">{f"{r['atr_pct']:.2f}%" if r['atr_pct'] else 'N/A'} <small style="color:#888">일일리스크</small></div>
@@ -387,10 +536,14 @@ def generate_html(results, ai_text=""):
           <div class="mini-title">OBV 추세</div>
           <div class="mini-val" style="color:{c_obv(r['obv_trend'])}">{'↑ 매집' if r['obv_trend']=='up' else '↓ 분산' if r['obv_trend']=='down' else '→ 중립'}</div>
         </div>
+        <div class="mini-box">
+          <div class="mini-title">ADX (추세강도)</div>
+          <div class="mini-val" style="font-size:11px;color:#333">{adx_str}</div>
+        </div>
       </div>
 
-      <!-- 피봇 포인트 -->
-      <div class="section-title">📌 피봇 포인트</div>
+      <!-- 주간 피봇 포인트 -->
+      <div class="section-title">📌 주간 피봇 포인트</div>
       {pivot_row(r['pivot'], r['curr'])}
     </div>"""
 
@@ -419,7 +572,7 @@ def generate_html(results, ai_text=""):
         stk_lbl  = '과매수' if (r['stoch_k'] or 0)>=80 else '과매도' if (r['stoch_k'] or 100)<=20 else '중립'
         bb_lbl   = '상단과열' if r['pct_b']>80 else '하단침체' if r['pct_b']<20 else '중간'
         macd_lbl = '▲매수' if r['macd']>r['macd_sig'] else '▼매도'
-        obv_lbl  = '↑매집' if r['obv_trend']=='up' else '↓분산' if r['obv_trend']=='down' else '→중립'
+        obv_lbl  = '↑매집' if r.get('obv_trend')=='up' else '↓분산' if r.get('obv_trend')=='down' else '→중립'
         rsi_s    = f"{r['rsi']:.1f}" if r['rsi'] else 'N/A'
         sk_s     = f"{r['stoch_k']:.0f}" if r['stoch_k'] else 'N/A'
         sd_s     = f"{r['stoch_d']:.0f}" if r['stoch_d'] else 'N/A'
@@ -472,8 +625,8 @@ h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
 .ind-label{{font-size:12px;color:#555;margin:10px 0 4px}}
 .track{{position:relative;height:11px;background:#e8eaf0;border-radius:6px;margin-bottom:14px}}
 .zone{{position:absolute;height:100%;opacity:.25;border-radius:6px}}
-.z-buy{{background:#2ecc71}}
-.z-sell{{background:#e74c3c}}
+.z-buy{{background:#00838f}}
+.z-sell{{background:#c62828}}
 .needle{{position:absolute;top:-3px;width:4px;height:17px;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 4px rgba(0,0,0,.2)}}
 .needle2{{position:absolute;top:0;width:2px;height:100%;background:#e67e22;opacity:.8;transform:translateX(-50%)}}
 .tick{{position:absolute;top:13px;font-size:10px;color:#aaa;transform:translateX(-50%)}}
@@ -482,6 +635,12 @@ h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
 .bb-lbl{{display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-bottom:6px}}
 .macd-bar{{height:8px;background:#e8eaf0;border-radius:4px;overflow:hidden;margin-top:5px;margin-bottom:10px}}
 .row2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}}
+.row3{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:8px 0}}
+.score-section{{margin:8px 0}}
+.score-label{{font-size:12px;color:#555;margin-bottom:4px}}
+.score-bar-wrap{{height:8px;background:#e8eaf0;border-radius:5px;overflow:hidden;margin-bottom:4px}}
+.score-bar-fill{{height:100%;border-radius:5px;transition:width 0.3s}}
+.score-details{{display:flex;gap:10px;font-size:11px;color:#888}}
 .mini-box{{background:#f0f2f8;border-radius:7px;padding:8px 10px}}
 .mini-title{{font-size:10px;color:#999;margin-bottom:3px}}
 .mini-val{{font-size:14px;font-weight:600;color:#333}}
@@ -722,7 +881,7 @@ def main():
         stk_s  = f"{r['stoch_k']:.0f}" if r['stoch_k'] else '-'
         std_s  = f"{r['stoch_d']:.0f}" if r['stoch_d'] else '-'
         atr_s  = f"{r['atr_pct']:.1f}%" if r['atr_pct'] else '-'
-        print(f"    RSI {rsi_s}  Stoch {stk_s}/{std_s}  BB {r['pct_b']:.0f}%  ATR {atr_s}  OBV {r['obv_trend']}")
+        print(f"    RSI {rsi_s}  Stoch {stk_s}/{std_s}  BB {r['pct_b']:.0f}%  ATR {atr_s}  OBV {r.get('obv_trend','?')}  [{r['score']['label']}]")
         print()
 
     generate_html(results)

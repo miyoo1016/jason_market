@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/miyoo1016/jason_market/venv/bin/python3
 """Jason Market 메뉴 런처
 사용법: python3 menu.py  (또는 터미널에서 그냥 'jm')
 """
@@ -17,7 +17,7 @@ MENU = [
     ('1',  '가격 조회          — 주요 자산 현재가',          'view_prices.py',              [], False),
     ('2',  '포트폴리오 손익    — 내 계좌 실시간 수익률',     'portfolio_tracker.py',        [], True),
     ('3',  '공포탐욕지수       — 시장 심리 0~100',           'fear_greed.py',               [], False),
-    ('4',  '거시경제 대시보드  — 금리·달러·유가·환율',       'macro_dashboard.py',          [], False),
+    ('4',  '거시경제 대시보드  — 금리·달러·유가·환율',       'macro_dashboard.py',          [], True),
     ('5',  '뉴스 수집·정리     — Yahoo+Google RSS 감성분석',       'news_summary.py',        [], True),
     ('6',  '가격 알리미        — 목표가 도달 시 알림',       'price_alert.py',              [], False),
     ('7',  '기술적 분석        — RSI·MACD·볼린저·스토캐스틱·ATR',   'technical_analysis_with_ai.py', [], True),

@@ -30,8 +30,10 @@ def alert_line(text):
     return text
 
 ASSETS = [
-    ('QQQ', 'Nasdaq 100 ETF'),
-    ('GLD', '금 ETF (SPDR Gold)'),
+    ('QQQ',   'Nasdaq 100 ETF'),
+    ('SPY',   'S&P 500 ETF'),
+    ('GOOGL', 'Alphabet Inc.'),
+    ('GLD',   '금 ETF (SPDR Gold)'),
 ]
 
 # CBOE 공개 delayed quotes API (optioncharts.io 와 동일 데이터 소스)
@@ -453,6 +455,19 @@ def generate_html(results, timestamp):
         mp_diff = round((mp - curr) / curr * 100, 2) if mp else None
         mp_str  = f"${mp:,.2f} ({mp_diff:+.1f}%)" if mp and mp_diff is not None else 'N/A'
 
+        # Max Pain 긴급 지표 (7일 이내 만기)
+        mp_urgency = ''
+        if mp and mp_diff is not None:
+            near_exp = next((row for row in r['exp_rows']
+                             if row.get('max_pain') and row['days'] <= 7), None)
+            if near_exp and near_exp['max_pain']:
+                mp_near = near_exp['max_pain']
+                mp_near_diff = (mp_near - curr) / curr * 100
+                if abs(mp_near_diff) >= 2:
+                    direction = '하방' if mp_near_diff < 0 else '상방'
+                    mp_urgency = (f"⚡ 주의: 이번주 만기 Max Pain {mp_near_diff:+.1f}% "
+                                  f"({direction} 당김)")
+
         # ── 만기별 상세 테이블 ──────────────────────────────
         exp_rows_html = ''
         for row in r['exp_rows']:
@@ -481,26 +496,43 @@ def generate_html(results, timestamp):
             mpd_cell  = f'{mpd:+.1f}%'  if mpd is not None else '–'
             mpd_color = '#26a69a' if (mpd or 0) >= 0 else '#ef5350'
 
-            # 기대변동 셀 (ATM 스트래들, barchart 방식)
+            # 기대변동 셀 — ±% (굵게) + ±$ (서브) + 범위
             if st_em > 0:
-                em_cell = (f'<span class="em-val">±${st_em:,.2f}</span>'
-                           f'<br><span class="em-pct">({st_em_pct:.1f}%)</span>'
+                em_cell = (f'<span class="em-val">±{st_em_pct:.1f}%</span>'
+                           f'<br><span class="em-sub">±${st_em:,.2f}</span>'
                            f'<br><span class="em-range">'
-                           f'<span class="em-up">▲${upper_p:,.2f}</span>'
-                           f' / <span class="em-dn">▼${lower_p:,.2f}</span>'
+                           f'<span class="em-up">▲{upper_p:,.2f}</span>'
+                           f'<br><span class="em-dn">▼{lower_p:,.2f}</span>'
                            f'</span>')
             else:
                 em_cell = '–'
 
+            # Max Pain 합성 셀
+            if mp_r:
+                mp_combined = (f'<span class="mp-price">${mp_r:,.2f}</span>'
+                               f'<br><span class="mp-diff" style="color:{mpd_color}">{mpd_cell}</span>')
+            else:
+                mp_combined = '–'
+
+            # P/C 합성 셀 (Vol P/C + OI P/C + OI 미니바)
+            # 원본 숫자는 hover tooltip으로 복원
+            pc_tooltip = (f'콜Vol:{c_vol:,} / 풋Vol:{p_vol:,}&#10;'
+                          f'콜OI:{c_oi:,} / 풋OI:{p_oi:,}')
             if tot_oi > 0:
                 call_w = round(c_oi / tot_oi * 100, 1)
                 put_w  = 100 - call_w
-                pc_bar = (f'<div class="pc-bar-wrap">'
+                pc_bar = (f'<div class="pc-bar-wrap" title="{pc_tooltip}">'
                           f'<div class="pc-bar-c" style="width:{call_w}%"></div>'
                           f'<div class="pc-bar-p" style="width:{put_w}%"></div>'
                           f'</div>')
             else:
                 pc_bar = ''
+
+            pc_cell = (f'<div class="pc-line"><span class="pc-lbl">Vol</span>'
+                       f'<span style="color:{pc_vol_c};font-weight:700">{pc_vol:.2f}</span></div>'
+                       f'<div class="pc-line"><span class="pc-lbl">OI&nbsp;</span>'
+                       f'<span style="color:{pc_oi_c};font-weight:700">{pc_oi_r:.2f}</span></div>'
+                       f'{pc_bar}')
 
             row_cls       = ' class="row-near"' if days <= 7 else (
                             ' class="row-mid"'  if days <= 30 else '')
@@ -511,19 +543,12 @@ def generate_html(results, timestamp):
 
             exp_rows_html += f"""
 <tr{row_cls}{row_cls_extra}>
-  <td class="exp-date">{row['exp']} <span class="wd">({wd})</span></td>
+  <td class="exp-date">{row['exp']}<span class="wd">({wd})</span></td>
   <td style="text-align:center">{_days_badge(days)}</td>
-  <td class="num">{c_vol:,}</td>
-  <td class="num">{p_vol:,}</td>
-  <td class="num" style="color:{pc_vol_c};font-weight:700">{pc_vol:.2f}</td>
-  <td class="num">{c_oi:,}</td>
-  <td class="num">{p_oi:,}</td>
-  <td class="num" style="color:{pc_oi_c};font-weight:700">{pc_oi_r:.2f}</td>
-  <td>{pc_bar}</td>
+  <td class="pc-cell" title="{pc_tooltip}">{pc_cell}</td>
   <td class="num {iv_cls}">{iv:.1f}%</td>
-  <td class="num em-cell">{em_cell}</td>
-  <td class="num">{mp_cell}</td>
-  <td class="num" style="color:{mpd_color};font-weight:600">{mpd_cell}</td>
+  <td class="em-cell2">{em_cell}</td>
+  <td class="mp-cell">{mp_combined}</td>
   <td class="comment-cell">{comment}</td>
 </tr>"""
 
@@ -537,13 +562,11 @@ def generate_html(results, timestamp):
         exp_rows_html += f"""
 <tr class="row-total">
   <td colspan="2"><strong>합계</strong></td>
-  <td class="num"><strong>{tot_c_vol:,}</strong></td>
-  <td class="num"><strong>{tot_p_vol:,}</strong></td>
-  <td class="num" style="color:{_pc_color(tot_pc_vol)};font-weight:700">{tot_pc_vol:.2f}</td>
-  <td class="num"><strong>{tot_c_oi:,}</strong></td>
-  <td class="num"><strong>{tot_p_oi:,}</strong></td>
-  <td class="num" style="color:{_pc_color(tot_pc_oi)};font-weight:700">{tot_pc_oi:.2f}</td>
-  <td></td><td></td><td></td><td></td><td></td><td></td>
+  <td class="pc-cell">
+    <div class="pc-line"><span class="pc-lbl">Vol</span><span style="color:{_pc_color(tot_pc_vol)};font-weight:700">{tot_pc_vol:.2f}</span></div>
+    <div class="pc-line"><span class="pc-lbl">OI&nbsp;</span><span style="color:{_pc_color(tot_pc_oi)};font-weight:700">{tot_pc_oi:.2f}</span></div>
+  </td>
+  <td></td><td></td><td></td><td></td>
 </tr>"""
 
         # 상위 스트라이크 표
@@ -564,18 +587,53 @@ def generate_html(results, timestamp):
         gflip    = gex.get('gamma_flip')
         ngb_cls  = 'gex-pos' if ngb >= 0 else 'gex-neg'
         ngb_str  = f'{"+" if ngb >= 0 else ""}${ngb:.3f}B'
-        gex_regime = ('딜러 롱감마 — 시장 안정화 구간' if ngb >= 0.3
-                      else '딜러 숏감마 — 변동성 증폭 위험' if ngb < 0
-                      else '감마 중립 — 방향성 불명확')
+        if ngb >= 0.5:
+            gex_regime = '딜러 롱감마 ✅ — 딜러가 하락시 매수·상승시 매도 → 시장 안정화 (변동성 억제)'
+        elif ngb >= 0:
+            gex_regime = '딜러 약한 롱감마 — 시장 소폭 안정화'
+        elif ngb >= -0.3:
+            gex_regime = '딜러 약한 숏감마 ⚠ — 변동성 증폭 가능성'
+        else:
+            gex_regime = '딜러 숏감마 🔴 — 딜러가 하락시 매도·상승시 매수 → 변동성 폭발 위험'
         cwall_str = f'${cwall:,.2f}' if cwall else 'N/A'
         pwall_str = f'${pwall:,.2f}' if pwall else 'N/A'
         cwall_diff = f'(+{(cwall-curr)/curr*100:.1f}%)' if cwall else ''
         pwall_diff = f'({(pwall-curr)/curr*100:.1f}%)' if pwall else ''
         gflip_str  = f'${gflip:,.2f}' if gflip else 'N/A'
-        gflip_rel  = ('▲ 현재가 위 — 지금은 안정 구간' if gflip and gflip > curr
-                      else '▼ 현재가 아래 — 불안정 구간' if gflip and gflip < curr
-                      else '현재가 근접')
+        gflip_rel  = ('▲ 현재가 위 ✅ — 딜러 롱감마 구간, 안정화 작동 중' if gflip and gflip > curr
+                      else '▼ 현재가 아래 ⚠ — 딜러 숏감마 구간, 변동 증폭 위험' if gflip and gflip < curr
+                      else '≈ 현재가 근접 — 감마 플립 전환 경계')
         gflip_cls  = 'gex-pos' if gflip and gflip > curr else 'gex-neg'
+
+        # Expected Move 위치 표시
+        near_em_row = next((row for row in r['exp_rows']
+                            if row['straddle_em'] > 0 and row['days'] > 0), None)
+        if near_em_row:
+            em_upper = near_em_row['upper_price']
+            em_lower = near_em_row['lower_price']
+            em_pct   = near_em_row['straddle_em_pct']
+            em_days  = near_em_row['days']
+            em_range = em_upper - em_lower
+            if em_range > 0:
+                em_pos = max(0, min(100, (curr - em_lower) / em_range * 100))
+            else:
+                em_pos = 50
+            em_hint = '✅ 기대범위 안' if 20 < em_pos < 80 else '⚠ 기대범위 경계 근처'
+            em_html = f"""
+    <div class="em-section">
+      <div class="em-title">📐 기대변동 위치 — {em_days}일 후 만기 기준 (±{em_pct:.1f}%)</div>
+      <div class="em-track-wrap">
+        <span class="em-bound">▼${em_lower:,.0f}</span>
+        <div class="em-track">
+          <div class="em-zone"></div>
+          <div class="em-cursor" style="left:{em_pos:.1f}%"></div>
+        </div>
+        <span class="em-bound">▲${em_upper:,.0f}</span>
+      </div>
+      <div class="em-hint">{em_hint}</div>
+    </div>"""
+        else:
+            em_html = ''
 
         cards += f"""
 <div class="card">
@@ -596,6 +654,7 @@ def generate_html(results, timestamp):
       <div class="slbl">전체 P/C OI</div>
       <div class="sval" style="color:{sig_color}">{pc_oi:.2f}</div>
       <div class="ssub" style="color:{sig_color}">{sig}</div>
+      <div class="pc-note">※ P/C &gt; 1.3은 기관 헤지일 수 있어 단순 약세 신호가 아닐 수 있음</div>
     </div>
     <div class="sbox">
       <div class="slbl">전체 P/C Volume</div>
@@ -605,7 +664,7 @@ def generate_html(results, timestamp):
     <div class="sbox">
       <div class="slbl">1개월 Max Pain</div>
       <div class="sval">{mp_str}</div>
-      <div class="ssub">옵션 매도자 유리 가격</div>
+      <div class="ssub">옵션 매도자 유리 가격{f' &nbsp;<span style="color:#e65100;font-size:9px">{mp_urgency}</span>' if mp_urgency else ''}</div>
     </div>
     <div class="sbox">
       <div class="slbl">콜 OI / 풋 OI</div>
@@ -633,6 +692,8 @@ def generate_html(results, timestamp):
       <div class="ssub">1개월 이내 만기</div>
     </div>
   </div>
+
+  {em_html}
 
   <!-- GEX (Gamma Exposure) 요약 — GexScreener 동일 지표 -->
   <div class="gex-grid">
@@ -678,28 +739,21 @@ def generate_html(results, timestamp):
   <!-- 만기별 상세 표 -->
   <div class="section">
     <div class="section-title">📋 만기일별 옵션 배팅 상세</div>
-    <div class="table-wrap">
+    <div class="table-wrap" id="tw-{sym}">
       <table class="exp-table">
+        <colgroup>
+          <col class="c-date"><col class="c-days"><col class="c-pc">
+          <col class="c-iv"><col class="c-em"><col class="c-mp"><col class="c-cmt">
+        </colgroup>
         <thead>
           <tr>
-            <th rowspan="2">만기일</th>
-            <th rowspan="2">잔존</th>
-            <th colspan="3" class="grp-vol">Volume</th>
-            <th colspan="3" class="grp-oi">Open Interest</th>
-            <th rowspan="2">OI 비율</th>
-            <th rowspan="2">IV</th>
-            <th rowspan="2">기대변동 (ATM스트래들)<br><span style="font-weight:400;font-size:9px;color:#aaa">barchart 동일 방식</span></th>
-            <th rowspan="2">Max Pain</th>
-            <th rowspan="2">현재가 대비</th>
-            <th rowspan="2">해설</th>
-          </tr>
-          <tr>
-            <th class="grp-vol">콜</th>
-            <th class="grp-vol">풋</th>
-            <th class="grp-vol">P/C</th>
-            <th class="grp-oi">콜</th>
-            <th class="grp-oi">풋</th>
-            <th class="grp-oi">P/C</th>
+            <th>만기일</th>
+            <th>잔존</th>
+            <th title="마우스 올리면 원본 수량 표시">P/C<br><span style="font-weight:400;font-size:9px;color:#aaa">Vol / OI</span></th>
+            <th>IV</th>
+            <th>기대변동<br><span style="font-weight:400;font-size:9px;color:#aaa">±% · ±$ · 범위</span></th>
+            <th>Max Pain<br><span style="font-weight:400;font-size:9px;color:#aaa">현재가대비</span></th>
+            <th>해설</th>
           </tr>
         </thead>
         <tbody>{exp_rows_html}</tbody>
@@ -762,14 +816,14 @@ def generate_html(results, timestamp):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Jason Market — 옵션 모니터</title>
+<title>Jason Market — 옵션 모니터 (QQQ/SPY/GOOGL)</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box;}}
 body{{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;}}
 a{{color:inherit;}}
 
-.top-header{{background:#1a1a2e;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;}}
+.top-header{{background:#1a237e;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;}}
 .top-header h1{{font-size:16px;font-weight:700;}}
 .top-header .meta{{font-size:11px;color:#aaa;}}
 
@@ -789,44 +843,81 @@ a{{color:inherit;}}
 .slbl{{font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}}
 .sval{{font-size:15px;font-weight:700;color:#222;}}
 .ssub{{font-size:9px;color:#aaa;margin-top:2px;}}
+.pc-note{{font-size:9px;color:#bbb;margin-top:2px;line-height:1.4}}
+.em-section{{padding:10px 20px;background:#f8f9ff;border-top:1px solid #eee;border-bottom:1px solid #eee;}}
+.em-title{{font-size:11px;font-weight:700;color:#555;margin-bottom:6px}}
+.em-track-wrap{{display:flex;align-items:center;gap:8px}}
+.em-bound{{font-size:11px;font-family:monospace;color:#888;width:80px}}
+.em-bound:last-child{{text-align:left}}
+.em-track{{flex:1;height:14px;background:#e8eaf0;border-radius:7px;position:relative}}
+.em-zone{{position:absolute;left:20%;width:60%;height:100%;background:#e8f5e9;border-radius:7px}}
+.em-cursor{{position:absolute;top:-4px;width:6px;height:22px;background:#1565c0;border-radius:3px;transform:translateX(-50%);box-shadow:0 1px 4px rgba(0,0,0,.2)}}
+.em-hint{{font-size:11px;color:#888;margin-top:4px;text-align:center}}
 .up{{color:#1a8a7a;}}.dn{{color:#d32f2f;}}
 
 .section{{padding:14px 20px;border-top:1px solid #f0f0f0;}}
 .section-title{{font-size:12px;font-weight:700;color:#555;margin-bottom:10px;}}
 
-.table-wrap{{overflow-x:auto;}}
-.exp-table{{width:100%;border-collapse:collapse;font-size:11.5px;white-space:nowrap;}}
-.exp-table thead tr:first-child th{{background:#1a1a2e;color:#fff;padding:7px 10px;font-size:10px;text-align:center;position:sticky;top:0;}}
-.exp-table thead tr:nth-child(2) th{{background:#2d2d44;color:#ccc;padding:5px 10px;font-size:10px;text-align:right;position:sticky;top:28px;}}
-.exp-table thead th.grp-vol{{background:#1a3a5c;color:#7bb8f0;}}
-.exp-table thead tr:nth-child(2) th.grp-vol{{background:#1e4570;color:#aad4f5;}}
-.exp-table thead th.grp-oi{{background:#3a1a1a;color:#f07b7b;}}
-.exp-table thead tr:nth-child(2) th.grp-oi{{background:#4a2020;color:#f5aaa8;}}
-.exp-table tbody td{{padding:5px 10px;border-bottom:1px solid #f5f5f5;vertical-align:middle;}}
-.exp-table tbody td.exp-date{{font-weight:600;color:#333;font-family:monospace;font-size:12px;white-space:nowrap;}}
-.exp-table tbody td.exp-date .wd{{font-family:sans-serif;font-size:10px;color:#1a5fa8;font-weight:700;}}
+/* ─── 만기별 상세 표 ─── */
+/* table-wrap은 그냥 컨테이너 역할만, 좌우 스크롤 없음 */
+.table-wrap{{overflow:visible;}}
+/* 테이블 전체 너비 = 열 합산 고정값(auto) — 화면 가득 채우지 않음 */
+.exp-table{{width:auto;min-width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}}
+/* 열 너비 — 합계 약 670px, 해설은 딱 200px */
+.exp-table col.c-date{{width:105px;}}
+.exp-table col.c-days{{width:52px;}}
+.exp-table col.c-pc  {{width:88px;}}
+.exp-table col.c-iv  {{width:50px;}}
+.exp-table col.c-em  {{width:100px;}}
+.exp-table col.c-mp  {{width:86px;}}
+.exp-table col.c-cmt {{width:200px;}}  /* 고정 200px — 2~3줄 줄바꿈 */
+
+.exp-table thead th{{background:#1a1a2e;color:#fff;padding:6px 8px;font-size:10px;
+                     text-align:center;position:sticky;top:0;z-index:2;
+                     border-right:1px solid #2d2d44;}}
+.exp-table thead th:first-child{{text-align:left;}}
+.exp-table thead th:last-child{{text-align:right;border-right:none;}}
+.exp-table tbody td{{padding:5px 7px;border-bottom:1px solid #f0f0f0;
+                     vertical-align:top;border-right:1px solid #f5f5f5;}}
+.exp-table tbody td:last-child{{border-right:none;}}
+.exp-table tbody td.exp-date{{font-weight:600;color:#333;font-family:monospace;font-size:11px;}}
+.exp-table tbody td.exp-date .wd{{display:block;font-family:sans-serif;font-size:9px;
+                                   color:#1a5fa8;font-weight:600;margin-top:1px;}}
 .exp-table tbody td.num{{text-align:right;font-variant-numeric:tabular-nums;}}
-.exp-table tbody tr:hover td{{background:#f8f8ff;}}
+.exp-table tbody tr:hover td{{background:#f5f8ff;}}
 .exp-table tbody tr.row-near{{background:#fff5f5;}}
 .exp-table tbody tr.row-near:hover td{{background:#ffe8e8;}}
 .exp-table tbody tr.row-mid{{background:#fffff5;}}
-.exp-table tbody tr.row-total{{background:#f0f4ff;font-size:12px;}}
-.exp-table tbody tr.row-total td{{padding:7px 10px;border-top:2px solid #dde;}}
+.exp-table tbody tr.row-total{{background:#f0f4ff;font-size:11px;}}
+.exp-table tbody tr.row-total td{{padding:6px 7px;border-top:2px solid #dde;}}
 
 .iv-hi{{color:#ef5350;font-weight:700;}}
 .iv-mid{{color:#ff9800;font-weight:600;}}
 .iv-lo{{color:#26a69a;}}
 
-.comment-cell{{font-size:10.5px;color:#555;padding:5px 10px;min-width:280px;
-               line-height:1.5;white-space:normal;}}
+/* P/C 합성 셀 — Vol·OI P/C + OI 미니바; 원본 숫자는 hover tooltip */
+.pc-cell{{cursor:help;}}
+.pc-line{{display:flex;align-items:center;justify-content:space-between;
+          font-size:10.5px;line-height:1.6;}}
+.pc-lbl{{color:#aaa;font-size:9px;}}
 
-/* 기대변동 셀 (ATM 스트래들) */
-.em-cell{{text-align:right;min-width:140px;line-height:1.6;}}
-.em-val{{font-size:12px;font-weight:700;color:#1a1a2e;}}
-.em-pct{{font-size:10px;color:#888;}}
-.em-range{{font-size:10px;}}
+/* 기대변동 셀 — ±% 굵게, ±$ 서브, 범위 */
+.em-cell2{{text-align:right;}}
+.em-val{{font-size:11.5px;font-weight:700;color:#1a1a2e;}}
+.em-sub{{font-size:9.5px;color:#888;}}
+.em-range{{font-size:9.5px;}}
 .em-up{{color:#1a8a7a;font-weight:600;}}
 .em-dn{{color:#d32f2f;font-weight:600;}}
+
+/* Max Pain 합성 셀 */
+.mp-cell{{text-align:right;}}
+.mp-price{{font-size:11.5px;font-weight:700;color:#333;}}
+.mp-diff{{font-size:10px;font-weight:600;}}
+
+/* 해설 — 2~3줄 줄바꿈, 우측 정렬 (끝부분이 항상 오른쪽에 맞춰짐) */
+.comment-cell{{font-size:10px;color:#444;line-height:1.7;
+               text-align:right;white-space:normal;
+               word-break:keep-all;overflow-wrap:break-word;}}
 
 .badge{{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;}}
 .b-red{{background:#fdecea;color:#c62828;}}
@@ -872,7 +963,7 @@ td:first-child{{text-align:left;color:#333;}}
 </head>
 <body>
 <div class="top-header">
-  <h1>Jason Market — 옵션 모니터 (QQQ / GLD)</h1>
+  <h1>Jason Market — 옵션 모니터 (QQQ / SPY / GOOGL)</h1>
   <div class="meta">업데이트: {timestamp} &nbsp;|&nbsp; 날짜·OI: CBOE = optioncharts.io &nbsp;|&nbsp; 기대변동: ATM스트래들 = barchart 방식</div>
 </div>
 <div class="page">{cards}</div>
@@ -1124,6 +1215,7 @@ ALL.forEach(r => {{
   makeStrikeChart('chart-'+r.sym+'-vol', r.chart, r.curr, r.max_pain);
   makeGexChart('chart-'+r.sym+'-gex', r.gex, r.curr);
 }});
+
 </script>
 <button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#1a5fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 3px 12px rgba(0,0,0,.3)">📋 전체 복사</button>
 <script>
@@ -1136,7 +1228,7 @@ function copyReport(){{var el=document.querySelector('.page,.main-content,main')
 
 def main():
     print(f"\n{'━'*55}")
-    print(f"  Jason 옵션 모니터  (QQQ / GLD)")
+    print(f"  Jason 옵션 모니터  (QQQ / SPY / GOOGL)")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'━'*55}")
     print("  CBOE delayed quotes 수집 중 (약 10-20초)...\n")

@@ -97,19 +97,64 @@ def _mk_fmt(at):
         return f"${v:,.2f}"
     return fmt
 
-def find_pivot_highs(high, window=5):
+def find_pivot_highs(high, window=10):
     pivots = []
     for i in range(window, len(high) - window):
         if high[i] == max(high[i - window: i + window + 1]):
             pivots.append(high[i])
     return pivots
 
-def find_pivot_lows(low, window=5):
+def find_pivot_lows(low, window=10):
     pivots = []
     for i in range(window, len(low) - window):
         if low[i] == min(low[i - window: i + window + 1]):
             pivots.append(low[i])
     return pivots
+
+def count_touches(prices_array, level, tolerance_pct=0.015, lookback=252):
+    """주어진 레벨에 가격이 근접한 횟수를 계산"""
+    arr = prices_array[-lookback:] if len(prices_array) > lookback else prices_array
+    count = 0
+    for p in arr:
+        if abs(p - level) / max(level, 1e-9) <= tolerance_pct:
+            count += 1
+    return count
+
+def rate_strength(touch_count, recency_score):
+    """터치 횟수와 최근성으로 레벨 강도 평가. Returns (stars: int, label: str)"""
+    if touch_count >= 6 or (touch_count >= 4 and recency_score >= 0.7):
+        return 3, '★★★'
+    if touch_count >= 3 and recency_score >= 0.3:
+        return 2, '★★'
+    return 1, '★'
+
+def find_round_numbers(curr, pct_range=0.15):
+    """심리적 라운드 넘버 찾기. Returns (above_curr list, below_curr list)"""
+    lo = curr * (1 - pct_range)
+    hi = curr * (1 + pct_range)
+    if curr >= 100000:       # 한국 고가주 (삼성전자 등)
+        steps = [10000, 50000]
+    elif curr >= 10000:      # 한국 중가주, 나스닥 선물 등
+        steps = [1000, 5000]
+    elif curr >= 1000:       # USD/KRW 환율, S&P 선물 등
+        steps = [50, 100]
+    elif curr >= 100:        # SPY, QQQ, 해외 ETF
+        steps = [10, 25, 50]
+    elif curr >= 10:
+        steps = [5, 10]
+    else:
+        steps = [0.5, 1]
+    candidates = set()
+    for step in steps:
+        start = int(lo / step) * step
+        val = start
+        while val <= hi * 1.01:
+            if abs(val - curr) / max(curr, 1e-9) > 0.001:
+                candidates.add(round(val, 4))
+            val = round(val + step, 4)
+    above = sorted([v for v in candidates if v > curr])
+    below = sorted([v for v in candidates if v < curr], reverse=True)
+    return above, below
 
 def cluster_levels(levels, tolerance_pct=0.015):
     if not levels:
@@ -144,8 +189,8 @@ def analyze_sr(name, ticker, asset_type):
             except Exception:
                 pass
 
-        pivot_highs = find_pivot_highs(high, window=5)
-        pivot_lows  = find_pivot_lows(low,  window=5)
+        pivot_highs = find_pivot_highs(high, window=10)
+        pivot_lows  = find_pivot_lows(low,  window=10)
 
         resistances = cluster_levels([p for p in pivot_highs if p > curr])
         supports    = cluster_levels([p for p in pivot_lows  if p < curr])
@@ -153,6 +198,36 @@ def analyze_sr(name, ticker, asset_type):
         # 1년 데이터 = 52주 고/저점
         high_52w = float(hist['High'].max())
         low_52w  = float(hist['Low'].min())
+
+        high_arr = list(hist['High'])
+        low_arr  = list(hist['Low'])
+
+        # 저항 레벨 강도 계산
+        res_data = []
+        for lv in resistances[:3]:
+            tc = count_touches(high_arr, lv)
+            last_idx = 0
+            for i, p in enumerate(high_arr):
+                if abs(p - lv) / max(lv, 1e-9) <= 0.015:
+                    last_idx = i
+            recency = last_idx / max(len(high_arr) - 1, 1)
+            stars, star_label = rate_strength(tc, recency)
+            res_data.append({'price': lv, 'touch': tc, 'stars': stars, 'star_label': star_label, 'recency': recency})
+
+        # 지지 레벨 강도 계산
+        sup_data = []
+        for lv in supports[-3:]:
+            tc = count_touches(low_arr, lv)
+            last_idx = 0
+            for i, p in enumerate(low_arr):
+                if abs(p - lv) / max(lv, 1e-9) <= 0.015:
+                    last_idx = i
+            recency = last_idx / max(len(low_arr) - 1, 1)
+            stars, star_label = rate_strength(tc, recency)
+            sup_data.append({'price': lv, 'touch': tc, 'stars': stars, 'star_label': star_label, 'recency': recency})
+
+        # 라운드 넘버
+        round_res, round_sup = find_round_numbers(curr)
 
         return {
             'name':        name.strip(),
@@ -163,6 +238,10 @@ def analyze_sr(name, ticker, asset_type):
             'supports':    supports[-3:],
             'high_52w':    high_52w,
             'low_52w':     low_52w,
+            'res_data':    res_data,
+            'sup_data':    sup_data,
+            'round_res':   round_res,
+            'round_sup':   round_sup,
         }
     except Exception as e:
         print(f"  ⚠ {name.strip()} 오류: {e}")
@@ -349,35 +428,60 @@ def generate_html(all_results, timestamp):
         high_pct = nearest_pct(curr, h52) if not np.isnan(h52) else 0
         low_pct  = nearest_pct(curr, l52) if not np.isnan(l52) else 0
 
-        # 저항 레벨 행
+        # 저항 레벨 행 (res_data 사용)
         res_rows = ''
-        for lv in sorted(r['resistances'], reverse=True):
-            pct = nearest_pct(curr, lv)
-            bar_w = min(abs(pct) * 3, 100)
+        for d in sorted(r.get('res_data', []), key=lambda x: x['price'], reverse=True):
+            lv     = d['price']
+            pct    = nearest_pct(curr, lv)
+            bar_w  = min(d['touch'] * 15, 100)
             res_rows += (
                 f'<tr>'
                 f'<td class="lv-price rc">{fmt(lv)}</td>'
                 f'<td class="lv-pct rc">+{pct:.2f}%</td>'
                 f'<td class="lv-bar"><div class="bar-r" style="width:{bar_w:.0f}%"></div></td>'
+                f'<td class="lv-star" title="{d["touch"]}회 터치">{d["star_label"]}</td>'
+                f'<td class="lv-touch">{d["touch"]}</td>'
                 f'</tr>'
             )
         if not res_rows:
-            res_rows = '<tr><td colspan="3" class="empty">저항 레벨 없음 (52주 고점 근처)</td></tr>'
+            res_rows = '<tr><td colspan="5" class="empty">저항 레벨 없음 (52주 고점 근처)</td></tr>'
 
-        # 지지 레벨 행
+        # 지지 레벨 행 (sup_data 사용)
         sup_rows = ''
-        for lv in sorted(r['supports'], reverse=True):
-            pct = nearest_pct(curr, lv)
-            bar_w = min(abs(pct) * 3, 100)
+        for d in sorted(r.get('sup_data', []), key=lambda x: x['price'], reverse=True):
+            lv     = d['price']
+            pct    = nearest_pct(curr, lv)
+            bar_w  = min(d['touch'] * 15, 100)
             sup_rows += (
                 f'<tr>'
                 f'<td class="lv-price sc">{fmt(lv)}</td>'
                 f'<td class="lv-pct sc">{pct:.2f}%</td>'
                 f'<td class="lv-bar"><div class="bar-s" style="width:{bar_w:.0f}%"></div></td>'
+                f'<td class="lv-star" title="{d["touch"]}회 터치">{d["star_label"]}</td>'
+                f'<td class="lv-touch">{d["touch"]}</td>'
                 f'</tr>'
             )
         if not sup_rows:
-            sup_rows = '<tr><td colspan="3" class="empty">지지 레벨 없음 (52주 저점 근처)</td></tr>'
+            sup_rows = '<tr><td colspan="5" class="empty">지지 레벨 없음 (52주 저점 근처)</td></tr>'
+
+        # 라운드 넘버 HTML
+        round_res_html = ''
+        for rv in (r.get('round_res') or [])[:5]:
+            rpct = nearest_pct(curr, rv)
+            round_res_html += f'<span class="rl-badge" style="color:#c62828">{fmt(rv)} (+{rpct:.1f}%)</span>'
+        round_sup_html = ''
+        for rv in (r.get('round_sup') or [])[:5]:
+            rpct = nearest_pct(curr, rv)
+            round_sup_html += f'<span class="rl-badge" style="color:#1a7a6a">{fmt(rv)} ({rpct:.1f}%)</span>'
+        round_section = ''
+        if round_res_html or round_sup_html:
+            round_section = f"""<div class="round-section">
+            <div class="sec-hdr" style="background:#f3e5f5;color:#6a1b9a">🔮 심리적 가격대 (라운드 넘버)</div>
+            <div class="round-levels">
+              {round_res_html}
+              {round_sup_html}
+            </div>
+          </div>"""
 
         svg = _svg_ladder(r)
 
@@ -413,7 +517,7 @@ def generate_html(all_results, timestamp):
       <div class="sec-block">
         <div class="sec-hdr rh">🔴 저항 레벨 (상승 저항)</div>
         <table class="lv-tbl">
-          <thead><tr><th>가격</th><th>거리</th><th>강도</th></tr></thead>
+          <thead><tr><th>가격</th><th>거리</th><th>강도바</th><th>강도</th><th>터치</th></tr></thead>
           <tbody>{res_rows}</tbody>
         </table>
       </div>
@@ -423,10 +527,12 @@ def generate_html(all_results, timestamp):
       <div class="sec-block">
         <div class="sec-hdr sh">🟢 지지 레벨 (하락 지지)</div>
         <table class="lv-tbl">
-          <thead><tr><th>가격</th><th>거리</th><th>강도</th></tr></thead>
+          <thead><tr><th>가격</th><th>거리</th><th>강도바</th><th>강도</th><th>터치</th></tr></thead>
           <tbody>{sup_rows}</tbody>
         </table>
       </div>
+
+      {round_section}
 
       <!-- 52주 통계 -->
       <div class="w52">
@@ -461,7 +567,7 @@ def generate_html(all_results, timestamp):
 *{{margin:0;padding:0;box-sizing:border-box;}}
 body{{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;}}
 
-.top-hdr{{padding:14px 24px;background:#1a1a2e;color:#fff;}}
+.top-hdr{{padding:14px 24px;background:#1a237e;color:#fff;}}
 .top-hdr h1{{font-size:17px;font-weight:700;}}
 .top-hdr .sub{{font-size:11px;color:#aaa;margin-top:4px;}}
 
@@ -506,8 +612,13 @@ body{{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;
 .bar-r{{height:6px;background:#ef5350;border-radius:3px;min-width:2px;}}
 .bar-s{{height:6px;background:#26a69a;border-radius:3px;min-width:2px;}}
 .lv-tbl td.empty{{color:#bbb;font-style:italic;font-size:11px;}}
+.lv-tbl td.lv-star{{font-size:11px;color:#888;padding:4px 4px;}}
+.lv-tbl td.lv-touch{{font-size:11px;color:#aaa;text-align:center;}}
 
 .rc{{color:#ef5350;}}.sc{{color:#26a69a;}}.blue{{color:#1a5fa8;}}
+.round-section{{margin-top:8px;border:1px solid #e1bee7;border-radius:5px;overflow:hidden;}}
+.round-levels{{padding:8px 10px;display:flex;flex-wrap:wrap;gap:5px;background:#fce4ec00;}}
+.rl-badge{{font-size:11px;font-weight:600;background:#f5f5f5;padding:3px 8px;border-radius:4px;border:1px solid #eee;}}
 
 /* 현재가 구분선 */
 .curr-band{{text-align:center;padding:6px 8px;background:#eef4ff;

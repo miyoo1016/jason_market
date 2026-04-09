@@ -17,35 +17,25 @@ def alert_line(text):
     return text
 
 ASSETS = [
-    # ── 미국 ETF / 개별 종목 ────────
-    ('Nasdaq QQQM ', 'QQQM'),
-    ('S&P500 SPY  ', 'SPY'),
-    ('Google      ', 'GOOGL'),
-    # ── 포트폴리오 국내 ETF ──────────
-    ('KODEX NQ100 ', '379810.KS'),
-    ('KODEX S&P500', '379800.KS'),
-    ('KODEX 반도체 ', '390390.KS'),
-    ('TIGER CD금리 ', '357870.KS'),
-    ('KRX 금현물   ', 'GOLD_KRX'),
-    # ── 한국 ────────────────────────
-    ('코스피       ', '^KS11'),
-    ('삼성전자     ', '005930.KS'),
-    # ── 암호화폐 ────────────────────
-    ('Bitcoin     ', 'BTC-USD'),
-    # ── 환율/금리 ───────────────────
-    ('달러/원      ', 'USDKRW=X'),
-    # ── 환율/국채/원자재 ────────────────
-    ('금(COMEX선물)', 'GC=F'),
-    ('미국 10년물 국채', '^TNX'),
-    ('브렌트유(ICE)', 'BZ=F'),
-    ('WTI원유(NYMEX) ', 'CL=F'),
-    # ── 공식 지수선물 (CME) ──────────────
-    ('다우지수(CME선물)', 'YM=F'),
-    ('S&P500(CME선물)', 'ES=F'),
-    ('나스닥100(CME선물) ', 'NQ=F'),
-    ('러셀2000(CME선물)', 'RTY=F'),
-    # ── 변동성 ──────────────────────
-    ('VIX(현물)   ', '^VIX'),
+    ('QQQM (나스닥100)', 'QQQM'),
+    ('SPY (S&P500)',     'SPY'),
+    ('Google (알파벳)',  'GOOGL'),
+    ('삼성전자',         '005930.KS'),
+    ('KOSPI (코스피)',   '^KS11'),
+    ('KODEX 나스닥100', '379810.KS'),
+    ('KODEX S&P500',    '379800.KS'),
+    ('KODEX 미국반도체', '390390.KS'),
+    ('Bitcoin (BTC)',    'BTC-USD'),
+    ('달러/원 (USD/KRW)', 'USDKRW=X'),
+    ('금 (Gold)',        'GC=F'),
+    ('미국 10년물 국채',  '^TNX'),
+    ('브렌트유 (Brent)', 'BZ=F'),
+    ('WTI원유 (Crude)',  'CL=F'),
+    ('US30 (다우존스)',  'DIA'),
+    ('US500 (S&P500)',   'SPY'),
+    ('USTECH (나스닥)',  'QQQM'),
+    ('US2000 (러셀)',    'IWM'),
+    ('VIX (공포지수)',   '^VIX'),
 ]
 
 def get_gold_krx():
@@ -71,52 +61,72 @@ def get_gold_krx():
         pass
     return None
 
-def get_data(ticker):
+def get_data(ticker, name=""):
     if ticker == 'GOLD_KRX':
         return get_gold_krx()
     try:
         t  = yf.Ticker(ticker)
         fi = t.fast_info
-
-        is_kr     = ticker.endswith('.KS') or ticker in ('^KS11',)
-        is_equity = (not is_kr
-                     and not ticker.endswith('=F')
-                     and not ticker.endswith('=X')
-                     and not ticker.startswith('^')
-                     and ticker not in ('BTC-USD',))
-
-        # ── 전일 종가 추출 (fast_info 공식 속성 우선) ──────────────
+        
+        # ── 기초 데이터 추출 ──────────────────────────
         prev = getattr(fi, 'previous_close', None)
-        if not prev and hasattr(fi, 'get'):
-            prev = fi.get('previousClose') or fi.get('previous_close')
-            
+        open_val = getattr(fi, 'open', None)
+        
+        # 2. 글로벌 자산 00:00 UTC 시가 찾기
+        is_global = ticker in ('GC=F', 'CL=F', 'BZ=F', 'USDKRW=X', 'BTC-USD', 'DIA', 'SPY', 'QQQM', 'IWM', '^VIX', '^TNX')
+        if is_global:
+            try:
+                from datetime import timezone
+                h_int = t.history(period='2d', interval='1h')
+                if not h_int.empty:
+                    h_int.index = h_int.index.tz_convert('UTC')
+                    today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_data = h_int.loc[h_int.index >= today_utc]
+                    if not today_data.empty:
+                        open_val = float(today_data['Open'].iloc[0])
+            except: pass
+
+        # fallback
         if not prev:
             hist = t.history(period='5d')
-            if len(hist) >= 2:
-                prev = float(hist['Close'].iloc[-2])
-            else:
-                return None
+            if len(hist) >= 2: prev = float(hist['Close'].iloc[-2])
 
-        # ── 현재가 추출 ────────────────────────────────────────────
+        # ── 현재가 추출 (프리/애프터마켓 포함) ─────────────────────
+        is_equity = ticker in ('DIA', 'SPY', 'QQQM', 'IWM', 'GOOGL') or ticker.endswith('.KS')
         curr = None
         if is_equity:
-            # 미국 주식/ETF: 1분봉 prepost → 프리·애프터마켓 실시간
             try:
-                h1m  = t.history(period='1d', interval='1m', prepost=True)
-                if not h1m.empty:
-                    curr = float(h1m['Close'].iloc[-1])
-            except Exception:
-                pass
-                
+                h1m = t.history(period='1d', interval='1m', prepost=True)
+                if not h1m.empty: curr = float(h1m['Close'].iloc[-1])
+            except: pass
+        
         if not curr:
             curr = getattr(fi, 'last_price', None)
-            if not curr and hasattr(fi, 'get'):
-                curr = fi.get('lastPrice') or fi.get('last_price')
 
-        if not curr:
-            return None
+        if not curr or not prev: return None
 
-        pct = (curr - prev) / prev * 100
+        # ── 인베스팅닷컴 스타일 보정 (Scaling & Logic) ──────────────
+        scale = 1.0
+        # 'US'로 시작하는 지수 표시용 행만 스케일링 수행
+        if name.startswith('US') and ticker in ('DIA', 'SPY', 'QQQM', 'IWM'):
+            indices = {'DIA':'^DJI', 'SPY':'^GSPC', 'QQQM':'^IXIC', 'IWM':'^RUT'}
+            idx_ticker = indices.get(ticker)
+            if idx_ticker:
+                try:
+                    idx_prev = yf.Ticker(idx_ticker).fast_info.previous_close
+                    if idx_prev and prev:
+                        scale = idx_prev / prev
+                except: pass
+
+        curr *= scale
+        prev *= scale
+        if open_val: open_val *= scale
+
+        if open_val:
+            pct = (curr - open_val) / open_val * 100
+        else:
+            pct = (curr - prev) / prev * 100
+            
         return curr, pct
     except Exception:
         return None
@@ -124,15 +134,14 @@ def get_data(ticker):
 def fmt_price(price, ticker):
     if ticker == 'BTC-USD':
         return f"${price:>12,.0f}"
-    elif ticker in ('GC=F', 'BZ=F', 'CL=F'):
-        return f"${price:>12,.1f}"
-    elif ticker in ('YM=F', 'ES=F', 'NQ=F', 'RTY=F'):
+    elif ticker in ('GC=F', 'BZ=F', 'CL=F', 'DIA', 'SPY', 'QQQM', 'IWM'):
+        # 인베스팅 지수 및 원자재 소수점 1자리
         return f"{price:>12,.1f}"
     elif ticker == 'USDKRW=X':
         return f"₩{price:>12,.1f}"
     elif ticker in ('^TNX', '^VIX', '^KS11'):
         return f"{price:>12,.2f}"
-    elif ticker in ('005930.KS', '379810.KS', '379800.KS', '390390.KS', '357870.KS', 'GOLD_KRX'):
+    elif ticker.endswith('.KS') or ticker == 'GOLD_KRX':
         return f"₩{price:>12,.0f}"
     else:
         return f"${price:>12,.2f}"
@@ -145,7 +154,7 @@ def main():
     print(f"  {'─'*54}")
 
     for name, ticker in ASSETS:
-        result = get_data(ticker)
+        result = get_data(ticker, name)
         if result:
             price, pct = result
             arrow = '▲' if pct >= 0 else '▼'
@@ -154,7 +163,7 @@ def main():
             print(f"  {name}  {'데이터 없음':>13}")
 
     print(f"  {'─'*54}")
-    print(f"  ※ 주식/ETF: 1분봉 prepost | 선물/FX/크립토: fast_info (공식일일정산가 기준)\n")
+    print(f"  ※ 지수: Investing.com (현물기반) | 글로벌: 00:00 GMT 시가 대비 등락률\n")
 
 if __name__ == '__main__':
     main()
