@@ -270,10 +270,8 @@ def safe_save_xlsx(wb, path):
     try:
         wb.save(tmp_path)
         if os.path.exists(tmp_path):
-            # 기존 파일 제거 후 교체
-            if os.path.exists(path):
-                os.remove(path)
-            os.rename(tmp_path, path)
+            # 기존 파일을 지우지 않고 원자적으로 교체 (구글 드라이브 동기화 오류 방지)
+            os.replace(tmp_path, path)
             return True
     except Exception as e:
         if os.path.exists(tmp_path):
