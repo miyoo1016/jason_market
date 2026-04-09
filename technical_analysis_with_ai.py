@@ -42,11 +42,11 @@ def _build_assets():
                 seen.add(t); assets[f'{n:<10}'] = t
     except Exception: pass
     for k, v in {
-        'Bitcoin    ':'BTC-USD','Gold       ':'GC=F',
-        'WTI원유    ':'CL=F','다우선물    ':'YM=F',
-        'S&P선물    ':'ES=F','나스닥선물  ':'NQ=F',
+        'Bitcoin    ':'BTC-USD','금(COMEX선물) ':'GC=F',
+        'WTI원유(NYMEX)':'CL=F','다우지수(CME선물)':'YM=F',
+        'S&P500(CME선물)':'ES=F','나스닥100(CME선물)':'NQ=F',
         '코스피      ':'^KS11','달러/원    ':'USDKRW=X',
-        '미국10년물  ':'^TNX','VIX        ':'^VIX',
+        '미국 10년물 국채':'^TNX','VIX(현물)   ':'^VIX',
     }.items():
         if v not in seen: seen.add(v); assets[k] = v
     return assets

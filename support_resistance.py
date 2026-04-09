@@ -56,17 +56,17 @@ def _build_assets():
 
     market = {
         'Bitcoin    ': ('BTC-USD',   'crypto'),
-        'Gold       ': ('GC=F',      'commodity'),
-        'Brent유    ': ('BZ=F',      'commodity'),
-        'WTI원유    ': ('CL=F',      'commodity'),
-        '다우선물    ': ('YM=F',      'futures'),
-        'S&P선물    ': ('ES=F',      'futures'),
-        '나스닥선물  ': ('NQ=F',      'futures'),
-        'Russell    ': ('RTY=F',     'futures'),
+        '금(COMEX선물) ': ('GC=F',      'commodity'),
+        '브렌트유(ICE) ': ('BZ=F',      'commodity'),
+        'WTI원유(NYMEX)': ('CL=F',      'commodity'),
+        '다우지수(CME선물)': ('YM=F',      'futures'),
+        'S&P500(CME선물)': ('ES=F',      'futures'),
+        '나스닥100(CME선물)': ('NQ=F',      'futures'),
+        '러셀2000(CME선물)': ('RTY=F',     'futures'),
         '코스피      ': ('^KS11',    'krindex'),
         '달러/원    ': ('USDKRW=X', 'fx'),
-        '미국10년물  ': ('^TNX',     'index'),
-        'VIX        ': ('^VIX',     'index'),
+        '미국 10년물 국채': ('^TNX',     'index'),
+        'VIX(현물)   ': ('^VIX',     'index'),
     }
     for k, (v, at) in market.items():
         if v not in seen:

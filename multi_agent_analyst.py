@@ -40,13 +40,13 @@ FAST  = 'claude-haiku-4-5-20251001'
 SMART = 'claude-sonnet-4-6'
 
 PORTFOLIO = {
-    'Bitcoin':  'BTC-USD',  'Gold':    'GC=F',
+    'Bitcoin':  'BTC-USD',  '금(COMEX)': 'GC=F',
     'Google':   'GOOGL',    'Nasdaq':  'QQQM',
     'S&P500':   'SPY',      'Samsung': '005930.KS',
-    'Brent':    'BZ=F',     'WTI':     'CL=F',
-    '다우선물': 'YM=F',     'S&P선물': 'ES=F',
-    'NQ선물':   'NQ=F',     'Russell': 'RTY=F',
-    'KOSPI200': '^KS11',
+    '브렌트유(ICE)': 'BZ=F', 'WTI원유(NYMEX)': 'CL=F',
+    '다우지수(CME)': 'YM=F', 'S&P500(CME)': 'ES=F',
+    '나스닥100(CME)':'NQ=F', '러셀2000(CME)': 'RTY=F',
+    '코스피': '^KS11',
 }
 
 EXTREME_KEYWORDS = ['강력매도', '즉시청산', '매우높음', '극도공포', '극도탐욕', '강력매수']

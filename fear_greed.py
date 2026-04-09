@@ -147,13 +147,13 @@ def main():
     print(f"\n  [ 글로벌 선물 시세 ]")
     print(f"  {'─'*45}")
     futures = [
-        ('다우선물  ', 'YM=F'),
-        ('S&P선물  ', 'ES=F'),
-        ('나스닥선물', 'NQ=F'),
-        ('러셀2000 ', 'RTY=F'),
-        ('WTI원유  ', 'CL=F'),
-        ('달러/원   ', 'USDKRW=X'),
-        ('코스피   ', '^KS11'),
+        ('다우지수(CME)', 'YM=F'),
+        ('S&P500(CME)',  'ES=F'),
+        ('나스닥100(CME)', 'NQ=F'),
+        ('러셀2000(CME)', 'RTY=F'),
+        ('WTI원유(NYMEX)', 'CL=F'),
+        ('달러/원      ', 'USDKRW=X'),
+        ('코스피       ', '^KS11'),
     ]
     for fname, fticker in futures:
         fhist = get_hist(fticker, '5d')

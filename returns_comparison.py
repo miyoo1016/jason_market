@@ -53,17 +53,17 @@ def _build_assets():
     # 2. 기존 시장 지표 추가 (중복 제외)
     market = {
         'Bitcoin    ': 'BTC-USD',
-        'Brent유    ': 'BZ=F',
-        'WTI원유    ': 'CL=F',
-        '다우선물    ': 'YM=F',
-        'S&P선물    ': 'ES=F',
-        '나스닥선물  ': 'NQ=F',
-        'Russell    ': 'RTY=F',
+        'Brent유(ICE)': 'BZ=F',
+        'WTI원유(NYMEX)': 'CL=F',
+        '다우지수(CME선물)': 'YM=F',
+        'S&P500(CME선물)': 'ES=F',
+        '나스닥100(CME선물)': 'NQ=F',
+        '러셀2000(CME선물)': 'RTY=F',
         'S&P500 SPY ': 'SPY',
         '코스피      ': '^KS11',
         '달러/원    ': 'USDKRW=X',
-        '미국10년물  ': '^TNX',
-        'VIX        ': '^VIX',
+        '미국 10년물 국채': '^TNX',
+        'VIX(현물)   ': '^VIX',
     }
     for k, v in market.items():
         if v not in seen_tickers:

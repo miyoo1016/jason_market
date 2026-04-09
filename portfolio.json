@@ -7,35 +7,35 @@
       "avg_price": 251.5026,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": null,
+      "xlsx_price": 249.76,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": 1463.01
     },
     {
-      "name": "GOOGL",
+      "name": "Alphabet A",
       "ticker": "GOOGL",
       "qty": 100.0,
       "avg_price": 299.8944,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": null,
+      "xlsx_price": 311.81,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
-      "precision_cost_krw": 1447.99
+      "base_usdkrw": 1480.079956054688,
+      "precision_cost_krw": 1447.01
     }
   ],
   "와이프 키움일반계좌": [
     {
       "name": "삼성전자",
       "ticker": "005930.KS",
-      "qty": 190.0,
-      "avg_price": 208267.0,
+      "qty": 145.0,
+      "avg_price": 210083.0,
       "currency": "KRW",
       "asset_type": "국내일반(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 205500.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -47,9 +47,9 @@
       "avg_price": 22134.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 24580.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -61,9 +61,9 @@
       "avg_price": 23145.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     },
     {
@@ -73,9 +73,9 @@
       "avg_price": 24819.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 24580.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -87,9 +87,9 @@
       "avg_price": 22885.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -97,37 +97,13 @@
     {
       "name": "KODEX S&P500",
       "ticker": "379800.KS",
-      "qty": 2021.0,
+      "qty": 4043.0,
       "avg_price": 22968.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
-      "precision_cost_krw": null
-    },
-    {
-      "name": "KODEX 나스닥100",
-      "ticker": "379810.KS",
-      "qty": 926.0,
-      "avg_price": 24594.0,
-      "currency": "KRW",
-      "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
-      "is_cash": false,
-      "base_usdkrw": 1480.78,
-      "precision_cost_krw": null
-    },
-    {
-      "name": "KODEX 미국반도체",
-      "ticker": "390390.KS",
-      "qty": 572.0,
-      "avg_price": 40680.0,
-      "currency": "KRW",
-      "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
-      "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -139,9 +115,9 @@
       "avg_price": 21894.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 24580.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     },
     {
@@ -151,9 +127,9 @@
       "avg_price": 56386.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 57230.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -161,13 +137,13 @@
     {
       "name": "금현물(KRX)",
       "ticker": "GOLD_KRX",
-      "qty": 202.0,
-      "avg_price": 202610.0,
+      "qty": 192.0,
+      "avg_price": 201541.0,
       "currency": "KRW",
       "asset_type": "원자재(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 237180.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -176,7 +152,7 @@
       "name": "현금",
       "ticker": "CASH",
       "qty": 1,
-      "avg_price": 10000000.0,
+      "avg_price": 2257057.0,
       "currency": "KRW",
       "asset_type": "은행현금(원화)",
       "xlsx_price": null,
@@ -188,7 +164,7 @@
       "name": "현금",
       "ticker": "CASH",
       "qty": 1,
-      "avg_price": 34894598.0,
+      "avg_price": 52579920.0,
       "currency": "KRW",
       "asset_type": "은행현금(원화)",
       "xlsx_price": null,
@@ -205,9 +181,9 @@
       "avg_price": 250.4288,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": null,
+      "xlsx_price": 249.76,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": 1442.0
     }
   ],
@@ -219,9 +195,9 @@
       "avg_price": 22090.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 24580.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     },
     {
@@ -231,9 +207,9 @@
       "avg_price": 22511.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -245,9 +221,9 @@
       "avg_price": 23139.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     },
     {
@@ -257,9 +233,9 @@
       "avg_price": 24346.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 24580.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -267,37 +243,13 @@
     {
       "name": "KODEX S&P500",
       "ticker": "379800.KS",
-      "qty": 1918.0,
+      "qty": 3837.0,
       "avg_price": 22980.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 22740.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
-      "precision_cost_krw": null
-    },
-    {
-      "name": "KODEX 나스닥100",
-      "ticker": "379810.KS",
-      "qty": 880.0,
-      "avg_price": 24597.0,
-      "currency": "KRW",
-      "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
-      "is_cash": false,
-      "base_usdkrw": 1480.78,
-      "precision_cost_krw": null
-    },
-    {
-      "name": "KODEX 미국반도체",
-      "ticker": "390390.KS",
-      "qty": 540.0,
-      "avg_price": 40687.0,
-      "currency": "KRW",
-      "asset_type": "국내ETF(원화)",
-      "xlsx_price": null,
-      "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -305,13 +257,13 @@
     {
       "name": "금현물(KRX)",
       "ticker": "GOLD_KRX",
-      "qty": 146.0,
-      "avg_price": 203228.0,
+      "qty": 138.0,
+      "avg_price": 202070.0,
       "currency": "KRW",
       "asset_type": "원자재(원화)",
-      "xlsx_price": null,
+      "xlsx_price": 237180.0,
       "is_cash": false,
-      "base_usdkrw": 1480.78,
+      "base_usdkrw": 1480.079956054688,
       "precision_cost_krw": null
     }
   ],
@@ -320,7 +272,19 @@
       "name": "현금",
       "ticker": "CASH",
       "qty": 1,
-      "avg_price": 43400000.0,
+      "avg_price": 45000000.0,
+      "currency": "KRW",
+      "asset_type": "은행현금(원화)",
+      "xlsx_price": null,
+      "is_cash": true,
+      "base_usdkrw": null,
+      "precision_cost_krw": null
+    },
+    {
+      "name": "현금",
+      "ticker": "CASH",
+      "qty": 1,
+      "avg_price": 786041.0,
       "currency": "KRW",
       "asset_type": "은행현금(원화)",
       "xlsx_price": null,
