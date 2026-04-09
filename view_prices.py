@@ -85,43 +85,35 @@ def get_data(ticker):
                      and not ticker.startswith('^')
                      and ticker not in ('BTC-USD',))
 
-        # ── 현재가 ───────────────────────────────────────────
-        if is_kr:
-            # 한국 정규장: fast_info
-            curr = fi.get('last_price') or fi.get('lastPrice')
-        elif is_equity:
+        # ── 전일 종가 추출 (fast_info 공식 속성 우선) ──────────────
+        prev = getattr(fi, 'previous_close', None)
+        if not prev and hasattr(fi, 'get'):
+            prev = fi.get('previousClose') or fi.get('previous_close')
+            
+        if not prev:
+            hist = t.history(period='5d')
+            if len(hist) >= 2:
+                prev = float(hist['Close'].iloc[-2])
+            else:
+                return None
+
+        # ── 현재가 추출 ────────────────────────────────────────────
+        curr = None
+        if is_equity:
             # 미국 주식/ETF: 1분봉 prepost → 프리·애프터마켓 실시간
             try:
                 h1m  = t.history(period='1d', interval='1m', prepost=True)
-                curr = float(h1m['Close'].iloc[-1]) if not h1m.empty else None
+                if not h1m.empty:
+                    curr = float(h1m['Close'].iloc[-1])
             except Exception:
-                curr = None
-            if not curr:
-                curr = fi.get('last_price') or fi.get('lastPrice')
-        else:
-            # 선물/FX/지수/크립토: fast_info 24H 실시간
-            curr = fi.get('last_price') or fi.get('lastPrice')
-
-        curr = float(curr) if curr else None
+                pass
+                
         if not curr:
-            return None
+            curr = getattr(fi, 'last_price', None)
+            if not curr and hasattr(fi, 'get'):
+                curr = fi.get('lastPrice') or fi.get('last_price')
 
-        # ── 전일 종가 (히스토리 기반 정밀 계산) ──────────────────
-        hist = t.history(period='5d')
-        if not hist.empty:
-            last_close = float(hist['Close'].iloc[-1])
-            # 현재가(curr)가 히스토리 마지막 종가와 거의 같으면 (장 마감 상태면)
-            # 기준은 그 전날 종가(iloc[-2])로 잡아야 함
-            if abs(curr - last_close) / last_close < 0.0001:
-                prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else last_close
-            else:
-                # 현재가가 장중에 변동 중이면, 히스토리 마지막 종가가 실제 '어제 종가'
-                prev = last_close
-        else:
-            prev_fi = fi.get('previous_close') or fi.get('previousClose')
-            prev    = float(prev_fi) if prev_fi else None
-
-        if not prev:
+        if not curr:
             return None
 
         pct = (curr - prev) / prev * 100

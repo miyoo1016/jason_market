@@ -28,47 +28,36 @@ class DataCollector:
                              and not ticker.startswith('^')
                              and ticker not in ('BTC-USD',))
 
-                # 현재가
-                if is_kr:
-                    curr = fi.get('last_price') or fi.get('lastPrice')
-                elif is_equity:
-                    try:
-                        h1m  = t.history(period='2d', interval='1m', prepost=True)
-                        curr = float(h1m['Close'].iloc[-1]) if not h1m.empty else None
-                    except Exception:
-                        curr = None
-                    if not curr:
-                        curr = fi.get('last_price') or fi.get('lastPrice')
-                else:
-                    # 선물/FX/지수/크립토: fast_info 24H 실시간
-                    curr = fi.get('last_price') or fi.get('lastPrice')
+                # ── 전일 종가 추출 (fast_info 공식 속성 우선) ──────────────
+                prev = getattr(fi, 'previous_close', None)
+                if not prev and hasattr(fi, 'get'):
+                    prev = fi.get('previousClose') or fi.get('previous_close')
+                    
+                if not prev:
+                    hist = t.history(period='5d')
+                    if len(hist) >= 2:
+                        prev = float(hist['Close'].iloc[-2])
+                    else:
+                        logger.warning(f"⚠ {name}: 전일종가 없음")
+                        continue
 
-                curr = float(curr) if curr else None
+                # ── 현재가 추출 ────────────────────────────────────────────
+                curr = None
+                if is_equity:
+                    try:
+                        h1m  = t.history(period='1d', interval='1m', prepost=True)
+                        if not h1m.empty:
+                            curr = float(h1m['Close'].iloc[-1])
+                    except Exception:
+                        pass
+                        
+                if not curr:
+                    curr = getattr(fi, 'last_price', None)
+                    if not curr and hasattr(fi, 'get'):
+                        curr = fi.get('lastPrice') or fi.get('last_price')
+
                 if not curr:
                     logger.warning(f"⚠ {name}: 현재가 없음")
-                    continue
-
-                # 전일 종가
-                if is_kr or is_equity:
-                    prev_fi = fi.get('previous_close') or fi.get('previousClose')
-                    prev    = float(prev_fi) if prev_fi else None
-                    if not prev:
-                        hist = t.history(period='5d')
-                        prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else None
-                else:
-                    hist = t.history(period='5d')
-                    if hist.empty or len(hist) < 2:
-                        prev_fi = fi.get('previous_close') or fi.get('previousClose')
-                        prev    = float(prev_fi) if prev_fi else None
-                    else:
-                        daily_last = float(hist['Close'].iloc[-1])
-                        if abs(curr - daily_last) / daily_last < 0.001:
-                            prev = float(hist['Close'].iloc[-2])
-                        else:
-                            prev = daily_last
-
-                if not prev:
-                    logger.warning(f"⚠ {name}: 전일종가 없음")
                     continue
 
                 pct = (curr - prev) / prev * 100

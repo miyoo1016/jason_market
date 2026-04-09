@@ -180,12 +180,19 @@ def fetch_all_prices(holdings, usdkrw):
             try:
                 tk = yf.Ticker(t)
                 fi = tk.fast_info
-                curr = fi.get('last_price') or fi.get('lastPrice')
-                prev = fi.get('previous_close') or fi.get('previousClose')
-                if not curr:
+                curr = getattr(fi, 'last_price', None)
+                if not curr and hasattr(fi, 'get'):
+                    curr = fi.get('lastPrice') or fi.get('last_price')
+
+                prev = getattr(fi, 'previous_close', None)
+                if not prev and hasattr(fi, 'get'):
+                    prev = fi.get('previousClose') or fi.get('previous_close')
+                    
+                if not prev:
                     h = tk.history(period='5d')
                     if len(h) >= 2:
-                        curr, prev = h['Close'].iloc[-1], h['Close'].iloc[-2]
+                        prev = float(h['Close'].iloc[-2])
+                        if not curr: curr = float(h['Close'].iloc[-1])
                 _update_cache(t, float(curr) if curr else None, float(prev) if prev else None)
             except Exception: pass
 
