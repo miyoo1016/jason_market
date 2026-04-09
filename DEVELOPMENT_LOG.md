@@ -8,7 +8,7 @@ Currently, the system is a high-precision, real-time portfolio tracker that inte
 ## ✅ Key Achievements (Context for switching machines)
 
 ### 1. High-Precision Cost Tracking (Column L)
-- **Logic**: The script now uses **Column L (매수원가(₩))** in the Excel sheet for accurate cost calculation.
+- **Logic**: The script now uses **Column L (매입환율)** in the Excel sheet for accurate cost calculation.
 - **Intelligent Recognition**: 
     - If a value in Column L is `< 10,000`, it is treated as a **Purchase FX Rate** (e.g., 1,463.01). The script multiplies this by `Qty * Avg Price` to get the cost.
     - If a value is `>= 10,000`, it is treated as the **Total KRW Cost** (e.g., 55,000,000).

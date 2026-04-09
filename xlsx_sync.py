@@ -113,7 +113,7 @@ def read_xlsx():
         
         # L열 9행(Table Header) 제목 및 스타일 강제 적용
         l_header = ws.cell(row=9, column=12)
-        l_header.value = "매수원가(₩)"
+        l_header.value = "매입환율"
         l_header.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
         l_header.fill = openpyxl.styles.PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
         l_header.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
@@ -135,10 +135,9 @@ def read_xlsx():
                 target_cell.alignment = copy(source_cell.alignment)
         
         wb.save(XLSX_PATH)
-        print("  ✅ 엑셀 L열(매수원가)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
+        print("  ✅ 엑셀 L열(매입환율)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
     except Exception as e:
         print(f"  ⚠️ 엑셀 스타일 조정 중 오류: {e}")
-        pass
 
     # ── [NEW] 기준 환율(Base FX) 읽기: 14행 O열 (index 13, 14) ────────
     try:
@@ -188,7 +187,7 @@ def read_xlsx():
         avg_raw  = row[5]
         xlsx_price_raw = row[6]   # G열 = 현재가 (VLOOKUP 자동값)
         try:
-            # [NEW] L열(index 11)에서 정밀 원화 매수 원가 추출 (글자 "원"이나 쉼표가 섞여있어도 처리)
+            # [NEW] L열(index 11)에서 정밀 매입환율(또는 원화 원가) 추출
             cost_krw_raw = row[11] if len(row) > 11 else None
             if pd.notna(cost_krw_raw):
                 val_str = str(cost_krw_raw).replace(',', '').replace('원', '').strip()
