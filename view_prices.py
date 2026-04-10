@@ -109,7 +109,7 @@ def get_data(ticker, name=""):
         scale = 1.0
         # 'US'로 시작하는 지수 표시용 행만 스케일링 수행
         if name.startswith('US') and ticker in ('DIA', 'SPY', 'QQQM', 'IWM'):
-            indices = {'DIA':'^DJI', 'SPY':'^GSPC', 'QQQM':'^IXIC', 'IWM':'^RUT'}
+            indices = {'DIA':'^DJI', 'SPY':'^GSPC', 'QQQM':'^NDX', 'IWM':'^RUT'}
             idx_ticker = indices.get(ticker)
             if idx_ticker:
                 try:
