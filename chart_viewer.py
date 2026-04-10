@@ -16,24 +16,46 @@ def alert_line(text):
             return ALERT + text + RESET
     return text
 
-ASSETS = [
-    ('Nasdaq QQQM', 'QQQM'),
-    ('S&P500 SPY',  'SPY'),
-    ('Google',      'GOOGL'),
-    ('코스피',      '^KS11'),
-    ('삼성전자',    '005930.KS'),
-    ('Bitcoin',     'BTC-USD'),
-    ('달러/원',     'USDKRW=X'),
-    ('금(COMEX선물)', 'GC=F'),
+# ── 포트폴리오 기반 ASSETS 동적 빌드 ─────────────────────────────
+_PROXY_MAP = {
+    'KODEX 나스닥100':  'QQQ',
+    'KODEX S&P500':    'SPY',
+    'KODEX 미국반도체': 'SOXX',
+}
+_MARKET = [
+    ('Bitcoin',          'BTC-USD'),
+    ('달러/원',          'USDKRW=X'),
+    ('금(COMEX선물)',    'GC=F'),
     ('미국 10년물 국채', '^TNX'),
-    ('브렌트유(ICE)', 'BZ=F'),
-    ('WTI원유(NYMEX)', 'CL=F'),
+    ('브렌트유(ICE)',    'BZ=F'),
+    ('WTI원유(NYMEX)',   'CL=F'),
     ('다우지수(CME선물)', 'YM=F'),
-    ('S&P500(CME선물)', 'ES=F'),
+    ('S&P500(CME선물)',  'ES=F'),
     ('나스닥100(CME선물)', 'NQ=F'),
     ('러셀2000(CME선물)', 'RTY=F'),
-    ('VIX(현물)',    '^VIX'),
+    ('코스피',           '^KS11'),
+    ('VIX(현물)',        '^VIX'),
 ]
+
+def _build_assets():
+    assets, seen = [], set()
+    try:
+        from xlsx_sync import load_portfolio
+        for h in load_portfolio():
+            if h.get('is_cash') or h.get('ticker') == 'CASH': continue
+            t = h['ticker']
+            n = h['name']
+            if t == 'XLSX_PRICE': t = _PROXY_MAP.get(n, 'SPY')
+            elif t == 'GOLD_KRX': t = 'GC=F'
+            if t and t not in seen:
+                seen.add(t); assets.append((n, t))
+    except Exception: pass
+    for n, t in _MARKET:
+        if t not in seen:
+            seen.add(t); assets.append((n, t))
+    return assets
+
+ASSETS = _build_assets()
 
 # (interval_key, 표시명, yf_interval, period)
 # '1y' 키는 월봉 데이터를 연봉으로 집계, 'max' 키는 3개월봉 최대 범위

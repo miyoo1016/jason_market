@@ -20,21 +20,52 @@ AMBER = '\033[38;5;214m'
 ALERT = '\033[38;5;203m'
 RESET = '\033[0m'
 
-ASSETS = {
-    'Bitcoin'   : ('BTC-USD',   'crypto'),
-    'Gold'      : ('GC=F',      'commodity'),
-    'Brent유'   : ('BZ=F',      'commodity'),
-    'WTI원유'   : ('CL=F',      'commodity'),
-    'S&P선물'   : ('ES=F',      'futures'),
-    '나스닥선물' : ('NQ=F',      'futures'),
-    'Google'    : ('GOOGL',     'stock'),
-    'QQQM'      : ('QQQM',      'etf'),
-    'SPY'       : ('SPY',       'etf'),
-    '달러/원'   : ('USDKRW=X',  'fx'),
-    '미국10년물' : ('^TNX',      'index'),
-    'VIX'       : ('^VIX',      'index'),
-    '코스피'    : ('^KS11',     'krindex'),
+# ── 포트폴리오 기반 ASSETS 동적 빌드 ─────────────────────────────
+PROXY_MAP = {
+    'KODEX 나스닥100':  'QQQ',
+    'KODEX S&P500':    'SPY',
+    'KODEX 미국반도체': 'SOXX',
 }
+
+def _atype(ticker):
+    if ticker == 'BTC-USD':                         return 'crypto'
+    if ticker in ('GC=F', 'BZ=F', 'CL=F'):         return 'commodity'
+    if ticker in ('YM=F', 'ES=F', 'NQ=F', 'RTY=F'): return 'futures'
+    if ticker == 'USDKRW=X':                        return 'fx'
+    if ticker in ('^KS11',):                        return 'krindex'
+    if ticker.startswith('^'):                      return 'index'
+    if ticker.endswith('.KS'):                      return 'krstock'
+    return 'etf'
+
+def _build_assets():
+    assets, seen = {}, set()
+    try:
+        for h in load_portfolio():
+            if h.get('is_cash') or h.get('ticker') == 'CASH': continue
+            t = h['ticker']
+            n = h['name']
+            if t == 'XLSX_PRICE': t = PROXY_MAP.get(n, 'SPY')
+            elif t == 'GOLD_KRX': t = 'GC=F'
+            if t and t not in seen:
+                seen.add(t); assets[n] = (t, _atype(t))
+    except Exception: pass
+    # 시장 지표 추가 (포트폴리오에 없는 것만)
+    for n, (t, at) in {
+        'Bitcoin'   : ('BTC-USD',  'crypto'),
+        'Gold'      : ('GC=F',     'commodity'),
+        'WTI원유'   : ('CL=F',     'commodity'),
+        'S&P선물'   : ('ES=F',     'futures'),
+        '나스닥선물' : ('NQ=F',     'futures'),
+        '달러/원'   : ('USDKRW=X', 'fx'),
+        '미국10년물' : ('^TNX',     'index'),
+        'VIX'       : ('^VIX',     'index'),
+        '코스피'    : ('^KS11',    'krindex'),
+    }.items():
+        if t not in seen:
+            seen.add(t); assets[n] = (t, at)
+    return assets
+
+ASSETS = _build_assets()
 
 MACRO_TICKERS = {
     'VIX': '^VIX', 'DXY': 'DX-Y.NYB',
@@ -310,11 +341,12 @@ def run_ai_analysis(results, macro, portfolio_text):
 def fmt_price(r):
     c = r['curr']
     t = r['type']
-    if t == 'crypto':   return f"${c:,.0f}"
-    if t == 'commodity': return f"${c:,.1f}"
-    if t == 'futures':  return f"{c:,.1f}"
-    if t == 'fx':       return f"₩{c:,.1f}"
-    if t in ('index','krindex'): return f"{c:,.2f}"
+    if t == 'crypto':              return f"${c:,.0f}"
+    if t == 'commodity':           return f"${c:,.1f}"
+    if t == 'futures':             return f"{c:,.1f}"
+    if t == 'fx':                  return f"₩{c:,.1f}"
+    if t in ('index', 'krindex'):  return f"{c:,.2f}"
+    if t == 'krstock':             return f"₩{c:,.0f}"
     return f"${c:,.2f}"
 
 def fmt_pct(v):

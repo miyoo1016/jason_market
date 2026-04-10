@@ -28,29 +28,47 @@ PROXY_MAP = {
 }
 
 def _build_assets():
-    """포트폴리오 보유 종목 + 시장 지표 합쳐서 ASSETS 딕셔너리 반환"""
+    """포트폴리오 보유 종목 + 시장 지표 → ASSETS dict, AVG_PRICE dict"""
     assets = {}
-    seen_tickers = set()
+    avg_prices = {}   # ticker → avg_price (KRW 환산) — 포트폴리오 종목만
+    seen = set()
 
-    # 1. 포트폴리오 보유 종목 먼저 추가
+    # 1. 포트폴리오 보유 종목 (동일 종목 합산 후 가중 평단가)
     try:
-        holdings = _load_pf()
-        for h in holdings:
-            if h.get('is_cash') or h.get('ticker') == 'CASH':
-                continue
+        qty_sum  = {}  # ticker → 총수량
+        cost_sum = {}  # ticker → 총원가 (KRW)
+        usdkrw_base = {}  # ticker → base_usdkrw
+        for h in _load_pf():
+            if h.get('is_cash') or h.get('ticker') == 'CASH': continue
             ticker = h['ticker']
-            name = h['name']
-            if ticker == 'XLSX_PRICE':
-                ticker = PROXY_MAP.get(name, 'SPY')
-            elif ticker == 'GOLD_KRX':
-                ticker = 'GC=F'
-            if ticker and ticker not in seen_tickers:
-                seen_tickers.add(ticker)
+            name   = h['name']
+            if ticker == 'XLSX_PRICE': ticker = PROXY_MAP.get(name, 'SPY')
+            elif ticker == 'GOLD_KRX': ticker = 'GC=F'
+            if not ticker: continue
+
+            qty = float(h.get('qty', 0) or 0)
+            avg = float(h.get('avg_price', 0) or 0)
+            cur = h.get('currency', 'KRW')
+            base_fx = float(h.get('base_usdkrw', 1350) or 1350)
+
+            cost_krw = avg * qty * (base_fx if cur == 'USD' else 1)
+
+            if ticker not in seen:
+                seen.add(ticker)
                 assets[f'{name:<10}'] = ticker
+
+            qty_sum[ticker]  = qty_sum.get(ticker, 0)  + qty
+            cost_sum[ticker] = cost_sum.get(ticker, 0) + cost_krw
+            usdkrw_base[ticker] = base_fx
+
+        # 가중 평단가 계산 (KRW 환산)
+        for tk in qty_sum:
+            if qty_sum[tk] > 0:
+                avg_prices[tk] = cost_sum[tk] / qty_sum[tk]  # 주당 원가(KRW)
     except Exception:
         pass
 
-    # 2. 기존 시장 지표 추가 (중복 제외)
+    # 2. 시장 지표 추가 (중복 제외)
     market = {
         'Bitcoin    ': 'BTC-USD',
         'Brent유(ICE)': 'BZ=F',
@@ -66,12 +84,35 @@ def _build_assets():
         'VIX(현물)   ': '^VIX',
     }
     for k, v in market.items():
-        if v not in seen_tickers:
-            seen_tickers.add(v)
+        if v not in seen:
+            seen.add(v)
             assets[k] = v
-    return assets
+    return assets, avg_prices
 
-ASSETS = _build_assets()
+ASSETS, AVG_PRICES = _build_assets()
+
+
+def get_since_avg(ticker, avg_price_krw):
+    """평단가 대비 현재 수익률 (KRW 환산 기준)"""
+    try:
+        hist = yf.Ticker(ticker).history(period='5d')
+        if hist.empty: return None
+        curr = float(hist['Close'].dropna().iloc[-1])
+        is_krw = ticker.endswith('.KS') or ticker in ('^KS11', 'USDKRW=X', '^TNX', '^VIX')
+        if not is_krw:
+            # USD 자산: 현재가 × 현재 환율 → KRW 환산
+            try:
+                fx = yf.Ticker('USDKRW=X').history(period='2d')
+                usdkrw = float(fx['Close'].iloc[-1]) if not fx.empty else 1450.0
+            except Exception:
+                usdkrw = 1450.0
+            curr_krw = curr * usdkrw
+        else:
+            curr_krw = curr
+        if avg_price_krw <= 0: return None
+        return (curr_krw - avg_price_krw) / avg_price_krw * 100
+    except Exception:
+        return None
 
 PERIODS = [
     ('1주',  '5d'),
@@ -113,35 +154,43 @@ def rank_label(idx, total):
         return "🥉"
     return "  "
 
-def generate_html(all_returns, timestamp):
+def _ret_cell_html(ret, highlight=False):
+    if ret is None:
+        return '<td style="color:#757575;">–</td>'
+    color = "#26a69a" if ret >= 0 else "#ef5350"
+    bold  = "font-weight:800;" if highlight else "font-weight:600;"
+    border = "border-left:2px solid #1a5fa8;" if highlight else ""
+    return f'<td style="color:{color};{bold}{border}">{ret:+.1f}%</td>'
+
+def generate_html(all_returns, since_avg, timestamp):
+    """
+    all_returns: {name: [ret_1w, ret_1m, ...]}
+    since_avg:   {name: float|None}  — 평단가 기준 수익률 (포트폴리오 종목만)
+    """
     period_labels = [p[0] for p in PERIODS]
+    has_since = any(v is not None for v in since_avg.values())
 
     # Build table rows
     table_rows = ""
     for name, rets in all_returns.items():
-        # Compute heatmap background based on average of non-None values
         valid = [r for r in rets if r is not None]
-        avg = sum(valid) / len(valid) if valid else 0
-        if avg > 10:
-            row_bg = "rgba(38,166,154,0.18)"
-        elif avg > 3:
-            row_bg = "rgba(38,166,154,0.10)"
-        elif avg < -10:
-            row_bg = "rgba(239,83,80,0.18)"
-        elif avg < -3:
-            row_bg = "rgba(239,83,80,0.10)"
-        else:
-            row_bg = "transparent"
+        avg   = sum(valid) / len(valid) if valid else 0
+        if avg > 10:   row_bg = "rgba(38,166,154,0.18)"
+        elif avg > 3:  row_bg = "rgba(38,166,154,0.10)"
+        elif avg < -10:row_bg = "rgba(239,83,80,0.18)"
+        elif avg < -3: row_bg = "rgba(239,83,80,0.10)"
+        else:           row_bg = "transparent"
 
-        cells = ""
-        for ret in rets:
-            if ret is None:
-                cells += f'<td style="color:#757575;">N/A</td>'
-            elif ret > 0:
-                cells += f'<td style="color:#26a69a;font-weight:600;">{ret:+.1f}%</td>'
-            else:
-                cells += f'<td style="color:#ef5350;font-weight:600;">{ret:+.1f}%</td>'
-        table_rows += f'<tr style="background:{row_bg};"><td style="text-align:left;padding-left:10px;">{name.strip()}</td>{cells}</tr>\n'
+        cells = "".join(_ret_cell_html(r) for r in rets)
+
+        # 매입 이후 수익률 셀 (포트폴리오 종목만)
+        sa = since_avg.get(name)
+        if has_since:
+            cells += _ret_cell_html(sa, highlight=True) if sa is not None else '<td style="color:#555;">–</td>'
+
+        table_rows += (f'<tr style="background:{row_bg};">'
+                       f'<td style="text-align:left;padding-left:10px;">{name.strip()}</td>'
+                       f'{cells}</tr>\n')
 
     # Build rankings section
     rankings_html = ""
@@ -155,9 +204,12 @@ def generate_html(all_returns, timestamp):
         for i, (n, v) in enumerate(top3):
             color = "#26a69a" if v >= 0 else "#ef5350"
             items += f'<span style="margin-right:18px;">{medals[i]} <b>{n}</b> <span style="color:{color};">{v:+.1f}%</span></span>'
-        rankings_html += f'<div style="margin-bottom:10px;"><span style="color:#90caf9;font-weight:700;min-width:40px;display:inline-block;">{label}</span> {items}</div>\n'
+        rankings_html += (f'<div style="margin-bottom:10px;">'
+                          f'<span style="color:#90caf9;font-weight:700;min-width:40px;display:inline-block;">{label}</span>'
+                          f' {items}</div>\n')
 
-    header_cells = "".join(f'<th>{lbl}</th>' for lbl in period_labels)
+    since_th = '<th style="color:#ffd54f;border-left:2px solid #1a5fa8;">매입후</th>' if has_since else ''
+    header_cells = "".join(f'<th>{lbl}</th>' for lbl in period_labels) + since_th
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -167,7 +219,7 @@ def generate_html(all_returns, timestamp):
 <title>Jason 수익률 비교</title>
 <style>
   body {{ background:#1a1a2e; color:#e0e0e0; font-family:'Segoe UI',sans-serif; margin:0; padding:20px 30px; }}
-  .page {{ max-width:960px; margin:0 auto; }}
+  .page {{ max-width:1100px; margin:0 auto; }}
   h1 {{ color:#90caf9; font-size:1.6em; margin-bottom:4px; }}
   .ts {{ color:#757575; font-size:0.85em; margin-bottom:24px; }}
   table {{ width:100%; border-collapse:collapse; background:#16213e; border-radius:8px; overflow:hidden; margin-bottom:32px; }}
@@ -212,21 +264,28 @@ function copyReport(){{var el=document.querySelector('.page')||document.body;nav
 
 
 def main():
-    print(f"\n{'━'*72}")
+    print(f"\n{'━'*78}")
     print(f"  Jason 수익률 비교   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'━'*72}")
+    print(f"{'━'*78}")
     print("  데이터 수집 중 (약 10-20초)...\n")
 
     # 헤더
     period_labels = [p[0] for p in PERIODS]
-    header = f"  {'자산':<14}"
-    for label in period_labels:
-        header += f"  {label:>8}"
+    header = f"  {'자산':<14}" + "".join(f"  {lbl:>8}" for lbl in period_labels) + "  {'매입후':>8}"
     print(header)
-    print(f"  {'─'*68}")
+    print(f"  {'─'*78}")
 
-    # 수익률 수집
+    # 수익률 수집 + 매입후 수익률
     all_returns = {}
+    since_avg   = {}   # name → float|None
+
+    # 현재 환율 1회만 조회
+    try:
+        _fx = yf.Ticker('USDKRW=X').history(period='2d')
+        usdkrw_now = float(_fx['Close'].iloc[-1]) if not _fx.empty else 1450.0
+    except Exception:
+        usdkrw_now = 1450.0
+
     for name, ticker in ASSETS.items():
         row_returns = []
         for label, period in PERIODS:
@@ -234,33 +293,60 @@ def main():
             row_returns.append(ret)
         all_returns[name] = row_returns
 
-        # 출력
+        # 매입 이후 수익률 (평단가 기반, 포트폴리오 종목만)
+        avg_krw = AVG_PRICES.get(ticker)
+        if avg_krw and avg_krw > 0:
+            try:
+                hist = yf.Ticker(ticker).history(period='2d')
+                if not hist.empty:
+                    curr = float(hist['Close'].dropna().iloc[-1])
+                    is_krw = ticker.endswith('.KS') or ticker in ('^KS11', 'USDKRW=X')
+                    curr_krw = curr if is_krw else curr * usdkrw_now
+                    since_ret = (curr_krw - avg_krw) / avg_krw * 100
+                    since_avg[name] = since_ret
+                else:
+                    since_avg[name] = None
+            except Exception:
+                since_avg[name] = None
+        else:
+            since_avg[name] = None
+
+        # 터미널 출력
         line = f"  {name}"
         for ret in row_returns:
             line += f"  {fmt_ret(ret)}"
+        sa = since_avg.get(name)
+        line += f"  {fmt_ret(sa):>8}" if sa is not None else f"  {'–':>8}"
         print(line)
 
-    print(f"  {'─'*68}")
+    print(f"  {'─'*78}")
 
     # 기간별 순위 (TOP 3)
     print(f"\n  기간별 수익률 순위")
-    print(f"  {'─'*50}")
+    print(f"  {'─'*54}")
     for pi, (label, period) in enumerate(PERIODS):
         rets = [(name.strip(), all_returns[name][pi])
                 for name in ASSETS if all_returns[name][pi] is not None]
         rets.sort(key=lambda x: x[1], reverse=True)
         top3 = rets[:3]
-
         top_str = '  '.join([f"{rank_label(i, len(rets))}{n}({v:+.1f}%)"
                               for i, (n, v) in enumerate(top3)])
         print(f"  {label:>4}: {top_str}")
 
-    print(f"\n  ※ YTD = 올해 1월 1일 기준")
+    # 매입 이후 순위
+    pf_rets = [(n.strip(), v) for n, v in since_avg.items() if v is not None]
+    if pf_rets:
+        pf_rets.sort(key=lambda x: x[1], reverse=True)
+        top_str = '  '.join([f"{rank_label(i,len(pf_rets))}{n}({v:+.1f}%)"
+                              for i, (n, v) in enumerate(pf_rets[:3])])
+        print(f"  {'매입후':>4}: {top_str}")
+
+    print(f"\n  ※ YTD = 올해 1월 1일 기준  ※ 매입후 = 평단가(KRW환산) 기준 수익률")
     print(f"  ※ 야후 파이낸스 기준 (15분 지연)\n")
 
     # HTML 저장 및 브라우저 열기
     timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    html_content = generate_html(all_returns, timestamp_str)
+    html_content  = generate_html(all_returns, since_avg, timestamp_str)
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'returns_comparison.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
