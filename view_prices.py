@@ -31,10 +31,10 @@ ASSETS = [
     ('미국 10년물 국채',  '^TNX'),
     ('브렌트유 (Brent)', 'BZ=F'),
     ('WTI원유 (Crude)',  'CL=F'),
-    ('US30 (다우존스)',  'DIA'),
-    ('US500 (S&P500)',   'SPY'),
-    ('USTECH (나스닥)',  'QQQM'),
-    ('US2000 (러셀)',    'IWM'),
+    ('US30 (다우존스)',  'YM=F'),
+    ('US500 (S&P500)',   'ES=F'),
+    ('USTECH (나스닥)',  'NQ=F'),
+    ('US2000 (러셀)',    'RTY=F'),
     ('VIX (공포지수)',   '^VIX'),
 ]
 
@@ -73,7 +73,8 @@ def get_data(ticker, name=""):
         open_val = getattr(fi, 'open', None)
         
         # 2. 글로벌 자산 00:00 UTC 시가 찾기
-        is_global = ticker in ('GC=F', 'CL=F', 'BZ=F', 'USDKRW=X', 'BTC-USD', 'DIA', 'SPY', 'QQQM', 'IWM', '^VIX', '^TNX')
+        is_global = ticker in ('GC=F', 'CL=F', 'BZ=F', 'YM=F', 'ES=F', 'NQ=F', 'RTY=F',
+                                'USDKRW=X', 'BTC-USD', '^VIX', '^TNX')
         if is_global:
             try:
                 from datetime import timezone
@@ -92,7 +93,8 @@ def get_data(ticker, name=""):
             if len(hist) >= 2: prev = float(hist['Close'].iloc[-2])
 
         # ── 현재가 추출 (프리/애프터마켓 포함) ─────────────────────
-        is_equity = ticker in ('DIA', 'SPY', 'QQQM', 'IWM', 'GOOGL') or ticker.endswith('.KS')
+        is_equity = ticker in ('GOOGL',) or ticker.endswith('.KS') or (
+            ticker in ('QQQM', 'SPY') and not name.startswith('US'))
         curr = None
         if is_equity:
             try:
@@ -104,23 +106,6 @@ def get_data(ticker, name=""):
             curr = getattr(fi, 'last_price', None)
 
         if not curr or not prev: return None
-
-        # ── 인베스팅닷컴 스타일 보정 (Scaling & Logic) ──────────────
-        scale = 1.0
-        # 'US'로 시작하는 지수 표시용 행만 스케일링 수행
-        if name.startswith('US') and ticker in ('DIA', 'SPY', 'QQQM', 'IWM'):
-            indices = {'DIA':'^DJI', 'SPY':'^GSPC', 'QQQM':'^NDX', 'IWM':'^RUT'}
-            idx_ticker = indices.get(ticker)
-            if idx_ticker:
-                try:
-                    idx_prev = yf.Ticker(idx_ticker).fast_info.previous_close
-                    if idx_prev and prev:
-                        scale = idx_prev / prev
-                except: pass
-
-        curr *= scale
-        prev *= scale
-        if open_val: open_val *= scale
 
         if open_val:
             pct = (curr - open_val) / open_val * 100
@@ -134,8 +119,10 @@ def get_data(ticker, name=""):
 def fmt_price(price, ticker):
     if ticker == 'BTC-USD':
         return f"${price:>12,.0f}"
-    elif ticker in ('GC=F', 'BZ=F', 'CL=F', 'DIA', 'SPY', 'QQQM', 'IWM'):
-        # 인베스팅 지수 및 원자재 소수점 1자리
+    elif ticker in ('GC=F', 'BZ=F', 'CL=F'):
+        return f"{price:>12,.1f}"
+    elif ticker in ('YM=F', 'ES=F', 'NQ=F', 'RTY=F'):
+        # CME 선물 — 인베스팅닷컴과 동일 포맷
         return f"{price:>12,.1f}"
     elif ticker == 'USDKRW=X':
         return f"₩{price:>12,.1f}"
