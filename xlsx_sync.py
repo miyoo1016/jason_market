@@ -1,26 +1,61 @@
 #!/usr/bin/env python3
-"""xlsx_sync.py — 구글드라이브 자산계산기.xlsx → portfolio.json 자동 동기화
-                 + 실시간 시세 자동 업데이트 (G열)
+"""xlsx_sync.py — 구글시트 직접 동기화 (gspread) + xlsx fallback
+                 + 실시간 시세 자동 업데이트
 
 단독 실행:  python3 xlsx_sync.py
 다른 스크립트에서 호출: from xlsx_sync import load_portfolio
+
+데이터 우선순위:
+  1. gspread (구글시트 API 직접 읽기)  ← 구글시트 수정하면 바로 반영
+  2. xlsx 로컬 파일 (Downloads / GDrive)
+  3. portfolio.json 캐시
 """
 
 import os, json, re, warnings, threading, platform
 warnings.filterwarnings('ignore')
 
 _sys = platform.system()
-if _sys == "Windows":
-    XLSX_PATH = r"G:\내 드라이브\PF\자산 계산기(클로드).xlsx"
-elif _sys == "Darwin":  # macOS
-    XLSX_PATH = os.path.expanduser(
-        "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com"
-        "/내 드라이브/PF/자산 계산기(클로드).xlsx"
+
+def _resolve_xlsx_path():
+    """macOS: 구글드라이브 가상파일 → Downloads 최신 파일 → (원본) 순서로 탐색"""
+    if _sys == "Windows":
+        return r"G:\내 드라이브\PF\자산 계산기(클로드).xlsx"
+    if _sys != "Darwin":
+        return ""
+
+    gdrive_base = os.path.expanduser(
+        "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com/내 드라이브/PF"
     )
-else:  # Android(Termux) / Linux — Google Drive 없음, portfolio.json 직접 사용
-    XLSX_PATH = ""
+    # 1순위: 구글드라이브 동기화 파일 (스트리밍 모드에서 항상 있는 건 아님)
+    p1 = os.path.join(gdrive_base, "자산계산기(클로드).xlsx")
+    if os.path.exists(p1):
+        return p1
+
+    # 2순위: Downloads 폴더 — '자산' 포함 .xlsx 중 유효한(5KB↑) 가장 최신 파일
+    dl = os.path.expanduser("~/Downloads")
+    candidates = []
+    try:
+        for f in os.listdir(dl):
+            if "자산" in f and f.endswith(".xlsx") and not f.endswith(".tmp"):
+                full = os.path.join(dl, f)
+                if os.path.getsize(full) >= 5000:   # 손상 파일(수백B) 제외
+                    candidates.append((os.path.getmtime(full), full))
+    except Exception:
+        pass
+    if candidates:
+        return sorted(candidates, reverse=True)[0][1]  # 가장 최신 유효 파일
+
+    # 3순위: (원본) 백업 파일
+    p3 = os.path.join(gdrive_base, "(원본) 자산 계산기(클로드).xlsx")
+    if os.path.exists(p3):
+        return p3
+
+    return p1  # 경로 반환 (없으면 나중에 파일 없음 처리)
+
+XLSX_PATH = _resolve_xlsx_path()
 PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
-SHEET_NAME = "📊 자산 계산기"
+SHEET_NAME     = "📊 자산 계산기"
+SPREADSHEET_ID = "1VJ9e8ZM7wuKDGEyt4LoEGFfsTTztOlpI_tZXWLyag9A"
 
 # 종목명 → Yahoo Finance 티커 매핑
 # GOLD_KRX  : 네이버 금융 KRX 금현물 시세 직접 조회 (GC=F 계산 아님)
@@ -147,18 +182,35 @@ def read_xlsx():
     except Exception:
         base_usdkrw = 1350.0
 
+    current_owner = None  # 현재 섹션 소유자 (와이프 / Jason)
+
     for _, row in df.iterrows():
         asset_type = str(row[1]).strip() if pd.notna(row[1]) else ""
         name       = str(row[2]).strip() if pd.notna(row[2]) else ""
         account    = str(row[3]).strip() if pd.notna(row[3]) else ""
 
-        if not (asset_type and account):
+        # ── 섹션 헤더 감지 (현금 계좌명 자동 할당용) ─────────────
+        if '👩' in asset_type or '와이프 자산' in asset_type:
+            current_owner = '와이프'
+            continue
+        if '👨' in asset_type or 'Jason 자산' in asset_type:
+            current_owner = 'Jason'
+            continue
+
+        if not asset_type:
             continue
 
         currency = CURRENCY_MAP.get(asset_type, "KRW")
 
         # ── 현금 처리 ────────────────────────────────────────────
         if asset_type in CASH_TYPES:
+            # 계좌명이 없으면 섹션 헤더 기반으로 자동 할당
+            if not account:
+                if current_owner:
+                    account = f"{current_owner} 예금계좌"
+                else:
+                    continue
+
             # G열(index 6) = 현금 금액 직접 입력
             cash_val = row[6]
             try:
@@ -181,7 +233,7 @@ def read_xlsx():
             continue
 
         # ── 일반 종목 처리 ────────────────────────────────────────
-        if not name:
+        if not name or not account:
             continue
         qty_raw  = row[4]
         avg_raw  = row[5]
@@ -300,17 +352,191 @@ def update_xlsx_live_fx(usdkrw):
         print(f"  ⚠️ 엑셀 환율 업데이트 실패: {e}")
 
 
+# ── gspread (구글시트 직접 읽기/쓰기) ────────────────────────────────────
+
+def _num(val):
+    """셀 값 → float. 변환 불가 시 None."""
+    if val is None or str(val).strip() in ('', '-', '#N/A', '#REF!', '#VALUE!'):
+        return None
+    try:
+        return float(re.sub(r'[^0-9.\-]', '', str(val).replace(',', '')))
+    except Exception:
+        return None
+
+
+def _get_gspread_ws():
+    """OAuth 캐시 토큰으로 구글시트 워크시트 반환. 실패 시 None."""
+    try:
+        import gspread
+        gc = gspread.oauth()            # ~/.config/gspread/credentials.json
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        return sh.worksheet(SHEET_NAME)
+    except Exception as e:
+        print(f"  ⚠ 구글시트 API 연결 실패: {e}")
+        return None
+
+
+def read_gsheet():
+    """구글시트에서 직접 보유 종목 + 현금 데이터 추출"""
+    ws = _get_gspread_ws()
+    if ws is None:
+        return None
+
+    try:
+        rows = ws.get_all_values()   # List[List[str]]
+    except Exception as e:
+        print(f"  ⚠ 시트 읽기 실패: {e}")
+        return None
+
+    # 기준 환율: O14 셀 (index: row 13, col 14)
+    try:
+        base_usdkrw = _num(rows[13][14]) or 1350.0
+    except Exception:
+        base_usdkrw = 1350.0
+
+    def cell(row, idx):
+        return row[idx].strip() if idx < len(row) else ""
+
+    holdings      = []
+    current_owner = None
+
+    for row in rows:
+        asset_type = cell(row, 1)
+        name       = cell(row, 2)
+        account    = cell(row, 3)
+
+        # 섹션 헤더 감지 (현금 계좌명 자동 할당용)
+        if '👩' in asset_type or '와이프 자산' in asset_type:
+            current_owner = '와이프'; continue
+        if '👨' in asset_type or 'Jason 자산' in asset_type:
+            current_owner = 'Jason';  continue
+        if not asset_type:
+            continue
+
+        currency = CURRENCY_MAP.get(asset_type, "KRW")
+
+        # ── 현금 처리 ──────────────────────────────────────────────
+        if asset_type in CASH_TYPES:
+            if not account:
+                if current_owner:
+                    account = f"{current_owner} 예금계좌"
+                else:
+                    continue
+            cash_amt = _num(cell(row, 6))
+            if cash_amt is None or cash_amt <= 0:
+                continue
+            holdings.append({
+                "name":       name if name else "현금",
+                "ticker":     "CASH",
+                "account":    account,
+                "qty":        1,
+                "avg_price":  round(cash_amt, 2),
+                "currency":   currency,
+                "asset_type": asset_type,
+                "is_cash":    True,
+            })
+            continue
+
+        # ── 일반 종목 처리 ─────────────────────────────────────────
+        if not name or not account:
+            continue
+
+        qty  = _num(cell(row, 4))
+        avg  = _num(cell(row, 5))
+        if qty is None or qty <= 0 or avg is None or avg <= 0:
+            continue
+
+        xlsx_price          = _num(cell(row, 6))
+        precision_cost_krw  = _num(cell(row, 11))
+
+        ticker = TICKER_MAP.get(name, "")
+        if ticker == "XLSX_PRICE":
+            ticker = KS_TICKER_MAP.get(name, "XLSX_PRICE")
+
+        holdings.append({
+            "name":               name,
+            "ticker":             ticker,
+            "account":            account,
+            "qty":                qty,
+            "avg_price":          round(avg, 4),
+            "xlsx_price":         xlsx_price,
+            "currency":           currency,
+            "asset_type":         asset_type,
+            "is_cash":            False,
+            "base_usdkrw":        base_usdkrw,
+            "precision_cost_krw": precision_cost_krw,
+        })
+
+    print(f"  ✅ 구글시트 직접 읽기 완료 ({len(holdings)}개 항목)")
+    return holdings if holdings else None
+
+
+def update_gsheet_prices(price_map, usdkrw):
+    """실시간 시세를 구글시트 N5:O12 룩업 테이블 + O14 환율에 직접 기록"""
+    ws = _get_gspread_ws()
+    if ws is None:
+        return False
+    try:
+        # N5:O12 읽기 (row 5~12 → index 4~11)
+        lookup = ws.get('N5:O12')   # [[name, price], ...]
+        updates = []
+        for i, pair in enumerate(lookup):
+            n_val = pair[0].strip() if len(pair) > 0 else ""
+            if not n_val:
+                continue
+            ticker = TICKER_MAP.get(n_val, "") or KS_TICKER_MAP.get(n_val, "")
+            if not ticker or ticker in ("CASH", "XLSX_PRICE"):
+                ticker = KS_TICKER_MAP.get(n_val, "")
+            price = price_map.get(ticker)
+            if price and price > 0:
+                row_num = 5 + i          # 실제 시트 행 번호
+                col_o   = "O"
+                updates.append({
+                    "range": f"{col_o}{row_num}",
+                    "values": [[int(round(price)) if CURRENCY_MAP.get(
+                        [k for k, v in TICKER_MAP.items() if v == ticker or
+                         KS_TICKER_MAP.get(k) == ticker][:1][0] if [
+                         k for k, v in TICKER_MAP.items() if v == ticker or
+                         KS_TICKER_MAP.get(k) == ticker] else "", "KRW"
+                    ) == "KRW" else round(price, 4)]]
+                })
+
+        # O14 환율
+        updates.append({"range": "O14", "values": [[round(usdkrw, 2)]]})
+
+        if updates:
+            ws.batch_update(updates)
+            print(f"  ✅ 구글시트 시세 {len(updates)-1}개 + 환율 업데이트 완료")
+        return True
+    except Exception as e:
+        print(f"  ⚠ 구글시트 시세 쓰기 실패: {e}")
+        return False
+
+
+# ── 포트폴리오 로드 ───────────────────────────────────────────────────────
+
 def load_portfolio():
     """
     다른 스크립트에서 호출.
-    xlsx → holdings 리스트 반환. 실패 시 portfolio.json fallback.
+    1순위: gspread (구글시트 직접)  ← 구글시트 수정하면 바로 반영
+    2순위: xlsx 로컬 파일
+    3순위: portfolio.json 캐시
     """
+    # 1순위: gspread
+    holdings = read_gsheet()
+    if holdings:
+        sync_to_json(holdings)
+        return holdings
+
+    # 2순위: xlsx
     holdings = read_xlsx()
     if holdings:
         sync_to_json(holdings)
         return holdings
 
+    # 3순위: portfolio.json 캐시
     if os.path.exists(PORTFOLIO_JSON):
+        print("  ⚠ 캐시(portfolio.json) 사용 중 — 구글시트 연결을 확인하세요")
         with open(PORTFOLIO_JSON, encoding="utf-8") as f:
             data = json.load(f)
         flat = []
@@ -534,18 +760,28 @@ def fetch_and_write_prices():
 
 def main():
     print("\n" + "━"*56)
-    print("  📥  xlsx → portfolio.json 동기화")
+    print("  📥  구글시트 → portfolio.json 동기화")
     print("━"*56)
-    holdings = read_xlsx()
+
+    # 1순위: gspread 직접 읽기
+    use_gsheet = False
+    holdings = read_gsheet()
+    if holdings:
+        use_gsheet = True
+    else:
+        print("  gspread 실패, xlsx fallback 시도 중...")
+        holdings = read_xlsx()
+
     if not holdings:
         print("  동기화 실패")
         return
 
     accounts = sync_to_json(holdings)
-
     stocks = [h for h in holdings if not h.get("is_cash")]
     cashes = [h for h in holdings if h.get("is_cash")]
 
+    src = "구글시트 API" if use_gsheet else f"xlsx ({XLSX_PATH.split('/')[-1]})"
+    print(f"  소스: {src}")
     print(f"  완료: 종목 {len(stocks)}개 + 현금 {len(cashes)}개 = 총 {len(holdings)}개  ({len(accounts)}개 계좌)\n")
     print(f"  {'계좌':<22} {'종목':<18} {'구분':<10} {'금액/평단가':>14} {'통화'}")
     print("  " + "─" * 72)
@@ -568,17 +804,11 @@ def main():
 
     print(f"\n  저장 완료: {PORTFOLIO_JSON}")
 
-    # ── G열 VLOOKUP 공식 복원 (한 번만 필요, 이미 공식이면 스킵) ──
+    # ── 실시간 시세 업데이트 ────────────────────────────────────
     print("\n" + "━"*56)
-    print("  🔧  G열 VLOOKUP 공식 확인·복원")
+    print("  📡  실시간 시세 업데이트")
     print("━"*56)
-    restore_vlookup_formulas()
-
-    # ── 실시간 시세 자동 업데이트 (O열 룩업 테이블) ──────────────
-    print("\n" + "━"*56)
-    print("  📡  실시간 시세 → xlsx O열(룩업 테이블) 자동 업데이트")
-    print("━"*56)
-    fetch_and_write_prices()
+    fetch_and_write_prices()   # xlsx O열 업데이트 (있을 때만 작동)
     print()
 
 

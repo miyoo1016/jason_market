@@ -14,10 +14,11 @@ __pycache__/
 *.log
 
 # 자동 생성 HTML 출력물 (실행 시마다 새로 생성됨)
-chart_dashboard.html
-correlation_matrix.html
-options_dashboard.html
-returns_comparison.html
+*.html
+
+# 임시 데이터 파일
+*.xlsx
+*.csv
 
 # 자동 생성 텍스트·HTML 보고서
 analysis_*.txt

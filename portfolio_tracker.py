@@ -127,9 +127,7 @@ def fetch_all_prices(holdings, usdkrw):
         def _fetch_single_info(t):
             try:
                 tk = yf.Ticker(t)
-                # Ticker.info는 느리지만 프리마켓 가격을 가장 정확히 담고 있음
                 info = tk.info
-                # 프리마켓 -> 장중 -> 포스트마켓 순서로 유효한 가격 찾기
                 live_price = (
                     info.get('preMarketPrice') or 
                     info.get('regularMarketPrice') or 
@@ -137,6 +135,20 @@ def fetch_all_prices(holdings, usdkrw):
                 )
                 prev = info.get('regularMarketPreviousClose') or info.get('previousClose')
                 
+                # 인베스팅닷컴 동기화 보정: 글로벌 자산은 00:00 UTC 기준 % 계산을 위해 prev를 시가로 대체
+                is_global = t in ('GC=F', 'CL=F', 'BZ=F', 'USDKRW=X', 'BTC-USD', 'DIA', 'SPY', 'QQQM', 'IWM', '^VIX', '^TNX')
+                if is_global:
+                    try:
+                        from datetime import timezone
+                        h_int = tk.history(period='2d', interval='1h')
+                        if not h_int.empty:
+                            h_int.index = h_int.index.tz_convert('UTC')
+                            today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                            today_data = h_int.loc[h_int.index >= today_utc]
+                            if not today_data.empty:
+                                prev = float(today_data['Open'].iloc[0])
+                    except: pass
+
                 if live_price:
                     _update_cache(t, float(live_price), float(prev) if prev else None)
             except Exception: pass
@@ -272,29 +284,22 @@ def calc_data(holdings, usdkrw_tuple):
             is_usd = (cur == 'USD')
 
             if is_usd:
-                # 1순위: H열 정밀 데이터 (환율일수도, 총액일수도 있음)
-                if p_cost is not None:
-                    if p_cost < 10000: # 환율로 입력한 경우 (예: 1463.01)
-                        cost_krw = qty * avg * p_cost
-                    else: # 총액으로 입력한 경우 (예: 55,000,000)
-                        cost_krw = p_cost
-                else: # 데이터가 없으면 기존 기준환율 사용
-                    cost_krw = qty * avg * base_fx
-                
+                # ── 구글시트 기준 손익 계산 ──────────────────────────────
+                # 손익(₩) = qty × (현재가 - 평단가) × 현재환율
+                # cost_krw = qty × 평단가 × 현재환율  (매입환율 미사용, 시트와 동일)
+                cost_krw    = qty * avg * usdkrw
                 current_krw = qty * price * usdkrw
-                # 1일 손익: (오늘가*오늘환율 - 어제가*어제환율) * 수량 -> 환차손익 포함
+                # 1일 손익: (오늘가 - 어제가) × 현재환율 × 수량 (주가 변동분)
                 if prev_close:
-                    daily_profit_krw = (price * usdkrw - prev_close * prev_usdkrw) * qty
+                    daily_profit_krw = (price - prev_close) * usdkrw * qty
                 else:
                     daily_profit_krw = 0
                 avg_s  = f"${avg:,.2f}"; pri_s  = f"${price:,.2f}"
-                
-                # 정밀 데이터(환율/총액)를 바탕으로 주가 수익과 환차 수익을 더 정확히 분리
-                # 실질 구매 환율(eff_base_fx) 도출
-                eff_base_fx = p_cost if (p_cost is not None and p_cost < 10000) else (cost_krw / (qty * avg) if (qty * avg) > 0 else base_fx)
-                
-                fx_pnl = (usdkrw - eff_base_fx) * avg * qty
-                price_pnl = current_krw - cost_krw - fx_pnl
+
+                # 환차 정보 (보조 표시용 — 시트 외 추가 정보)
+                purchase_fx = p_cost if (p_cost is not None and p_cost < 10000) else base_fx
+                fx_pnl   = (usdkrw - purchase_fx) * avg * qty
+                price_pnl = qty * (price - avg) * usdkrw  # = profit_krw
             else:
                 cost_krw    = p_cost if p_cost is not None else (qty * avg)
                 current_krw = qty * price

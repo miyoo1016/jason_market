@@ -15,8 +15,8 @@ MONITORED_ASSETS = {
     '금':      'GC=F',
     'BTC':     'BTC-USD',
     'USD/KRW': 'USDKRW=X',
-    'S&P500':  '^GSPC',
-    'NASDAQ':  '^IXIC',
+    'S&P500':  'SPY',   # *10 scaling required
+    'NASDAQ':  'QQQM',  # *41.15 scaling required
 }
 
 # 알림 조건
