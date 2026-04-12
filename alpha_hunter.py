@@ -188,6 +188,28 @@ def fetch(url: str, timeout: int = 20) -> str | None:
         return None
 
 
+def fetch_curl(url: str, timeout: int = 20) -> str | None:
+    """curl 기반 fetch — Reddit 등 TLS 핑거프린팅 차단 우회"""
+    try:
+        r = subprocess.run(
+            ['curl', '-s', '-L',
+             '--max-time', str(timeout),
+             '-A', HEADERS['User-Agent'],
+             '-H', f'Accept-Language: {HEADERS["Accept-Language"]}',
+             '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+             url],
+            capture_output=True, timeout=timeout + 5
+        )
+        text = r.stdout.decode('utf-8', errors='replace')
+        if not text.strip():
+            print(f"  {ALERT}⚠ 빈 응답:{RESET} {url[:60]}...")
+            return None
+        return text
+    except Exception as e:
+        print(f"  {ALERT}⚠ curl 실패:{RESET} {url[:60]}... ({type(e).__name__})")
+        return None
+
+
 def rand_delay(lo=1.5, hi=3.0):
     time.sleep(random.uniform(lo, hi))
 
@@ -436,7 +458,7 @@ def collect_seed_list(feeds: list, stats: dict, max_n: int) -> list:
             continue
 
         print(f"  {CYAN}→ 시드 [{name}]{RESET} 수집 중...", end=' ', flush=True)
-        xml = fetch(rss_url)
+        xml = fetch_curl(rss_url)
         if not xml:
             print(f"{ALERT}실패{RESET}")
             continue
@@ -469,17 +491,17 @@ def collect_reddit(seeds: dict, stats: dict) -> list:
     max_n = seeds.get('max_per_source', 25)
 
     targets = (
-        [(f'Reddit/r/{sub}', f'https://www.reddit.com/r/{sub}/hot.rss?limit=50')
+        [(f'Reddit/r/{sub}', f'https://old.reddit.com/r/{sub}/hot.rss?limit=50')
          for sub in seeds.get('reddit_subreddits', [])]
         +
         [(f'Reddit/u/{u.lstrip("u/")}',
-          f'https://www.reddit.com/user/{u.lstrip("u/")}/submitted.rss?limit=25')
+          f'https://old.reddit.com/user/{u.lstrip("u/")}/submitted.rss?limit=25')
          for u in seeds.get('reddit_users', [])]
     )
 
     for label, url in targets:
         print(f"  {CYAN}→ {label}{RESET} 수집 중...", end=' ', flush=True)
-        xml = fetch(url)
+        xml = fetch_curl(url)
         if not xml:
             print(f"{ALERT}실패{RESET}")
             rand_delay()
