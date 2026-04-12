@@ -114,31 +114,58 @@ def analyze(closes):
         result['vix_ratio'] = None
 
     # 2. VVIX (VIX의 VIX — 변동성의 변동성)
-    vvix = last_price(closes, '^VVIX')
-    vvix_1w = price_ago(closes, '^VVIX', 5)
-    result['vvix'] = vvix
+    vvix    = last_price(closes, '^VVIX')
+    vvix_1w = price_ago(closes, '^VVIX', 5)   # 전주 (5거래일)
+    vvix_3d = price_ago(closes, '^VVIX', 3)   # 3거래일 전
+    result['vvix']    = vvix
     result['vvix_1w'] = vvix_1w
-    result['vvix_chg'] = (vvix - vvix_1w) if (vvix and vvix_1w) else None
+    result['vvix_3d'] = vvix_3d
+    result['vvix_chg']     = (vvix - vvix_1w) if (vvix and vvix_1w) else None
+    result['vvix_chg_pct'] = ((vvix - vvix_1w) / vvix_1w * 100) if (vvix and vvix_1w) else None
+    result['vvix_chg_3d']  = (vvix - vvix_3d) if (vvix and vvix_3d) else None
 
     if vvix is not None:
-        if vvix < 80:
-            result['vvix_level'] = 'good'
-            result['vvix_state'] = '안정 (정상 하단)'
-            result['vvix_note']  = 'VIX 자체가 잠잠 — 시장 공포 확대 가능성 낮음'
-        elif vvix < 100:
-            result['vvix_level'] = 'good'
-            result['vvix_state'] = '보통 (정상 범위)'
-            result['vvix_note']  = '변동성 시장 정상 작동 중'
-        elif vvix < 120:
-            result['vvix_level'] = 'warn'
-            result['vvix_state'] = '상승 (주의)'
-            result['vvix_note']  = 'VIX 급등 가능성 경고 — 옵션 시장 불안정'
-            stress_flags.append('VVIX 상승')
-        else:
-            result['vvix_level'] = 'bad'
-            result['vvix_state'] = '급등 (경보)'
-            result['vvix_note']  = 'VIX 변동성 극단 — 시장 패닉 임박 또는 진행 중'
-            stress_flags.append('VVIX 급등')
+        chg_pct = result['vvix_chg_pct']
+        chg_3d  = result['vvix_chg_3d']
+
+        if vvix < 100:
+            if chg_pct is not None and chg_pct >= 10:
+                # 조건 2: VVIX < 100, 전주 대비 +10% 이상 급등
+                result['vvix_level'] = 'warn'
+                result['vvix_state'] = '🟡 예비 주의'
+                result['vvix_note']  = f'수치는 낮지만 전주 대비 {chg_pct:+.1f}% 급등 — 상승 모멘텀 주시'
+            else:
+                # 조건 1: VVIX < 100, 전주 대비 +10% 미만
+                result['vvix_level'] = 'good'
+                result['vvix_state'] = '🟢 안정'
+                result['vvix_note']  = '옵션 시장 정상 — VIX 급등 가능성 낮음'
+
+        elif vvix <= 120:
+            if chg_pct is not None and chg_pct < 0:
+                # 조건 3: VVIX 100~120, 전주 대비 하락
+                result['vvix_level'] = 'warn'
+                result['vvix_state'] = '🟡 완화 중'
+                result['vvix_note']  = f'전주 대비 {chg_pct:+.1f}% — 옵션 불안 진정 중'
+            else:
+                # 조건 4: VVIX 100~120, 전주 대비 상승
+                result['vvix_level'] = 'warn'
+                result['vvix_state'] = '🟠 상승 경고'
+                result['vvix_note']  = f'전주 대비 {chg_pct:+.1f}% 상승 — VIX 추가 급등 가능성'
+                stress_flags.append('VVIX 상승 경고')
+
+        else:  # vvix > 120
+            if chg_3d is not None and chg_3d >= 0:
+                # 조건 5: VVIX > 120, 3일 대비 상승
+                result['vvix_level'] = 'bad'
+                result['vvix_state'] = '🔴 VIX 급등 임박'
+                result['vvix_note']  = f'3일 대비 {chg_3d:+.2f} 상승 중 — VIX 폭등 직전 신호'
+                stress_flags.append('VVIX 급등')
+            else:
+                # 조건 6: VVIX > 120, 3일 대비 하락
+                result['vvix_level'] = 'warn'
+                result['vvix_state'] = '🟠 패닉 정점 통과 — 바닥 탐색'
+                result['vvix_note']  = f'3일 대비 {chg_3d:+.2f} 하락 전환 — 패닉 완화 초기, 역발상 구간'
+                stress_flags.append('VVIX 급등')
     else:
         result['vvix_level'] = 'warn'
         result['vvix_state'] = 'N/A'
@@ -261,13 +288,21 @@ def print_terminal(r, ts):
     print(f"  │")
     if r.get('vvix') is not None:
         d = dot_term(r['vvix_level'] == 'good', r['vvix_level'] == 'warn')
-        chg_str = ''
-        if r.get('vvix_chg') is not None:
+        vvix_val = r['vvix']
+        # VVIX > 120 이면 3일 변화, 그 외엔 전주 변화 표시
+        if vvix_val > 120 and r.get('vvix_chg_3d') is not None:
+            sign = '+' if r['vvix_chg_3d'] >= 0 else ''
+            chg_str = f"  (3일 전 {fv(r['vvix_3d'])}, {sign}{r['vvix_chg_3d']:.2f})"
+        elif r.get('vvix_chg') is not None:
             sign = '+' if r['vvix_chg'] >= 0 else ''
-            chg_str = f"  (1주 전 {fv(r['vvix_1w'])}, {sign}{r['vvix_chg']:.2f})"
+            pct  = r.get('vvix_chg_pct')
+            pct_str = f", {pct:+.1f}%" if pct is not None else ''
+            chg_str = f"  (1주 전 {fv(r['vvix_1w'])}, {sign}{r['vvix_chg']:.2f}{pct_str})"
+        else:
+            chg_str = ''
         print(f"  │   VVIX (^VVIX) : {fv(r['vvix']):>7}{chg_str}")
         print(f"  │   {d}  {r['vvix_state']} — {r['vvix_note']}")
-        print(f"  │   참고 : 80 미만=안정 | 100~120=주의 | 120+=경보")
+        print(f"  │   참고 : <100=정상 | 100~120=주의/경보 | >120=위험/바닥탐색")
     else:
         print(f"  │   ⚠ VVIX 데이터 조회 실패")
     print(f"  └{'─'*56}\n")
@@ -353,17 +388,28 @@ def generate_html(r, ts):
       <tr><td>VIX 3개월 (^VIX3M)</td><td>{fv(r['vix3m'])}</td></tr>"""
 
     # VVIX 섹션
-    vvix_val  = r.get('vvix')
-    vvix_1w   = r.get('vvix_1w')
-    vvix_chg  = r.get('vvix_chg')
-    vvix_meter = meter(vvix_val or 90, 60, 150) if vvix_val else ""
+    vvix_val     = r.get('vvix')
+    vvix_1w      = r.get('vvix_1w')
+    vvix_3d      = r.get('vvix_3d')
+    vvix_chg     = r.get('vvix_chg')
+    vvix_chg_pct = r.get('vvix_chg_pct')
+    vvix_chg_3d  = r.get('vvix_chg_3d')
+    vvix_meter   = meter(vvix_val or 90, 60, 150) if vvix_val else ""
+    vvix_color   = level_color.get(r.get('vvix_level', 'warn'), '#555')
+
+    # VVIX > 120 이면 3일 변화, 그 외엔 전주 변화 표시
     vvix_chg_html = ''
-    if vvix_chg is not None:
+    if vvix_val is not None and vvix_val > 120 and vvix_chg_3d is not None:
+        sign = '+' if vvix_chg_3d >= 0 else ''
+        chg_color = '#c62828' if vvix_chg_3d > 0 else '#00838f'
+        vvix_chg_html = (f'<small style="color:{chg_color}"> &nbsp;{sign}{vvix_chg_3d:.2f} '
+                         f'(3일 전 {fv(vvix_3d)})</small>')
+    elif vvix_chg is not None:
         sign = '+' if vvix_chg >= 0 else ''
         chg_color = '#c62828' if vvix_chg > 5 else ('#e65100' if vvix_chg > 0 else '#00838f')
-        vvix_chg_html = (f'<small style="color:{chg_color}"> &nbsp;{sign}{vvix_chg:.2f} '
+        pct_str = f', {vvix_chg_pct:+.1f}%' if vvix_chg_pct is not None else ''
+        vvix_chg_html = (f'<small style="color:{chg_color}"> &nbsp;{sign}{vvix_chg:.2f}{pct_str} '
                          f'(1주 전 {fv(vvix_1w)})</small>')
-    vvix_color = level_color.get(r.get('vvix_level', 'warn'), '#555')
 
     # 수익률 곡선
     yc_spread_str = f"{r['yc_spread']:+.2f}%" if r.get('yc_spread') is not None else "N/A"
@@ -416,7 +462,11 @@ def generate_html(r, ts):
         f'- VIX9D/VIX30 비율: {fv(r.get("vix_ratio"), 3)} → {r.get("vix_state","N/A")}',
         f'- 해석: {r.get("vix_note","")}', '',
         '## ② VVIX (변동성의 변동성)',
-        f'- VVIX(^VVIX): {fv(r.get("vvix"))}' + (f'  (1주 전 {fv(r.get("vvix_1w"))}, {"+" if (r.get("vvix_chg") or 0) >= 0 else ""}{fv(r.get("vvix_chg"))})' if r.get("vvix_chg") is not None else ''),
+        f'- VVIX(^VVIX): {fv(r.get("vvix"))}'
+        + (f'  (3일 전 {fv(r.get("vvix_3d"))}, {"+" if (r.get("vvix_chg_3d") or 0) >= 0 else ""}{fv(r.get("vvix_chg_3d"))})'
+           if (r.get("vvix") or 0) > 120 and r.get("vvix_chg_3d") is not None
+           else (f'  (1주 전 {fv(r.get("vvix_1w"))}, {"+" if (r.get("vvix_chg_pct") or 0) >= 0 else ""}{fv(r.get("vvix_chg_pct"), 1)}%)'
+                 if r.get("vvix_chg") is not None else '')),
         f'- 신호: {r.get("vvix_state","N/A")} — {r.get("vvix_note","")}', '',
         '## ③ 수익률 곡선',
         f'- 3개월 T-Bill: {fv(r["r3m"])}%',
@@ -539,7 +589,7 @@ tr:last-child td{{border-bottom:none}}
         </table>
         {'<div class="gauge-wrap"><div class="gauge-label"><span>◀ 안정(&lt;80)</span><span>주의(100~120)</span><span>경보(&gt;120) ▶</span></div>' + vvix_meter + '</div>' if vvix_meter else ''}
         {interp_box(r.get('vvix_level','warn'), 'VVIX 해석', r.get('vvix_note','N/A'), 'VVIX 상승 = 옵션 시장 불안, VIX 급등 선행 신호')}
-        <div class="hint">VVIX &lt;80 안정 &nbsp;|&nbsp; 80~100 보통 &nbsp;|&nbsp; 100~120 주의 &nbsp;|&nbsp; 120+ 경보</div>
+        <div class="hint">&lt;100 정상 &nbsp;|&nbsp; &lt;100 +10%↑ 예비주의 &nbsp;|&nbsp; 100~120↓ 완화중 &nbsp;|&nbsp; 100~120↑ 상승경고 &nbsp;|&nbsp; &gt;120↑ 급등임박 &nbsp;|&nbsp; &gt;120↓ 바닥탐색</div>
       </div>
     </div>
 
