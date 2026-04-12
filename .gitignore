@@ -31,3 +31,7 @@ reports/
 portfolio.json
 price_alerts.json
 calendar_today.json
+
+# Alpha Hunter 자동 생성 데이터
+alpha_hunter_seen.json
+signals/
