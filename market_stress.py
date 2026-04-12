@@ -15,7 +15,7 @@ AMBER  = '\033[38;5;214m' # 주의 (주황/앰버)
 ALERT  = '\033[38;5;203m' # 위험 (연한 빨강)
 RESET  = '\033[0m'
 
-TICKERS = ['^VIX9D', '^VIX', '^VIX3M', '^IRX', '^TNX', 'HYG', 'IEF']
+TICKERS = ['^VIX9D', '^VIX', '^VIX3M', '^VVIX', '^IRX', '^TNX', 'HYG', 'IEF']
 
 
 # ── 데이터 조회 ───────────────────────────────────────────────
@@ -113,7 +113,38 @@ def analyze(closes):
     else:
         result['vix_ratio'] = None
 
-    # 2. 수익률 곡선
+    # 2. VVIX (VIX의 VIX — 변동성의 변동성)
+    vvix = last_price(closes, '^VVIX')
+    vvix_1w = price_ago(closes, '^VVIX', 5)
+    result['vvix'] = vvix
+    result['vvix_1w'] = vvix_1w
+    result['vvix_chg'] = (vvix - vvix_1w) if (vvix and vvix_1w) else None
+
+    if vvix is not None:
+        if vvix < 80:
+            result['vvix_level'] = 'good'
+            result['vvix_state'] = '안정 (정상 하단)'
+            result['vvix_note']  = 'VIX 자체가 잠잠 — 시장 공포 확대 가능성 낮음'
+        elif vvix < 100:
+            result['vvix_level'] = 'good'
+            result['vvix_state'] = '보통 (정상 범위)'
+            result['vvix_note']  = '변동성 시장 정상 작동 중'
+        elif vvix < 120:
+            result['vvix_level'] = 'warn'
+            result['vvix_state'] = '상승 (주의)'
+            result['vvix_note']  = 'VIX 급등 가능성 경고 — 옵션 시장 불안정'
+            stress_flags.append('VVIX 상승')
+        else:
+            result['vvix_level'] = 'bad'
+            result['vvix_state'] = '급등 (경보)'
+            result['vvix_note']  = 'VIX 변동성 극단 — 시장 패닉 임박 또는 진행 중'
+            stress_flags.append('VVIX 급등')
+    else:
+        result['vvix_level'] = 'warn'
+        result['vvix_state'] = 'N/A'
+        result['vvix_note']  = '데이터 조회 실패'
+
+    # 3. 수익률 곡선
     r3m  = last_price(closes, '^IRX')
     r10y = last_price(closes, '^TNX')
     result['r3m']  = r3m
@@ -225,8 +256,24 @@ def print_terminal(r, ts):
         print(f"  │   ⚠ VIX 기간구조 데이터 없음")
     print(f"  └{'─'*56}\n")
 
-    # 2. 수익률 곡선
-    print(f"  ┌─ 2. 수익률 곡선 역전 — 침체 선행 지표")
+    # 2. VVIX
+    print(f"  ┌─ 2. VVIX — 변동성의 변동성 (VIX of VIX)")
+    print(f"  │")
+    if r.get('vvix') is not None:
+        d = dot_term(r['vvix_level'] == 'good', r['vvix_level'] == 'warn')
+        chg_str = ''
+        if r.get('vvix_chg') is not None:
+            sign = '+' if r['vvix_chg'] >= 0 else ''
+            chg_str = f"  (1주 전 {fv(r['vvix_1w'])}, {sign}{r['vvix_chg']:.2f})"
+        print(f"  │   VVIX (^VVIX) : {fv(r['vvix']):>7}{chg_str}")
+        print(f"  │   {d}  {r['vvix_state']} — {r['vvix_note']}")
+        print(f"  │   참고 : 80 미만=안정 | 100~120=주의 | 120+=경보")
+    else:
+        print(f"  │   ⚠ VVIX 데이터 조회 실패")
+    print(f"  └{'─'*56}\n")
+
+    # 3. 수익률 곡선
+    print(f"  ┌─ 3. 수익률 곡선 역전 — 침체 선행 지표")
     print(f"  │")
     print(f"  │   3개월 T-Bill  (^IRX) : {fr(r['r3m']):>7}")
     print(f"  │   10년 국채     (^TNX) : {fr(r['r10y']):>7}")
@@ -239,8 +286,8 @@ def print_terminal(r, ts):
         print(f"  │   ⚠ 금리 데이터 조회 실패")
     print(f"  └{'─'*56}\n")
 
-    # 3. 신용 스프레드
-    print(f"  ┌─ 3. 신용 스프레드 — 스마트머니 위험 감지")
+    # 4. 신용 스프레드
+    print(f"  ┌─ 4. 신용 스프레드 — 스마트머니 위험 감지")
     print(f"  │   (HYG: 하이일드 회사채 ETF  /  IEF: 7-10년 국채 ETF)")
     print(f"  │")
     print(f"  │   HYG : ${r['hyg_now']:.2f}  (1개월 {fp(r['hyg_pct'])})" if r['hyg_now'] else "  │   HYG : N/A")
@@ -305,6 +352,19 @@ def generate_html(r, ts):
       <tr><td>VIX 30일 (^VIX)</td><td>{fv(r['vix30'])} <small style="color:#999">← 기준</small></td></tr>
       <tr><td>VIX 3개월 (^VIX3M)</td><td>{fv(r['vix3m'])}</td></tr>"""
 
+    # VVIX 섹션
+    vvix_val  = r.get('vvix')
+    vvix_1w   = r.get('vvix_1w')
+    vvix_chg  = r.get('vvix_chg')
+    vvix_meter = meter(vvix_val or 90, 60, 150) if vvix_val else ""
+    vvix_chg_html = ''
+    if vvix_chg is not None:
+        sign = '+' if vvix_chg >= 0 else ''
+        chg_color = '#c62828' if vvix_chg > 5 else ('#e65100' if vvix_chg > 0 else '#00838f')
+        vvix_chg_html = (f'<small style="color:{chg_color}"> &nbsp;{sign}{vvix_chg:.2f} '
+                         f'(1주 전 {fv(vvix_1w)})</small>')
+    vvix_color = level_color.get(r.get('vvix_level', 'warn'), '#555')
+
     # 수익률 곡선
     yc_spread_str = f"{r['yc_spread']:+.2f}%" if r.get('yc_spread') is not None else "N/A"
     yc_meter = meter(r['yc_spread'], -2, 2) if r.get('yc_spread') is not None else ""
@@ -355,12 +415,15 @@ def generate_html(r, ts):
         f'- VIX 3개월(^VIX3M): {fv(r["vix3m"])}',
         f'- VIX9D/VIX30 비율: {fv(r.get("vix_ratio"), 3)} → {r.get("vix_state","N/A")}',
         f'- 해석: {r.get("vix_note","")}', '',
-        '## ② 수익률 곡선',
+        '## ② VVIX (변동성의 변동성)',
+        f'- VVIX(^VVIX): {fv(r.get("vvix"))}' + (f'  (1주 전 {fv(r.get("vvix_1w"))}, {"+" if (r.get("vvix_chg") or 0) >= 0 else ""}{fv(r.get("vvix_chg"))})' if r.get("vvix_chg") is not None else ''),
+        f'- 신호: {r.get("vvix_state","N/A")} — {r.get("vvix_note","")}', '',
+        '## ③ 수익률 곡선',
         f'- 3개월 T-Bill: {fv(r["r3m"])}%',
         f'- 10년 국채:    {fv(r["r10y"])}%',
         f'- 3M/10Y 스프레드: {yc_sign}{fv(r.get("yc_spread"))}% → {r.get("yc_state","N/A")}',
         f'- 해석: {r.get("yc_note","")}', '',
-        '## ③ 신용 스프레드 (HYG/IEF)',
+        '## ④ 신용 스프레드 (HYG/IEF)',
         f'- HYG: ${fv(r["hyg_now"])} ({fv(r.get("hyg_pct"),1)}%)',
         f'- IEF: ${fv(r["ief_now"])} ({fv(r.get("ief_pct"),1)}%)',
         f'- HYG/IEF 비율: {fv(r.get("cr_ratio_now"),4)} → {r.get("cr_state","N/A")}',
@@ -440,7 +503,7 @@ tr:last-child td{{border-bottom:none}}
     <div class="sum-icon">{sum_icon}</div>
     <div>
       <div class="sum-title">{r['summary_state']} — {r['summary_note']}</div>
-      <div class="sum-detail">VIX 백워데이션 + 금리 역전 + 신용 경색 동시 발생 시 최고 위험 경보</div>
+      <div class="sum-detail">VIX 백워데이션 + VVIX 급등 + 금리 역전 + 신용 경색 동시 발생 시 최고 위험 경보</div>
       <div class="flags">{flags_html}</div>
     </div>
   </div>
@@ -461,10 +524,29 @@ tr:last-child td{{border-bottom:none}}
       </div>
     </div>
 
-    <!-- 카드 2: 수익률 곡선 -->
+    <!-- 카드 2: VVIX -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">② 수익률 곡선 역전 — 침체 선행</span>
+        <span class="card-title">② VVIX — 변동성의 변동성 (VIX of VIX)</span>
+        {badge(r.get('vvix_level','warn'), r.get('vvix_state','N/A'))}
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><td>VVIX (^VVIX)</td>
+              <td style="color:{vvix_color}">{fv(vvix_val)}{vvix_chg_html}</td></tr>
+          <tr><td>VIX 30일 (^VIX, 참고)</td>
+              <td>{fv(r['vix30'])}</td></tr>
+        </table>
+        {'<div class="gauge-wrap"><div class="gauge-label"><span>◀ 안정(&lt;80)</span><span>주의(100~120)</span><span>경보(&gt;120) ▶</span></div>' + vvix_meter + '</div>' if vvix_meter else ''}
+        {interp_box(r.get('vvix_level','warn'), 'VVIX 해석', r.get('vvix_note','N/A'), 'VVIX 상승 = 옵션 시장 불안, VIX 급등 선행 신호')}
+        <div class="hint">VVIX &lt;80 안정 &nbsp;|&nbsp; 80~100 보통 &nbsp;|&nbsp; 100~120 주의 &nbsp;|&nbsp; 120+ 경보</div>
+      </div>
+    </div>
+
+    <!-- 카드 3: 수익률 곡선 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">③ 수익률 곡선 역전 — 침체 선행</span>
         {badge(r.get('yc_level','warn'), r.get('yc_state','N/A'))}
       </div>
       <div class="card-body">
@@ -480,10 +562,10 @@ tr:last-child td{{border-bottom:none}}
       </div>
     </div>
 
-    <!-- 카드 3: 신용 스프레드 -->
+    <!-- 카드 4: 신용 스프레드 -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">③ 신용 스프레드 — 스마트머니</span>
+        <span class="card-title">④ 신용 스프레드 — 스마트머니</span>
         {badge(r.get('cr_level','warn'), r.get('cr_state','N/A'))}
       </div>
       <div class="card-body">
