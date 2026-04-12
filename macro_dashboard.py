@@ -379,6 +379,22 @@ def build_html(data_by_cat, chart_data, now_str):
       }});
     }})();"""
 
+    # ── AI 붙여넣기용 텍스트 요약 생성 ──────────────────────────
+    copy_lines = [f'# 거시경제 대시보드 — {now_str}', '']
+    for cat in CATEGORIES_ORDER:
+        items = data_by_cat.get(cat, [])
+        if not items:
+            continue
+        copy_lines.append(f'## {cat}')
+        for row in items:
+            name, curr, pct, unit, desc, signal, _ = row
+            val_str = fmt_val(curr, unit) if curr else 'N/A'
+            pct_str = f'{pct:+.2f}%' if pct is not None else 'N/A'
+            sig_str = {'good': '✅', 'warn': '⚠️', 'danger': '🔴', 'neutral': '—'}.get(signal, '—')
+            copy_lines.append(f'- {name}: {val_str} ({pct_str}) {sig_str}  ← {desc}')
+        copy_lines.append('')
+    copy_text_js = json.dumps('\n'.join(copy_lines))
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -394,7 +410,7 @@ def build_html(data_by_cat, chart_data, now_str):
   /* ── 헤더 ── */
   .header {{ background: #fff; border-bottom: 3px solid #00838f;
              padding: 18px 28px; display: flex; align-items: center;
-             justify-content: space-between; }}
+             justify-content: space-between; flex-wrap: wrap; gap: 12px; }}
   .header h1 {{ font-size: 20px; font-weight: 700; color: #00838f; }}
   .header .ts {{ font-size: 12px; color: #888; }}
 
@@ -453,6 +469,25 @@ def build_html(data_by_cat, chart_data, now_str):
   /* ── 푸터 ── */
   .footer {{ text-align: center; padding: 20px; color: #aaa; font-size: 11px; }}
 
+  /* ── 복사 버튼 ── */
+  .btn-copy {{
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px; border-radius: 8px; border: none; cursor: pointer;
+    background: #00838f; color: #fff;
+    font-size: 13px; font-weight: 600; transition: background .15s;
+  }}
+  .btn-copy:hover {{ background: #006064; }}
+  .btn-copy.copied {{ background: #1a5c3a; }}
+
+  #toast {{
+    position: fixed; bottom: 28px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #263238; color: #fff;
+    padding: 10px 22px; border-radius: 24px; font-size: 14px;
+    opacity: 0; transition: all .3s; pointer-events: none; z-index: 9999;
+  }}
+  #toast.show {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
+
   @media (max-width: 900px) {{
     .summary   {{ grid-template-columns: repeat(3,1fr); }}
     .cat-grid  {{ grid-template-columns: 1fr; }}
@@ -463,8 +498,11 @@ def build_html(data_by_cat, chart_data, now_str):
 <body>
 
 <div class="header">
-  <h1>📊 거시경제 대시보드</h1>
-  <div class="ts">Jason Market &nbsp;|&nbsp; {now_str} &nbsp;|&nbsp; 야후 파이낸스 기준 (15분 지연)</div>
+  <div>
+    <h1>📊 거시경제 대시보드</h1>
+    <div class="ts">Jason Market &nbsp;|&nbsp; {now_str} &nbsp;|&nbsp; 야후 파이낸스 기준 (15분 지연)</div>
+  </div>
+  <button class="btn-copy" id="copyBtn" onclick="copyAll()">📋 전체 복사</button>
 </div>
 
 <!-- 요약 카드 -->
@@ -496,9 +534,40 @@ def build_html(data_by_cat, chart_data, now_str):
 
 <div class="footer">※ 데이터 출처: Yahoo Finance &nbsp;|&nbsp; Jason Market 거시경제 대시보드</div>
 
+<div id="toast"></div>
+
 <script>
 {charts_js}
 {yearly_bar_js}
+
+// ── 전체 복사 ──────────────────────────────────────────
+const COPY_TEXT = {copy_text_js};
+
+function showToast(msg) {{
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}}
+
+function copyAll() {{
+  const btn = document.getElementById('copyBtn');
+  navigator.clipboard.writeText(COPY_TEXT).then(() => {{
+    btn.textContent = '✅ 복사 완료!';
+    btn.classList.add('copied');
+    showToast('클립보드 복사 완료! AI에 붙여넣으세요.');
+    setTimeout(() => {{ btn.textContent = '📋 전체 복사'; btn.classList.remove('copied'); }}, 2500);
+  }}).catch(() => {{
+    const ta = document.createElement('textarea');
+    ta.value = COPY_TEXT;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('복사 완료!');
+  }});
+}}
 </script>
 </body>
 </html>"""

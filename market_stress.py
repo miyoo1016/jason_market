@@ -3,6 +3,7 @@
 VIX 기간구조 / 수익률 곡선 역전 / 신용 스프레드
 API 키 불필요, 완전 무료 (Yahoo Finance 데이터)"""
 
+import json
 import yfinance as yf
 import webbrowser
 import tempfile
@@ -341,6 +342,32 @@ def generate_html(r, ts):
                 f'<div style="font-size:13px;font-weight:700;color:{c}">{val}</div>'
                 f'<div style="font-size:12px;color:#666;margin-top:3px">{note}</div></div>')
 
+    # ── AI 붙여넣기용 텍스트 요약 ────────────────────────────────
+    vix_sign = '+' if (r.get('vix_ratio') or 0) >= 1.0 else ''
+    yc_sign  = '+' if (r.get('yc_spread') or 0) >= 0 else ''
+    copy_lines = [
+        f'# 시장 스트레스 지표 — {ts}', '',
+        f'## 종합 판정: {r["summary_state"]} — {r["summary_note"]}',
+        f'- 플래그: {", ".join(r["stress_flags"]) if r["stress_flags"] else "이상 없음"}', '',
+        '## ① VIX 기간구조',
+        f'- VIX 9일(^VIX9D): {fv(r["vix9d"])}',
+        f'- VIX 30일(^VIX):  {fv(r["vix30"])}',
+        f'- VIX 3개월(^VIX3M): {fv(r["vix3m"])}',
+        f'- VIX9D/VIX30 비율: {fv(r.get("vix_ratio"), 3)} → {r.get("vix_state","N/A")}',
+        f'- 해석: {r.get("vix_note","")}', '',
+        '## ② 수익률 곡선',
+        f'- 3개월 T-Bill: {fv(r["r3m"])}%',
+        f'- 10년 국채:    {fv(r["r10y"])}%',
+        f'- 3M/10Y 스프레드: {yc_sign}{fv(r.get("yc_spread"))}% → {r.get("yc_state","N/A")}',
+        f'- 해석: {r.get("yc_note","")}', '',
+        '## ③ 신용 스프레드 (HYG/IEF)',
+        f'- HYG: ${fv(r["hyg_now"])} ({fv(r.get("hyg_pct"),1)}%)',
+        f'- IEF: ${fv(r["ief_now"])} ({fv(r.get("ief_pct"),1)}%)',
+        f'- HYG/IEF 비율: {fv(r.get("cr_ratio_now"),4)} → {r.get("cr_state","N/A")}',
+        f'- 해석: {r.get("cr_note","")}',
+    ]
+    copy_text_js = json.dumps('\n'.join(copy_lines))
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -351,9 +378,27 @@ def generate_html(r, ts):
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
      background:#f5f6f8;color:#222;font-size:14px}}
-.header{{background:#1a237e;color:#fff;padding:20px 28px}}
+.header{{background:#1a237e;color:#fff;padding:20px 28px;
+         display:flex;align-items:flex-start;justify-content:space-between;
+         flex-wrap:wrap;gap:12px}}
 .header h1{{font-size:20px;font-weight:700}}
 .header .sub{{font-size:12px;color:#c5cae9;margin-top:4px}}
+.btn-copy{{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:8px 18px;border-radius:8px;border:none;cursor:pointer;
+  background:rgba(255,255,255,0.18);color:#fff;
+  font-size:13px;font-weight:600;transition:background .15s;white-space:nowrap;
+}}
+.btn-copy:hover{{background:rgba(255,255,255,0.30)}}
+.btn-copy.copied{{background:#1a5c3a}}
+#toast{{
+  position:fixed;bottom:28px;left:50%;
+  transform:translateX(-50%) translateY(20px);
+  background:#263238;color:#fff;
+  padding:10px 22px;border-radius:24px;font-size:14px;
+  opacity:0;transition:all .3s;pointer-events:none;z-index:9999;
+}}
+#toast.show{{opacity:1;transform:translateX(-50%) translateY(0)}}
 .container{{max-width:1100px;margin:0 auto;padding:24px 16px 60px}}
 .summary-banner{{background:{sb_bg};border:1px solid {sb_bd};border-radius:12px;
   padding:18px 22px;margin-bottom:24px;display:flex;align-items:flex-start;gap:16px}}
@@ -382,8 +427,11 @@ tr:last-child td{{border-bottom:none}}
 </head>
 <body>
 <div class="header">
-  <h1>Jason Market — 시장 스트레스 지표</h1>
-  <div class="sub">업데이트: {ts} &nbsp;|&nbsp; 완전 무료 (Yahoo Finance) &nbsp;|&nbsp; API 키 불필요</div>
+  <div>
+    <h1>Jason Market — 시장 스트레스 지표</h1>
+    <div class="sub">업데이트: {ts} &nbsp;|&nbsp; 완전 무료 (Yahoo Finance) &nbsp;|&nbsp; API 키 불필요</div>
+  </div>
+  <button class="btn-copy" id="copyBtn" onclick="copyAll()">📋 전체 복사</button>
 </div>
 <div class="container">
 
@@ -460,6 +508,38 @@ tr:last-child td{{border-bottom:none}}
     HYG/IEF 비율은 신용 스프레드 프록시 (실제 OAS: FRED BAMLH0A0HYM2 참조)
   </div>
 </div>
+
+<div id="toast"></div>
+
+<script>
+const COPY_TEXT = {copy_text_js};
+
+function showToast(msg) {{
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}}
+
+function copyAll() {{
+  const btn = document.getElementById('copyBtn');
+  navigator.clipboard.writeText(COPY_TEXT).then(() => {{
+    btn.textContent = '✅ 복사 완료!';
+    btn.classList.add('copied');
+    showToast('클립보드 복사 완료! AI에 붙여넣으세요.');
+    setTimeout(() => {{ btn.textContent = '📋 전체 복사'; btn.classList.remove('copied'); }}, 2500);
+  }}).catch(() => {{
+    const ta = document.createElement('textarea');
+    ta.value = COPY_TEXT;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('복사 완료!');
+  }});
+}}
+</script>
 </body>
 </html>"""
     return html
