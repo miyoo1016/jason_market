@@ -91,6 +91,39 @@ _COMMON_WORDS = {
 
 _TICKER_RE = re.compile(r'\$[A-Z]{1,5}|\b([A-Z]{2,5})\b')
 
+# ── 지정학·매크로 단독 통과 키워드 (100자 이상 본문에 한해) ──
+GEO_MACRO_KW = [
+    # 지정학
+    'iran', 'israel', 'middle east', 'vance', 'ceasefire', 'hormuz',
+    'escalation', 'war', 'negotiation', 'hamas', 'hezbollah', 'houthi',
+    'airstrike', 'sanctions', 'nuclear deal', 'opec',
+    'nato', 'taiwan strait', 'chip ban', 'china sanctions', 'ukraine',
+    'crude', 'brent', 'oil',
+    # 거시경제
+    'fed', 'federal reserve', 'fomc', 'cpi', 'inflation', 'pce',
+    'gdp', 'recession', 'treasury', 'yield curve',
+    'rate cut', 'rate hike', 'tariff', 'trade war',
+    # 한국어
+    '이란', '이스라엘', '중동', '밴스', '휴전', '호르무즈', '확전',
+    '유가', '전쟁', '협상', '핵협상', '헤즈볼라', '하마스', '후티',
+    '제재', '공습', '연준', '기준금리', '인플레', '금리인하', '금리인상',
+    '소비자물가', '경기침체', '관세', '무역전쟁', '대만해협', '반도체제재',
+]
+
+# ── Yahoo 헤드라인 우선순위 분류 ──────────────────────────────
+_HL_GEO = {
+    'iran', 'hormuz', 'ceasefire', 'war', 'conflict', 'vance', 'israel',
+    'oil price', 'sanctions', 'nuclear deal', 'airstrike', 'escalation', 'houthi',
+}
+_HL_MACRO = {
+    'fed', 'fomc', 'cpi', 'inflation', 'gdp', 'recession',
+    'rate cut', 'rate hike', 'treasury yield', 'pce',
+    'unemployment', 'payroll', 'tariff', 'trade war',
+}
+_HL_MARKET = {
+    's&p', 'nasdaq', 'dow', 'market', 'earnings season', 'guidance', 'outlook',
+}
+
 DEFAULT_SEEDS = {
     "reddit_subreddits": [
         "stocks", "options", "investing", "StockMarket", "SecurityAnalysis"
@@ -319,6 +352,60 @@ def has_relevance(text: str) -> bool:
     return _has_asset(text) and _has_direction(text)
 
 
+def _geo_macro_hit(text: str) -> str | None:
+    """지정학·매크로 키워드 매칭 → 처음 히트한 키워드 반환, 없으면 None"""
+    lower = text.lower()
+    for kw in GEO_MACRO_KW:
+        if kw in lower:
+            return kw
+    return None
+
+
+def check_reddit_pass(excerpt: str, text: str) -> str | None:
+    """Reddit 글 수집 통과 여부 판정.
+    반환값: 'ASSET_DIRECTION' | 'GEO_MACRO:<kw>' | None(탈락)
+
+    순서 (변경 금지):
+      1. 단문 체크 → 100자 미만이면 지정학 여부 무관 탈락
+      2. 자산+방향 AND 조건 → 통과
+      3. 지정학·매크로 단독 → 통과
+      4. 그 외 → 탈락
+    단, 단문 체크(① 100자)는 collect_reddit() 에서 MIN_EXCERPT_CHARS(150자) 체크 이후에
+    호출되므로, 이 함수에서는 이미 150자 이상이 보장된 상태.
+    → 지정학 경로는 별도 100자 체크 불필요 (호출 시점에 이미 통과).
+    """
+    if has_relevance(text):
+        return 'ASSET_DIRECTION'
+    hit = _geo_macro_hit(text)
+    if hit:
+        return f'GEO_MACRO:{hit}'
+    return None
+
+
+def _classify_headline(title: str) -> tuple:
+    """Yahoo 헤드라인 우선순위 분류 → (priority:int, label:str)"""
+    lower = title.lower()
+    for kw in _HL_GEO:
+        if kw in lower:
+            return (1, '🚨 지정학속보')
+    for kw in _HL_MACRO:
+        if kw in lower:
+            return (2, '📊 거시경제')
+    for kw in _HL_MARKET:
+        if kw in lower:
+            return (3, '📈 시장전반')
+    return (4, '🏢 개별종목')
+
+
+def sort_headlines(headlines: list) -> list:
+    """우선순위 정렬 후 상위 8개 반환. 각 항목에 'priority', 'label' 키 추가."""
+    for h in headlines:
+        pri, lbl = _classify_headline(h['title'])
+        h['priority'] = pri
+        h['label']    = lbl
+    return sorted(headlines, key=lambda h: h['priority'])[:8]
+
+
 def excerpt_md(text: str) -> str:
     """MD 저장용: 800자 초과 시 말줄임"""
     if len(text) > MAX_EXCERPT_MD:
@@ -522,16 +609,21 @@ def collect_reddit(seeds: dict, stats: dict) -> list:
                 stats['filtered_stale'] += 1
                 n_stale += 1
                 continue
-            # 단문 필터
+            # 단문 필터 (반드시 지정학 체크보다 먼저)
             if len(p['excerpt']) < MIN_EXCERPT_CHARS:
                 stats['filtered_short'] += 1
                 n_short += 1
                 continue
-            # [OR] 예측KW 또는 자산KW 있어야 수집
-            if not has_relevance(p['title'] + ' ' + p['excerpt']):
+            # 자산+방향 OR 지정학·매크로 단독 통과
+            reason = check_reddit_pass(
+                p['excerpt'],
+                p['title'] + ' ' + p['excerpt']
+            )
+            if reason is None:
                 stats['filtered_no_signal'] += 1
                 n_nosig += 1
                 continue
+            p['pass_reason'] = reason
             accepted.append(p)
             if len(accepted) >= max_n:
                 break
@@ -543,7 +635,11 @@ def collect_reddit(seeds: dict, stats: dict) -> list:
         if n_short:  detail.append(f'단문 {n_short}')
         if n_nosig:  detail.append(f'자산+방향미충족 {n_nosig}')
         detail_str = ' | '.join(detail)
-        print(f"{CYAN}{len(accepted)}개 신규{RESET}"
+        # 통과 이유 샘플 로그 (GEO_MACRO 통과 글만 표시)
+        geo_samples = [p['pass_reason'] for p in accepted
+                       if p.get('pass_reason', '').startswith('GEO_MACRO')]
+        geo_log = f' [{", ".join(geo_samples[:3])}]' if geo_samples else ''
+        print(f"{CYAN}{len(accepted)}개 신규{geo_log}{RESET}"
               + (f" ({detail_str} 제거)" if detail_str else ""))
         rand_delay()
 
@@ -671,8 +767,8 @@ def _fetch_cot_sp500() -> dict | None:
         return None
 
 
-def _fetch_yahoo_headlines(n: int = 5) -> list:
-    """Yahoo Finance RSS — 거시/증시 헤드라인"""
+def _fetch_yahoo_headlines(n: int = 20) -> list:
+    """Yahoo Finance RSS — 거시/증시 헤드라인 (우선순위 정렬 후 상위 8개 반환)"""
     feeds = [
         'https://finance.yahoo.com/news/rss/',
         'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US',
@@ -693,7 +789,7 @@ def _fetch_yahoo_headlines(n: int = 5) -> list:
                 if title:
                     results.append({'title': title, 'url': link, 'date': pub})
             if results:
-                return results
+                return sort_headlines(results)
         except Exception:
             continue
     return []
@@ -714,7 +810,7 @@ def build_macro_dashboard() -> tuple:
     print(f"{CYAN}완료{RESET}" if cot else f"{AMBER}실패{RESET}")
 
     print(f"  {CYAN}→ Yahoo Finance 헤드라인 수집 중...{RESET}", end=' ', flush=True)
-    headlines = _fetch_yahoo_headlines(5)
+    headlines = _fetch_yahoo_headlines(20)
     print(f"{CYAN}{len(headlines)}건{RESET}" if headlines else f"{AMBER}실패{RESET}")
 
     # ── 마크다운 생성 ────────────────────────────────────────
@@ -754,10 +850,14 @@ def build_macro_dashboard() -> tuple:
 
     lines.append('')
 
-    # 3. Yahoo Finance 헤드라인
+    # 3. Yahoo Finance 헤드라인 (우선순위 그룹별)
     lines.append('### 📰 주요 거시/증시 헤드라인 (Yahoo Finance)')
     if headlines:
+        cur_label = None
         for h in headlines:
+            if h.get('label') != cur_label:
+                cur_label = h.get('label', '')
+                lines.append(f'\n**{cur_label}**')
             title = h['title'].replace('[', '\\[').replace(']', '\\]')
             lines.append(f'- [{title}]({h["url"]})  _{h["date"]}_')
     else:
@@ -983,12 +1083,29 @@ def build_macro_html(macro_data: dict) -> str:
 
     # ── Yahoo Headlines ───────────────────────────────────────
     if headlines:
-        hl_items = '\n'.join(
-            f'<li><a href="{h["url"]}" target="_blank" rel="noopener">'
-            f'{h["title"].replace("<","&lt;").replace(">","&gt;")}'
-            f'</a> <span class="hl-date">{h["date"]}</span></li>'
-            for h in headlines
-        )
+        # 그룹별 소제목 + 아이템
+        hl_parts = []
+        cur_label = None
+        for h in headlines:
+            lbl = h.get('label', '🏢 개별종목')
+            if lbl != cur_label:
+                cur_label = lbl
+                # 레이블별 색상
+                lbl_color = {
+                    '🚨 지정학속보': '#c62828',
+                    '📊 거시경제':   '#00838f',
+                    '📈 시장전반':   '#1a5c3a',
+                    '🏢 개별종목':   '#7a7060',
+                }.get(lbl, '#7a7060')
+                hl_parts.append(
+                    f'<li class="hl-group-title" style="color:{lbl_color}">{lbl}</li>'
+                )
+            title_esc = h['title'].replace('<', '&lt;').replace('>', '&gt;')
+            hl_parts.append(
+                f'<li><a href="{h["url"]}" target="_blank" rel="noopener">'
+                f'{title_esc}</a> <span class="hl-date">{h["date"]}</span></li>'
+            )
+        hl_items = '\n'.join(hl_parts)
         hl_html = f'''
 <div class="mcd-headlines">
   <div class="mcd-card-title">📰 주요 거시/증시 헤드라인 (Yahoo Finance)</div>
@@ -1231,6 +1348,11 @@ def generate_html(posts: list, md_text: str, ts: str,
   .hl-list a {{ color: #3b3529; text-decoration: none; flex: 1; }}
   .hl-list a:hover {{ color: #6b4f2a; text-decoration: underline; }}
   .hl-date {{ font-size: 11px; color: #aaa098; white-space: nowrap; }}
+  .hl-group-title {{
+    padding: 8px 0 3px; border-bottom: none;
+    font-size: 11px; font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; pointer-events: none;
+  }}
 
   #toast {{
     position: fixed; bottom: 30px; left: 50%;
