@@ -480,24 +480,54 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
     gdc = pnl_color(grand_daily)
 
     # ── 히트맵 데이터 (JS 임베드용) ─────────────────────────
+    # 같은 종목이 여러 계좌에 있으면 평가금액 합산, 수익률은 가중평균
     import json as _json
-    heatmap_items = []
+    _hm_merged = {}   # name → dict
     for acc, d in accounts_data.items():
         for r in d['rows']:
             if r['is_cash']:
                 continue
-            daily_pct = round(r['daily_profit_krw'] / r['val_krw'] * 100, 2) \
-                        if r['val_krw'] else 0
-            heatmap_items.append({
-                'name':       r['name'],
-                'pct':        round(r['pct'], 2),        # 총 수익률 %
-                'daily_pct':  daily_pct,                 # 일일 수익률 %
-                'val':        round(r['val_krw']),
-                'daily_krw':  round(r['daily_profit_krw']),
-                'price':      r['price'],
-                'avg':        r['avg'],
-                'acc':        acc,
-            })
+            name     = r['name']
+            val      = r['val_krw']
+            daily_krw = r['daily_profit_krw']
+            pct      = r['pct']
+            daily_pct = (daily_krw / val * 100) if val else 0
+
+            if name in _hm_merged:
+                ex = _hm_merged[name]
+                old_val   = ex['val']
+                total_val = old_val + val
+                # 수익률: 평가금액 가중평균
+                ex['pct']       = (ex['pct'] * old_val + pct * val) / total_val if total_val else 0
+                ex['daily_krw'] = ex['daily_krw'] + daily_krw
+                ex['daily_pct'] = ex['daily_krw'] / total_val * 100 if total_val else 0
+                ex['val']       = total_val
+                # 계좌명: 두 계좌 모두 표시
+                if acc not in ex['acc']:
+                    ex['acc'] += ' + ' + acc
+            else:
+                _hm_merged[name] = {
+                    'name':      name,
+                    'pct':       pct,
+                    'daily_pct': daily_pct,
+                    'val':       val,
+                    'daily_krw': daily_krw,
+                    'price':     r['price'],
+                    'acc':       acc,
+                }
+
+    # 최종 반올림
+    heatmap_items = []
+    for it in _hm_merged.values():
+        heatmap_items.append({
+            'name':      it['name'],
+            'pct':       round(it['pct'], 2),
+            'daily_pct': round(it['daily_pct'], 2),
+            'val':       round(it['val']),
+            'daily_krw': round(it['daily_krw']),
+            'price':     it['price'],
+            'acc':       it['acc'],
+        })
     heatmap_json = _json.dumps(heatmap_items, ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
