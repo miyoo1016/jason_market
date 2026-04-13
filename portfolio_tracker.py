@@ -479,6 +479,24 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
     gpc = pnl_color(grand_profit)
     gdc = pnl_color(grand_daily)
 
+    # ── 히트맵 데이터 (JS 임베드용) ─────────────────────────
+    import json as _json
+    heatmap_items = []
+    for acc, d in accounts_data.items():
+        for r in d['rows']:
+            if r['is_cash']:
+                continue
+            heatmap_items.append({
+                'name':  r['name'],
+                'pct':   round(r['pct'], 2),
+                'val':   round(r['val_krw']),
+                'daily': round(r['daily_profit_krw']),
+                'price': r['price'],
+                'avg':   r['avg'],
+                'acc':   acc,
+            })
+    heatmap_json = _json.dumps(heatmap_items, ensure_ascii=False)
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -488,9 +506,16 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6f8;color:#222;font-size:14px}}
-.header{{background:#1a1a2e;color:#fff;padding:20px 28px}}
+.header{{background:#1a1a2e;color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+.header-text{{flex:1}}
 .header h1{{font-size:20px;font-weight:700}}
 .header .sub{{font-size:12px;color:#aaa;margin-top:3px}}
+.btn-heatmap{{padding:8px 18px;background:#00838f;color:#fff;border:none;border-radius:7px;
+              cursor:pointer;font-size:13px;font-weight:700;letter-spacing:.3px;
+              box-shadow:0 2px 8px rgba(0,0,0,.25);transition:background .2s;white-space:nowrap}}
+.btn-heatmap:hover{{background:#00696f}}
+.btn-heatmap.active{{background:#e65100}}
+.btn-heatmap.active:hover{{background:#bf4000}}
 .container{{max-width:1400px;margin:0 auto;padding:20px 16px 60px}}
 .summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-bottom:20px}}
 .sbox{{background:#fff;border-radius:10px;padding:16px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08)}}
@@ -517,14 +542,59 @@ tr:hover td{{background:#fafafa}}
 .name-cell{{font-weight:600}}
 .fx-tag{{font-size:10px;padding:2px 4px;background:#f0f7ff;color:#0056b3;border-radius:3px;margin-left:4px}}
 .footer{{text-align:center;font-size:11px;color:#bbb;margin-top:30px}}
+
+/* ── 히트맵 ────────────────────────────────────────────── */
+#heatmap-view{{display:none;margin-bottom:20px}}
+#heatmap-view.show{{display:block}}
+.hm-wrap{{
+  background:#fff;border-radius:12px;padding:20px;
+  box-shadow:0 1px 6px rgba(0,0,0,.08);
+}}
+.hm-title{{font-size:13px;color:#888;margin-bottom:14px;font-weight:600;letter-spacing:.3px}}
+.hm-grid{{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;
+}}
+.hm-tile{{
+  border-radius:9px;padding:10px 12px;cursor:default;
+  display:flex;flex-direction:column;justify-content:space-between;
+  min-width:80px;min-height:70px;position:relative;
+  transition:transform .15s,box-shadow .15s;
+  overflow:hidden;
+}}
+.hm-tile:hover{{transform:scale(1.04);box-shadow:0 4px 16px rgba(0,0,0,.18);z-index:10}}
+.hm-name{{font-size:12px;font-weight:800;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.3);line-height:1.2}}
+.hm-pct{{font-size:16px;font-weight:900;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.3);margin-top:4px;line-height:1}}
+.hm-val{{font-size:10px;color:rgba(255,255,255,.8);margin-top:3px}}
+.hm-acc{{font-size:9px;color:rgba(255,255,255,.6);position:absolute;top:6px;right:8px}}
+.hm-legend{{display:flex;align-items:center;gap:6px;margin-top:14px;font-size:11px;color:#888}}
+.hm-legend-bar{{height:10px;width:200px;border-radius:5px;
+  background:linear-gradient(to right,#b71c1c,#ef5350,#ffcdd2,#e0f2f1,#80cbc4,#00838f,#004d50)}}
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>Jason Market — 포트폴리오 손익</h1>
-  <div class="sub">업데이트: {timestamp} &nbsp;|&nbsp; 실시간 환율 ₩{usdkrw:,.2f}/USD</div>
+  <div class="header-text">
+    <h1>Jason Market — 포트폴리오 손익</h1>
+    <div class="sub">업데이트: {timestamp} &nbsp;|&nbsp; 실시간 환율 ₩{usdkrw:,.2f}/USD</div>
+  </div>
+  <button class="btn-heatmap" id="btn-hm" onclick="toggleHeatmap()">🟦 히트맵 보기</button>
 </div>
 <div class="container">
+  <!-- 히트맵 뷰 -->
+  <div id="heatmap-view">
+    <div class="hm-wrap">
+      <div class="hm-title">📊 포트폴리오 히트맵 &nbsp;·&nbsp; 타일 크기 = 평가금액 비례 &nbsp;·&nbsp; 색상 = 총 수익률</div>
+      <div class="hm-grid" id="hm-grid"></div>
+      <div class="hm-legend">
+        <span>-10%↓</span>
+        <div class="hm-legend-bar"></div>
+        <span>+10%↑</span>
+        &nbsp;&nbsp;색상: 수익률 기준
+      </div>
+    </div>
+  </div>
+
+  <div id="table-view">
   <div class="summary">
     <div class="sbox grand">
       <div class="sl">총 평가금액</div>
@@ -544,10 +614,99 @@ tr:hover td{{background:#fafafa}}
   </div>
   {account_sections}
   <div class="footer">Jason Market · {timestamp} · 구글드라이브 자산계산기.xlsx 자동 동기화</div>
+  </div><!-- /table-view -->
 </div>
-<button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#1a5fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 3px 12px rgba(0,0,0,.3)">📋 전체 복사</button>
+<button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#00838f;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 3px 12px rgba(0,0,0,.2)">📋 전체 복사</button>
 <script>
-function copyReport(){{var el=document.querySelector('.page,.main-content,main')||document.body;navigator.clipboard.writeText(el.innerText).then(function(){{var b=document.getElementById('copy-btn');b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#1a5fa8';}},2500);}}).catch(function(){{var t=document.createElement('textarea');t.value=el.innerText;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);}});}}
+var _hmData = {heatmap_json};
+var _hmBuilt = false;
+
+/* ── 히트맵 색상 계산 ─────────────────────────────────── */
+function hmColor(pct) {{
+  // -10% ~ +10% 기준으로 색상 보간
+  var t = Math.max(-1, Math.min(1, pct / 10));  // -1 ~ +1
+  if (t >= 0) {{
+    // 0 → #e0f2f1(연한teal) → 1 → #004d50(진한teal)
+    var r = Math.round(224 + (0   - 224) * t);
+    var g = Math.round(242 + (77  - 242) * t);
+    var b = Math.round(241 + (80  - 241) * t);
+    return 'rgb('+r+','+g+','+b+')';
+  }} else {{
+    // 0 → #ffcdd2(연한red) → -1 → #b71c1c(진한red)
+    var s = -t;
+    var r = Math.round(255 + (183 - 255) * s);
+    var g = Math.round(205 + (28  - 205) * s);
+    var b = Math.round(210 + (28  - 210) * s);
+    return 'rgb('+r+','+g+','+b+')';
+  }}
+}}
+
+/* ── 히트맵 렌더링 ────────────────────────────────────── */
+function buildHeatmap() {{
+  if (_hmBuilt) return;
+  _hmBuilt = true;
+  var grid = document.getElementById('hm-grid');
+  var items = _hmData.slice().sort(function(a,b){{return b.val - a.val;}});
+  var totalVal = items.reduce(function(s,x){{return s+x.val;}}, 0);
+
+  items.forEach(function(item) {{
+    var frac   = totalVal > 0 ? item.val / totalVal : 1 / items.length;
+    // 타일 너비: 최소 90px ~ 최대 280px, 비례
+    var w = Math.max(90, Math.min(280, Math.round(frac * 900)));
+    // 타일 높이: 너비와 비례해 읽기 좋게
+    var h = Math.max(70, Math.min(120, Math.round(w * 0.52)));
+    var bg = hmColor(item.pct);
+    var sign = item.pct >= 0 ? '+' : '';
+    var valStr = item.val >= 1e8
+      ? (item.val/1e8).toFixed(1)+'억'
+      : (item.val/1e4).toFixed(0)+'만';
+
+    var tile = document.createElement('div');
+    tile.className = 'hm-tile';
+    tile.style.cssText = 'background:'+bg+';width:'+w+'px;height:'+h+'px';
+    tile.title = item.name+' | 수익률 '+sign+item.pct+'% | 평가금액 ₩'+item.val.toLocaleString()+' | 현재가 '+item.price;
+    tile.innerHTML =
+      '<span class="hm-acc">'+item.acc+'</span>'+
+      '<span class="hm-name">'+item.name+'</span>'+
+      '<span class="hm-pct">'+sign+item.pct+'%</span>'+
+      '<span class="hm-val">₩'+valStr+'</span>';
+    grid.appendChild(tile);
+  }});
+}}
+
+/* ── 토글 ─────────────────────────────────────────────── */
+function toggleHeatmap() {{
+  var hv  = document.getElementById('heatmap-view');
+  var tv  = document.getElementById('table-view');
+  var btn = document.getElementById('btn-hm');
+  var showing = hv.classList.contains('show');
+  if (showing) {{
+    hv.classList.remove('show');
+    tv.style.display = '';
+    btn.textContent = '🟦 히트맵 보기';
+    btn.classList.remove('active');
+  }} else {{
+    buildHeatmap();
+    hv.classList.add('show');
+    tv.style.display = 'none';
+    btn.textContent = '📋 테이블 보기';
+    btn.classList.add('active');
+    window.scrollTo({{top:0, behavior:'smooth'}});
+  }}
+}}
+
+/* ── 복사 ─────────────────────────────────────────────── */
+function copyReport(){{
+  var el = document.querySelector('#table-view')||document.body;
+  navigator.clipboard.writeText(el.innerText).then(function(){{
+    var b=document.getElementById('copy-btn');
+    b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';
+    setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#00838f';}},2500);
+  }}).catch(function(){{
+    var t=document.createElement('textarea');t.value=el.innerText;
+    document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
+  }});
+}}
 </script>
 </body>
 </html>"""
