@@ -480,53 +480,57 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
     gdc = pnl_color(grand_daily)
 
     # ── 히트맵 데이터 (JS 임베드용) ─────────────────────────
-    # 같은 종목이 여러 계좌에 있으면 평가금액 합산, 수익률은 가중평균
+    # 같은 종목이 여러 계좌에 있으면 평가금액·손익 합산, 수익률은 가중평균
+    # 현금 포함 (pct=0, profit=0)
     import json as _json
     _hm_merged = {}   # name → dict
     for acc, d in accounts_data.items():
         for r in d['rows']:
-            if r['is_cash']:
-                continue
-            name     = r['name']
-            val      = r['val_krw']
+            name      = r['name']
+            val       = r['val_krw']
             daily_krw = r['daily_profit_krw']
-            pct      = r['pct']
+            profit_krw = r['profit_krw']          # 총 증감금액
+            pct       = r['pct']
             daily_pct = (daily_krw / val * 100) if val else 0
+            is_cash   = r['is_cash']
 
             if name in _hm_merged:
                 ex = _hm_merged[name]
                 old_val   = ex['val']
                 total_val = old_val + val
-                # 수익률: 평가금액 가중평균
-                ex['pct']       = (ex['pct'] * old_val + pct * val) / total_val if total_val else 0
-                ex['daily_krw'] = ex['daily_krw'] + daily_krw
-                ex['daily_pct'] = ex['daily_krw'] / total_val * 100 if total_val else 0
-                ex['val']       = total_val
-                # 계좌명: 두 계좌 모두 표시
+                ex['pct']        = (ex['pct'] * old_val + pct * val) / total_val if total_val else 0
+                ex['daily_krw']  += daily_krw
+                ex['profit_krw'] += profit_krw
+                ex['daily_pct']  = ex['daily_krw'] / total_val * 100 if total_val else 0
+                ex['val']        = total_val
                 if acc not in ex['acc']:
                     ex['acc'] += ' + ' + acc
             else:
                 _hm_merged[name] = {
-                    'name':      name,
-                    'pct':       pct,
-                    'daily_pct': daily_pct,
-                    'val':       val,
-                    'daily_krw': daily_krw,
-                    'price':     r['price'],
-                    'acc':       acc,
+                    'name':       name,
+                    'pct':        pct,
+                    'daily_pct':  daily_pct,
+                    'val':        val,
+                    'daily_krw':  daily_krw,
+                    'profit_krw': profit_krw,
+                    'price':      r.get('price', ''),
+                    'acc':        acc,
+                    'is_cash':    is_cash,
                 }
 
     # 최종 반올림
     heatmap_items = []
     for it in _hm_merged.values():
         heatmap_items.append({
-            'name':      it['name'],
-            'pct':       round(it['pct'], 2),
-            'daily_pct': round(it['daily_pct'], 2),
-            'val':       round(it['val']),
-            'daily_krw': round(it['daily_krw']),
-            'price':     it['price'],
-            'acc':       it['acc'],
+            'name':       it['name'],
+            'pct':        round(it['pct'], 2),
+            'daily_pct':  round(it['daily_pct'], 2),
+            'val':        round(it['val']),
+            'daily_krw':  round(it['daily_krw']),
+            'profit_krw': round(it['profit_krw']),
+            'price':      it['price'],
+            'acc':        it['acc'],
+            'is_cash':    it['is_cash'],
         })
     heatmap_json = _json.dumps(heatmap_items, ensure_ascii=False)
 
@@ -767,6 +771,21 @@ var _mode    = 'total';   /* 'total' | 'daily' */
 var _tilRefs = [];        /* {{inner, pctEl, item, div}} */
 
 /* ══════════════════════════════════
+   금액 포맷  (±₩1.2억 / ±₩234만)
+   ══════════════════════════════════ */
+function fmtKrw(v) {{
+  var sign = v >= 0 ? '+' : '-';
+  var abs  = Math.abs(v);
+  if (abs >= 1e8) return sign+'₩'+(abs/1e8).toFixed(1)+'억';
+  if (abs >= 1e4) return sign+'₩'+Math.round(abs/1e4)+'만';
+  return sign+'₩'+abs.toLocaleString();
+}}
+function fmtVal(v) {{
+  if (v >= 1e8) return '₩'+(v/1e8).toFixed(1)+'억';
+  return '₩'+Math.round(v/1e4)+'만';
+}}
+
+/* ══════════════════════════════════
    타일 렌더링 (최초 1회)
    ══════════════════════════════════ */
 function buildHeatmap() {{
@@ -781,57 +800,82 @@ function buildHeatmap() {{
   tiles.forEach(function(t) {{
     var item    = t.item;
     var minSide = Math.min(t.w, t.h);
-    var fName = Math.max(9,  Math.min(16, minSide * 0.18)) + 'px';
-    var fPct  = Math.max(11, Math.min(22, minSide * 0.22)) + 'px';
-    var fVal  = Math.max(8,  Math.min(12, minSide * 0.12)) + 'px';
-    var showVal  = minSide > 50;
-    var showName = t.w > 40 && t.h > 30;
 
-    var valStr = item.val >= 1e8
-      ? (item.val/1e8).toFixed(1)+'억'
-      : Math.round(item.val/1e4)+'만';
+    /* 타일 크기에 따라 표시 레벨 결정 */
+    var showName   = t.w > 45  && t.h > 28;
+    var showPct    = t.w > 30  && t.h > 22;
+    var showVal    = minSide > 55;
+    var showDaily  = minSide > 75;
+    var showProfit = minSide > 90;
 
-    /* 타일 외곽 (절대 위치) */
+    var fName   = Math.max(9,  Math.min(15, minSide*0.17)) + 'px';
+    var fPct    = Math.max(10, Math.min(20, minSide*0.20)) + 'px';
+    var fSub    = Math.max(8,  Math.min(11, minSide*0.11)) + 'px';
+
+    /* 타일 외곽 */
     var div = document.createElement('div');
     div.className = 'hm-tile';
     div.style.cssText = 'left:'+t.x+'px;top:'+t.y+'px;width:'+t.w+'px;height:'+t.h+'px';
 
-    /* 내부 (색상·텍스트) */
+    /* 내부 */
     var inner = document.createElement('div');
     inner.className = 'hm-inner';
 
-    /* 종목명 */
-    var nameEl = null;
+    /* ① 종목명 */
     if (showName) {{
-      nameEl = document.createElement('div');
-      nameEl.className = 'hm-name';
-      nameEl.style.fontSize = fName;
-      nameEl.textContent = item.name;
-      inner.appendChild(nameEl);
+      var el = document.createElement('div');
+      el.className  = 'hm-name';
+      el.style.fontSize = fName;
+      el.textContent = item.is_cash ? '현금' : item.name;
+      inner.appendChild(el);
     }}
 
-    /* 수익률 (모드에 따라 바뀌는 부분) */
-    var pctEl = document.createElement('div');
-    pctEl.className = 'hm-pct';
-    pctEl.style.fontSize = fPct;
-    inner.appendChild(pctEl);
+    /* ② 증감율 (모드 전환 대상) */
+    var pctEl = null;
+    if (showPct) {{
+      pctEl = document.createElement('div');
+      pctEl.className = 'hm-pct';
+      pctEl.style.fontSize = fPct;
+      inner.appendChild(pctEl);
+    }}
 
-    /* 평가금액 */
+    /* ③ 총 평가액 */
     if (showVal) {{
-      var valEl = document.createElement('div');
-      valEl.className = 'hm-val';
-      valEl.style.fontSize = fVal;
-      valEl.textContent = '₩'+valStr;
-      inner.appendChild(valEl);
+      var el = document.createElement('div');
+      el.className = 'hm-val';
+      el.style.fontSize = fSub;
+      el.textContent = fmtVal(item.val);
+      inner.appendChild(el);
+    }}
+
+    /* ④ 일일 증감금액 (모드 전환 대상) */
+    var dailyEl = null;
+    if (showDaily) {{
+      dailyEl = document.createElement('div');
+      dailyEl.className = 'hm-val';
+      dailyEl.style.fontSize = fSub;
+      inner.appendChild(dailyEl);
+    }}
+
+    /* ⑤ 총 증감금액 */
+    var profitEl = null;
+    if (showProfit) {{
+      profitEl = document.createElement('div');
+      profitEl.className = 'hm-val';
+      profitEl.style.fontSize = fSub;
+      inner.appendChild(profitEl);
     }}
 
     div.appendChild(inner);
     canvas.appendChild(div);
 
-    _tilRefs.push({{inner:inner, pctEl:pctEl, div:div, item:item}});
+    _tilRefs.push({{
+      inner:inner, pctEl:pctEl, dailyEl:dailyEl, profitEl:profitEl,
+      div:div, item:item
+    }});
   }});
 
-  /* 초기 색상 적용 */
+  /* 초기 색상·수치 적용 */
   _applyMode();
 }}
 
@@ -840,14 +884,33 @@ function buildHeatmap() {{
    ══════════════════════════════════ */
 function _applyMode() {{
   _tilRefs.forEach(function(ref) {{
-    var pct  = _mode === 'daily' ? ref.item.daily_pct : ref.item.pct;
+    var item = ref.item;
+    var pct  = _mode === 'daily' ? item.daily_pct : item.pct;
     var sign = pct >= 0 ? '+' : '';
-    ref.inner.style.background = hmColor(pct);
-    ref.pctEl.textContent      = sign + pct + '%';
-    var krw  = _mode === 'daily' ? ref.item.daily_krw : null;
-    var base = ref.item.name + ' | ' + sign + pct + '%';
-    if (krw !== null) base += ' (' + (krw>=0?'+':'') + '₩' + krw.toLocaleString() + ')';
-    ref.div.title = base + ' | 평가 ₩' + ref.item.val.toLocaleString() + ' | ' + ref.item.acc;
+
+    /* 색상: 현금은 항상 중립 어두운 회색 */
+    ref.inner.style.background = item.is_cash ? '#1e2a3a' : hmColor(pct);
+
+    /* ② 증감율 */
+    if (ref.pctEl)
+      ref.pctEl.textContent = item.is_cash ? '0.00%' : (sign+pct+'%');
+
+    /* ④ 일일 증감금액 */
+    if (ref.dailyEl)
+      ref.dailyEl.textContent = '일 ' + fmtKrw(item.daily_krw);
+
+    /* ⑤ 총 증감금액 */
+    if (ref.profitEl)
+      ref.profitEl.textContent = '총 ' + fmtKrw(item.profit_krw);
+
+    /* 툴팁 */
+    ref.div.title =
+      item.name +
+      ' | ' + (_mode==='daily'?'일일':'총') + ' ' + sign + pct + '%' +
+      ' | 평가 ' + fmtVal(item.val) +
+      ' | 일 ' + fmtKrw(item.daily_krw) +
+      ' | 총 ' + fmtKrw(item.profit_krw) +
+      ' | ' + item.acc;
   }});
 }}
 
