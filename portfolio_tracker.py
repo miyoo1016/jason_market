@@ -486,14 +486,17 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
         for r in d['rows']:
             if r['is_cash']:
                 continue
+            daily_pct = round(r['daily_profit_krw'] / r['val_krw'] * 100, 2) \
+                        if r['val_krw'] else 0
             heatmap_items.append({
-                'name':  r['name'],
-                'pct':   round(r['pct'], 2),
-                'val':   round(r['val_krw']),
-                'daily': round(r['daily_profit_krw']),
-                'price': r['price'],
-                'avg':   r['avg'],
-                'acc':   acc,
+                'name':       r['name'],
+                'pct':        round(r['pct'], 2),        # 총 수익률 %
+                'daily_pct':  daily_pct,                 # 일일 수익률 %
+                'val':        round(r['val_krw']),
+                'daily_krw':  round(r['daily_profit_krw']),
+                'price':      r['price'],
+                'avg':        r['avg'],
+                'acc':        acc,
             })
     heatmap_json = _json.dumps(heatmap_items, ensure_ascii=False)
 
@@ -550,43 +553,41 @@ tr:hover td{{background:#fafafa}}
   background:#131722;border-radius:12px;padding:16px 16px 12px;
   box-shadow:0 2px 12px rgba(0,0,0,.18);
 }}
-.hm-title{{font-size:12px;color:#8a9bb0;margin-bottom:12px;font-weight:600;letter-spacing:.4px}}
+.hm-header{{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}}
+.hm-title{{font-size:12px;color:#8a9bb0;font-weight:600;letter-spacing:.4px;flex:1}}
+.hm-tabs{{display:flex;gap:6px}}
+.hm-tab{{
+  padding:5px 14px;font-size:12px;font-weight:700;border:none;
+  border-radius:5px;cursor:pointer;transition:background .15s,color .15s;
+  background:#1e2a3a;color:#8a9bb0;
+}}
+.hm-tab.active{{background:#00838f;color:#fff}}
 #hm-canvas{{
-  position:relative;width:100%;height:520px;overflow:hidden;
-  border-radius:6px;
+  position:relative;width:100%;height:520px;overflow:hidden;border-radius:6px;
 }}
-.hm-tile{{
-  position:absolute;box-sizing:border-box;padding:2px;cursor:default;
-}}
+.hm-tile{{position:absolute;box-sizing:border-box;padding:2px;cursor:default;}}
 .hm-inner{{
   width:100%;height:100%;border-radius:4px;
   display:flex;flex-direction:column;justify-content:center;align-items:center;
-  overflow:hidden;transition:filter .15s;
+  overflow:hidden;transition:filter .15s,background .3s;
 }}
-.hm-tile:hover .hm-inner{{filter:brightness(1.18);}}
+.hm-tile:hover .hm-inner{{filter:brightness(1.25);}}
 .hm-name{{
   font-size:13px;font-weight:800;color:#fff;
-  text-shadow:0 1px 3px rgba(0,0,0,.5);
+  text-shadow:0 1px 3px rgba(0,0,0,.6);
   text-align:center;line-height:1.2;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  max-width:90%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%;
 }}
 .hm-pct{{
   font-size:15px;font-weight:900;color:#fff;
-  text-shadow:0 1px 3px rgba(0,0,0,.5);
-  margin-top:3px;line-height:1;
+  text-shadow:0 1px 3px rgba(0,0,0,.6);margin-top:3px;line-height:1;
 }}
-.hm-val{{
-  font-size:10px;color:rgba(255,255,255,.65);
-  margin-top:2px;
-}}
-.hm-legend{{
-  display:flex;align-items:center;gap:8px;
-  margin-top:10px;font-size:11px;color:#6b7a90;
-}}
+.hm-val{{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px;}}
+.hm-legend{{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#6b7a90}}
 .hm-legend-bar{{
   flex:1;height:8px;border-radius:4px;
-  background:linear-gradient(to right,#7f0000,#c62828,#5a1a1a,#1a3a1a,#2e7d32,#1b5e20);
+  background:linear-gradient(to right,
+    #ff3c3c,#c62828,#5a1a1a,#1a2a1a,#1a6e3a,#00dc5a);
 }}
 </style>
 </head>
@@ -602,13 +603,19 @@ tr:hover td{{background:#fafafa}}
   <!-- 히트맵 뷰 -->
   <div id="heatmap-view">
     <div class="hm-wrap">
-      <div class="hm-title">PORTFOLIO HEATMAP &nbsp;·&nbsp; 타일 크기 = 평가금액 비중 &nbsp;·&nbsp; 색상 강도 = 수익률</div>
+      <div class="hm-header">
+        <div class="hm-title">PORTFOLIO HEATMAP &nbsp;·&nbsp; 타일 크기 = 평가금액 비중</div>
+        <div class="hm-tabs">
+          <button class="hm-tab active" id="tab-total" onclick="switchMode('total')">📊 총 수익률</button>
+          <button class="hm-tab"        id="tab-daily" onclick="switchMode('daily')">📅 일일 수익률</button>
+        </div>
+      </div>
       <div id="hm-canvas"></div>
       <div class="hm-legend">
-        <span style="color:#c62828">▼ 손실</span>
+        <span style="color:#ff3c3c">▼ 대폭 하락</span>
         <div class="hm-legend-bar"></div>
-        <span style="color:#2e7d32">▲ 수익</span>
-        &nbsp;&nbsp;<span>색상 기준: ±10%</span>
+        <span style="color:#00dc5a">▲ 대폭 상승</span>
+        &nbsp;|&nbsp;<span>색상 기준 ±10%</span>
       </div>
     </div>
   </div>
@@ -699,29 +706,38 @@ function squarify(nodes, x, y, w, h) {{
   return out;
 }}
 
-/* ══════════════════════════════════
-   색상 계산  ±10% 기준 green ↔ red
-   ══════════════════════════════════ */
+/* ══════════════════════════════════════════════════════
+   색상 계산
+   0% 근처 = 어두운 중립
+   상승 폭 클수록 → 밝은 녹색 (#00dc5a)
+   하락 폭 클수록 → 밝은 빨간색 (#ff3c3c)
+   기준: ±10%  (초과분은 클리핑)
+   ══════════════════════════════════════════════════════ */
 function hmColor(pct) {{
-  var t = Math.max(-1, Math.min(1, pct / 10));
+  var t = Math.min(1, Math.abs(pct) / 10);   /* 0 → 1 (폭 크기) */
   var r, g, b;
-  if (t >= 0) {{
-    /* 중립(#1e3a2a) → 진한초록(#1b5e20) */
-    r = Math.round(30  + (27  - 30 ) * t);
-    g = Math.round(58  + (94  - 58 ) * t);
-    b = Math.round(42  + (32  - 42 ) * t);
+  if (pct >= 0) {{
+    /* 어두운 중립 #1a2a1a  →  밝은 초록 #00dc5a */
+    r = Math.round(26  + (0   - 26 ) * t);
+    g = Math.round(42  + (220 - 42 ) * t);
+    b = Math.round(26  + (90  - 26 ) * t);
   }} else {{
-    var s = -t;
-    /* 중립(#1e3a2a) → 진한빨강(#7f0000) */
-    r = Math.round(30  + (127 - 30 ) * s);
-    g = Math.round(58  + (0   - 58 ) * s);
-    b = Math.round(42  + (0   - 42 ) * s);
+    /* 어두운 중립 #2a1a1a  →  밝은 빨강 #ff3c3c */
+    r = Math.round(42  + (255 - 42 ) * t);
+    g = Math.round(26  + (60  - 26 ) * t);
+    b = Math.round(26  + (60  - 26 ) * t);
   }}
   return 'rgb('+r+','+g+','+b+')';
 }}
 
 /* ══════════════════════════════════
-   타일 렌더링
+   모드 상태 & 타일 참조 캐시
+   ══════════════════════════════════ */
+var _mode    = 'total';   /* 'total' | 'daily' */
+var _tilRefs = [];        /* {{inner, pctEl, item, div}} */
+
+/* ══════════════════════════════════
+   타일 렌더링 (최초 1회)
    ══════════════════════════════════ */
 function buildHeatmap() {{
   if (_hmBuilt) return;
@@ -730,17 +746,10 @@ function buildHeatmap() {{
   var canvas = document.getElementById('hm-canvas');
   var W = canvas.offsetWidth || 900;
   var H = 520;
-
   var tiles = squarify(_hmData, 0, 0, W, H);
 
   tiles.forEach(function(t) {{
-    var item = t.item;
-    var sign = item.pct >= 0 ? '+' : '';
-    var valStr = item.val >= 1e8
-      ? (item.val/1e8).toFixed(1)+'억'
-      : Math.round(item.val/1e4)+'만';
-
-    /* 타일 크기에 따라 폰트 동적 조정 */
+    var item    = t.item;
     var minSide = Math.min(t.w, t.h);
     var fName = Math.max(9,  Math.min(16, minSide * 0.18)) + 'px';
     var fPct  = Math.max(11, Math.min(22, minSide * 0.22)) + 'px';
@@ -748,33 +757,82 @@ function buildHeatmap() {{
     var showVal  = minSide > 50;
     var showName = t.w > 40 && t.h > 30;
 
+    var valStr = item.val >= 1e8
+      ? (item.val/1e8).toFixed(1)+'억'
+      : Math.round(item.val/1e4)+'만';
+
+    /* 타일 외곽 (절대 위치) */
     var div = document.createElement('div');
     div.className = 'hm-tile';
-    div.style.left   = t.x+'px';
-    div.style.top    = t.y+'px';
-    div.style.width  = t.w+'px';
-    div.style.height = t.h+'px';
-    div.title = item.name+' | '+sign+item.pct+'% | ₩'+item.val.toLocaleString()+' | '+item.price+' | '+item.acc;
+    div.style.cssText = 'left:'+t.x+'px;top:'+t.y+'px;width:'+t.w+'px;height:'+t.h+'px';
 
+    /* 내부 (색상·텍스트) */
     var inner = document.createElement('div');
     inner.className = 'hm-inner';
-    inner.style.background = hmColor(item.pct);
 
-    var html = '';
-    if (showName)
-      html += '<div class="hm-name" style="font-size:'+fName+'">'+item.name+'</div>';
-    html += '<div class="hm-pct" style="font-size:'+fPct+'">'+sign+item.pct+'%</div>';
-    if (showVal)
-      html += '<div class="hm-val" style="font-size:'+fVal+'">₩'+valStr+'</div>';
+    /* 종목명 */
+    var nameEl = null;
+    if (showName) {{
+      nameEl = document.createElement('div');
+      nameEl.className = 'hm-name';
+      nameEl.style.fontSize = fName;
+      nameEl.textContent = item.name;
+      inner.appendChild(nameEl);
+    }}
 
-    inner.innerHTML = html;
+    /* 수익률 (모드에 따라 바뀌는 부분) */
+    var pctEl = document.createElement('div');
+    pctEl.className = 'hm-pct';
+    pctEl.style.fontSize = fPct;
+    inner.appendChild(pctEl);
+
+    /* 평가금액 */
+    if (showVal) {{
+      var valEl = document.createElement('div');
+      valEl.className = 'hm-val';
+      valEl.style.fontSize = fVal;
+      valEl.textContent = '₩'+valStr;
+      inner.appendChild(valEl);
+    }}
+
     div.appendChild(inner);
     canvas.appendChild(div);
+
+    _tilRefs.push({{inner:inner, pctEl:pctEl, div:div, item:item}});
+  }});
+
+  /* 초기 색상 적용 */
+  _applyMode();
+}}
+
+/* ══════════════════════════════════
+   모드 적용 (색상 + 수치 갱신)
+   ══════════════════════════════════ */
+function _applyMode() {{
+  _tilRefs.forEach(function(ref) {{
+    var pct  = _mode === 'daily' ? ref.item.daily_pct : ref.item.pct;
+    var sign = pct >= 0 ? '+' : '';
+    ref.inner.style.background = hmColor(pct);
+    ref.pctEl.textContent      = sign + pct + '%';
+    var krw  = _mode === 'daily' ? ref.item.daily_krw : null;
+    var base = ref.item.name + ' | ' + sign + pct + '%';
+    if (krw !== null) base += ' (' + (krw>=0?'+':'') + '₩' + krw.toLocaleString() + ')';
+    ref.div.title = base + ' | 평가 ₩' + ref.item.val.toLocaleString() + ' | ' + ref.item.acc;
   }});
 }}
 
 /* ══════════════════════════════════
-   토글
+   모드 전환 버튼
+   ══════════════════════════════════ */
+function switchMode(mode) {{
+  _mode = mode;
+  document.getElementById('tab-total').classList.toggle('active', mode==='total');
+  document.getElementById('tab-daily').classList.toggle('active', mode==='daily');
+  if (_hmBuilt) _applyMode();
+}}
+
+/* ══════════════════════════════════
+   히트맵 ↔ 테이블 토글
    ══════════════════════════════════ */
 function toggleHeatmap() {{
   var hv  = document.getElementById('heatmap-view');
