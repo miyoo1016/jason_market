@@ -401,12 +401,17 @@ def _classify_headline(title: str) -> tuple:
 
 
 def sort_headlines(headlines: list) -> list:
-    """우선순위 정렬 후 상위 8개 반환. 각 항목에 'priority', 'label' 키 추가."""
+    """우선순위 정렬 후 상위 8개 반환. 각 항목에 'priority', 'label' 키 추가.
+    동일 우선순위 내에서는 최신 기사 우선 (date 내림차순).
+    Python stable sort 2단계: ① date 내림차순 → ② priority 오름차순"""
     for h in headlines:
         pri, lbl = _classify_headline(h['title'])
         h['priority'] = pri
         h['label']    = lbl
-    return sorted(headlines, key=lambda h: h['priority'])[:8]
+    # ① date 최신순 (stable)
+    by_date = sorted(headlines, key=lambda h: h.get('date', ''), reverse=True)
+    # ② priority 우선순위순 (stable → 동일 priority는 ①의 date 순서 유지)
+    return sorted(by_date, key=lambda h: h['priority'])[:8]
 
 
 def excerpt_md(text: str) -> str:
@@ -771,14 +776,27 @@ def _fetch_cot_sp500() -> dict | None:
 
 
 def _fetch_yahoo_headlines(n: int = 20) -> list:
-    """Yahoo Finance RSS — 거시/증시 헤드라인 (우선순위 정렬 후 상위 8개 반환)"""
+    """Yahoo Finance RSS — 거시/증시 헤드라인 (우선순위·날짜 정렬 후 상위 8개 반환)"""
     feeds = [
         'https://finance.yahoo.com/news/rss/',
         'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US',
     ]
+    # 캐시 우회 헤더 — Yahoo CDN이 캐시된 RSS를 반환하는 문제 방지
+    no_cache_headers = {
+        **HEADERS,
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+    }
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+
     for url in feeds:
         try:
-            xml_text = fetch(url)
+            # 캐시버스터 타임스탬프 쿼리파라미터 추가
+            bust_url = f'{url}{"&" if "?" in url else "?"}t={int(datetime.now().timestamp())}'
+            resp = requests.get(bust_url, headers=no_cache_headers, timeout=20)
+            resp.raise_for_status()
+            xml_text = resp.text
             if not xml_text:
                 continue
             xml_clean = strip_namespaces(xml_text)
@@ -786,11 +804,24 @@ def _fetch_yahoo_headlines(n: int = 20) -> list:
             items = root.findall('.//item')
             results = []
             for item in items[:n]:
-                title = clean_html(item.findtext('title', ''))
-                link  = item.findtext('link', '').strip()
-                pub   = parse_date_str(item.findtext('pubDate', ''))
-                if title:
-                    results.append({'title': title, 'url': link, 'date': pub})
+                title   = clean_html(item.findtext('title', ''))
+                link    = item.findtext('link', '').strip()
+                pub_raw = item.findtext('pubDate', '')
+                pub     = parse_date_str(pub_raw)
+                if not title:
+                    continue
+                # 72시간 이내 기사만 수집 (pub_raw가 없으면 통과)
+                if pub_raw:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        pub_dt = parsedate_to_datetime(pub_raw)
+                        if pub_dt.tzinfo is None:
+                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                        if pub_dt < cutoff:
+                            continue
+                    except Exception:
+                        pass
+                results.append({'title': title, 'url': link, 'date': pub})
             if results:
                 return sort_headlines(results)
         except Exception:
