@@ -547,28 +547,47 @@ tr:hover td{{background:#fafafa}}
 #heatmap-view{{display:none;margin-bottom:20px}}
 #heatmap-view.show{{display:block}}
 .hm-wrap{{
-  background:#fff;border-radius:12px;padding:20px;
-  box-shadow:0 1px 6px rgba(0,0,0,.08);
+  background:#131722;border-radius:12px;padding:16px 16px 12px;
+  box-shadow:0 2px 12px rgba(0,0,0,.18);
 }}
-.hm-title{{font-size:13px;color:#888;margin-bottom:14px;font-weight:600;letter-spacing:.3px}}
-.hm-grid{{
-  display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;
+.hm-title{{font-size:12px;color:#8a9bb0;margin-bottom:12px;font-weight:600;letter-spacing:.4px}}
+#hm-canvas{{
+  position:relative;width:100%;height:520px;overflow:hidden;
+  border-radius:6px;
 }}
 .hm-tile{{
-  border-radius:9px;padding:10px 12px;cursor:default;
-  display:flex;flex-direction:column;justify-content:space-between;
-  min-width:80px;min-height:70px;position:relative;
-  transition:transform .15s,box-shadow .15s;
-  overflow:hidden;
+  position:absolute;box-sizing:border-box;padding:2px;cursor:default;
 }}
-.hm-tile:hover{{transform:scale(1.04);box-shadow:0 4px 16px rgba(0,0,0,.18);z-index:10}}
-.hm-name{{font-size:12px;font-weight:800;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.3);line-height:1.2}}
-.hm-pct{{font-size:16px;font-weight:900;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.3);margin-top:4px;line-height:1}}
-.hm-val{{font-size:10px;color:rgba(255,255,255,.8);margin-top:3px}}
-.hm-acc{{font-size:9px;color:rgba(255,255,255,.6);position:absolute;top:6px;right:8px}}
-.hm-legend{{display:flex;align-items:center;gap:6px;margin-top:14px;font-size:11px;color:#888}}
-.hm-legend-bar{{height:10px;width:200px;border-radius:5px;
-  background:linear-gradient(to right,#b71c1c,#ef5350,#ffcdd2,#e0f2f1,#80cbc4,#00838f,#004d50)}}
+.hm-inner{{
+  width:100%;height:100%;border-radius:4px;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;
+  overflow:hidden;transition:filter .15s;
+}}
+.hm-tile:hover .hm-inner{{filter:brightness(1.18);}}
+.hm-name{{
+  font-size:13px;font-weight:800;color:#fff;
+  text-shadow:0 1px 3px rgba(0,0,0,.5);
+  text-align:center;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:90%;
+}}
+.hm-pct{{
+  font-size:15px;font-weight:900;color:#fff;
+  text-shadow:0 1px 3px rgba(0,0,0,.5);
+  margin-top:3px;line-height:1;
+}}
+.hm-val{{
+  font-size:10px;color:rgba(255,255,255,.65);
+  margin-top:2px;
+}}
+.hm-legend{{
+  display:flex;align-items:center;gap:8px;
+  margin-top:10px;font-size:11px;color:#6b7a90;
+}}
+.hm-legend-bar{{
+  flex:1;height:8px;border-radius:4px;
+  background:linear-gradient(to right,#7f0000,#c62828,#5a1a1a,#1a3a1a,#2e7d32,#1b5e20);
+}}
 </style>
 </head>
 <body>
@@ -583,13 +602,13 @@ tr:hover td{{background:#fafafa}}
   <!-- 히트맵 뷰 -->
   <div id="heatmap-view">
     <div class="hm-wrap">
-      <div class="hm-title">📊 포트폴리오 히트맵 &nbsp;·&nbsp; 타일 크기 = 평가금액 비례 &nbsp;·&nbsp; 색상 = 총 수익률</div>
-      <div class="hm-grid" id="hm-grid"></div>
+      <div class="hm-title">PORTFOLIO HEATMAP &nbsp;·&nbsp; 타일 크기 = 평가금액 비중 &nbsp;·&nbsp; 색상 강도 = 수익률</div>
+      <div id="hm-canvas"></div>
       <div class="hm-legend">
-        <span>-10%↓</span>
+        <span style="color:#c62828">▼ 손실</span>
         <div class="hm-legend-bar"></div>
-        <span>+10%↑</span>
-        &nbsp;&nbsp;색상: 수익률 기준
+        <span style="color:#2e7d32">▲ 수익</span>
+        &nbsp;&nbsp;<span>색상 기준: ±10%</span>
       </div>
     </div>
   </div>
@@ -621,66 +640,147 @@ tr:hover td{{background:#fafafa}}
 var _hmData = {heatmap_json};
 var _hmBuilt = false;
 
-/* ── 히트맵 색상 계산 ─────────────────────────────────── */
-function hmColor(pct) {{
-  // -10% ~ +10% 기준으로 색상 보간
-  var t = Math.max(-1, Math.min(1, pct / 10));  // -1 ~ +1
-  if (t >= 0) {{
-    // 0 → #e0f2f1(연한teal) → 1 → #004d50(진한teal)
-    var r = Math.round(224 + (0   - 224) * t);
-    var g = Math.round(242 + (77  - 242) * t);
-    var b = Math.round(241 + (80  - 241) * t);
-    return 'rgb('+r+','+g+','+b+')';
-  }} else {{
-    // 0 → #ffcdd2(연한red) → -1 → #b71c1c(진한red)
-    var s = -t;
-    var r = Math.round(255 + (183 - 255) * s);
-    var g = Math.round(205 + (28  - 205) * s);
-    var b = Math.round(210 + (28  - 210) * s);
-    return 'rgb('+r+','+g+','+b+')';
+/* ═══════════════════════════════════════════════════════
+   Squarified Treemap  (Bruls, Huizing, van Wijk 1999)
+   ═══════════════════════════════════════════════════════ */
+function squarify(nodes, x, y, w, h) {{
+  var out = [];
+  var sorted = nodes.slice().sort(function(a,b){{return b.val-a.val;}});
+
+  function layout(items, rx, ry, rw, rh) {{
+    if (!items.length || rw < 1 || rh < 1) return;
+    if (items.length === 1) {{
+      out.push({{item:items[0], x:rx, y:ry, w:rw, h:rh}});
+      return;
+    }}
+    var sub   = items.reduce(function(s,i){{return s+i.val;}}, 0);
+    var scale = rw * rh / sub;
+    var short = Math.min(rw, rh);
+
+    /* 최적 row 탐색 */
+    var row=[], rowSum=0, prevW=Infinity, split=0;
+    for (var k=0; k<items.length; k++) {{
+      row.push(items[k]); rowSum+=items[k].val;
+      var cur = worst(row, rowSum, short, scale);
+      if (cur > prevW) {{ row.pop(); rowSum-=items[k].val; break; }}
+      prevW=cur; split=k+1;
+    }}
+
+    /* row 배치 */
+    var rowArea = rowSum * scale;
+    if (rw <= rh) {{                        /* 가로 strip (위) */
+      var sh = rowArea / rw, cx = rx;
+      row.forEach(function(it) {{
+        var iw = it.val / rowSum * rw;
+        out.push({{item:it, x:cx, y:ry, w:iw, h:sh}}); cx+=iw;
+      }});
+      layout(items.slice(split), rx, ry+sh, rw, rh-sh);
+    }} else {{                               /* 세로 strip (왼쪽) */
+      var sw = rowArea / rh, cy = ry;
+      row.forEach(function(it) {{
+        var ih = it.val / rowSum * rh;
+        out.push({{item:it, x:rx, y:cy, w:sw, h:ih}}); cy+=ih;
+      }});
+      layout(items.slice(split), rx+sw, ry, rw-sw, rh);
+    }}
   }}
+
+  function worst(row, rowSum, short, scale) {{
+    var ra = rowSum*scale, sd = ra/short, w=0;
+    row.forEach(function(it) {{
+      var nd = it.val/rowSum*short;
+      var r  = Math.max(sd/nd, nd/sd);
+      if (r>w) w=r;
+    }});
+    return w;
+  }}
+
+  layout(sorted, x, y, w, h);
+  return out;
 }}
 
-/* ── 히트맵 렌더링 ────────────────────────────────────── */
+/* ══════════════════════════════════
+   색상 계산  ±10% 기준 green ↔ red
+   ══════════════════════════════════ */
+function hmColor(pct) {{
+  var t = Math.max(-1, Math.min(1, pct / 10));
+  var r, g, b;
+  if (t >= 0) {{
+    /* 중립(#1e3a2a) → 진한초록(#1b5e20) */
+    r = Math.round(30  + (27  - 30 ) * t);
+    g = Math.round(58  + (94  - 58 ) * t);
+    b = Math.round(42  + (32  - 42 ) * t);
+  }} else {{
+    var s = -t;
+    /* 중립(#1e3a2a) → 진한빨강(#7f0000) */
+    r = Math.round(30  + (127 - 30 ) * s);
+    g = Math.round(58  + (0   - 58 ) * s);
+    b = Math.round(42  + (0   - 42 ) * s);
+  }}
+  return 'rgb('+r+','+g+','+b+')';
+}}
+
+/* ══════════════════════════════════
+   타일 렌더링
+   ══════════════════════════════════ */
 function buildHeatmap() {{
   if (_hmBuilt) return;
   _hmBuilt = true;
-  var grid = document.getElementById('hm-grid');
-  var items = _hmData.slice().sort(function(a,b){{return b.val - a.val;}});
-  var totalVal = items.reduce(function(s,x){{return s+x.val;}}, 0);
 
-  items.forEach(function(item) {{
-    var frac   = totalVal > 0 ? item.val / totalVal : 1 / items.length;
-    // 타일 너비: 최소 90px ~ 최대 280px, 비례
-    var w = Math.max(90, Math.min(280, Math.round(frac * 900)));
-    // 타일 높이: 너비와 비례해 읽기 좋게
-    var h = Math.max(70, Math.min(120, Math.round(w * 0.52)));
-    var bg = hmColor(item.pct);
+  var canvas = document.getElementById('hm-canvas');
+  var W = canvas.offsetWidth || 900;
+  var H = 520;
+
+  var tiles = squarify(_hmData, 0, 0, W, H);
+
+  tiles.forEach(function(t) {{
+    var item = t.item;
     var sign = item.pct >= 0 ? '+' : '';
     var valStr = item.val >= 1e8
       ? (item.val/1e8).toFixed(1)+'억'
-      : (item.val/1e4).toFixed(0)+'만';
+      : Math.round(item.val/1e4)+'만';
 
-    var tile = document.createElement('div');
-    tile.className = 'hm-tile';
-    tile.style.cssText = 'background:'+bg+';width:'+w+'px;height:'+h+'px';
-    tile.title = item.name+' | 수익률 '+sign+item.pct+'% | 평가금액 ₩'+item.val.toLocaleString()+' | 현재가 '+item.price;
-    tile.innerHTML =
-      '<span class="hm-acc">'+item.acc+'</span>'+
-      '<span class="hm-name">'+item.name+'</span>'+
-      '<span class="hm-pct">'+sign+item.pct+'%</span>'+
-      '<span class="hm-val">₩'+valStr+'</span>';
-    grid.appendChild(tile);
+    /* 타일 크기에 따라 폰트 동적 조정 */
+    var minSide = Math.min(t.w, t.h);
+    var fName = Math.max(9,  Math.min(16, minSide * 0.18)) + 'px';
+    var fPct  = Math.max(11, Math.min(22, minSide * 0.22)) + 'px';
+    var fVal  = Math.max(8,  Math.min(12, minSide * 0.12)) + 'px';
+    var showVal  = minSide > 50;
+    var showName = t.w > 40 && t.h > 30;
+
+    var div = document.createElement('div');
+    div.className = 'hm-tile';
+    div.style.left   = t.x+'px';
+    div.style.top    = t.y+'px';
+    div.style.width  = t.w+'px';
+    div.style.height = t.h+'px';
+    div.title = item.name+' | '+sign+item.pct+'% | ₩'+item.val.toLocaleString()+' | '+item.price+' | '+item.acc;
+
+    var inner = document.createElement('div');
+    inner.className = 'hm-inner';
+    inner.style.background = hmColor(item.pct);
+
+    var html = '';
+    if (showName)
+      html += '<div class="hm-name" style="font-size:'+fName+'">'+item.name+'</div>';
+    html += '<div class="hm-pct" style="font-size:'+fPct+'">'+sign+item.pct+'%</div>';
+    if (showVal)
+      html += '<div class="hm-val" style="font-size:'+fVal+'">₩'+valStr+'</div>';
+
+    inner.innerHTML = html;
+    div.appendChild(inner);
+    canvas.appendChild(div);
   }});
 }}
 
-/* ── 토글 ─────────────────────────────────────────────── */
+/* ══════════════════════════════════
+   토글
+   ══════════════════════════════════ */
 function toggleHeatmap() {{
   var hv  = document.getElementById('heatmap-view');
   var tv  = document.getElementById('table-view');
   var btn = document.getElementById('btn-hm');
-  var showing = hv.classList.contains('show');
-  if (showing) {{
+  if (hv.classList.contains('show')) {{
     hv.classList.remove('show');
     tv.style.display = '';
     btn.textContent = '🟦 히트맵 보기';
@@ -695,16 +795,18 @@ function toggleHeatmap() {{
   }}
 }}
 
-/* ── 복사 ─────────────────────────────────────────────── */
-function copyReport(){{
-  var el = document.querySelector('#table-view')||document.body;
-  navigator.clipboard.writeText(el.innerText).then(function(){{
-    var b=document.getElementById('copy-btn');
-    b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';
+/* ══════════════════════════════════
+   복사
+   ══════════════════════════════════ */
+function copyReport() {{
+  var el = document.querySelector('#table-view') || document.body;
+  navigator.clipboard.writeText(el.innerText).then(function() {{
+    var b = document.getElementById('copy-btn');
+    b.textContent='✅ 복사 완료!'; b.style.background='#2e7d32';
     setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#00838f';}},2500);
-  }}).catch(function(){{
-    var t=document.createElement('textarea');t.value=el.innerText;
-    document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
+  }}).catch(function() {{
+    var t=document.createElement('textarea'); t.value=el.innerText;
+    document.body.appendChild(t); t.select(); document.execCommand('copy'); document.body.removeChild(t);
   }});
 }}
 </script>
