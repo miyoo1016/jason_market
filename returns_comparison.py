@@ -156,10 +156,10 @@ def rank_label(idx, total):
 
 def _ret_cell_html(ret, highlight=False):
     if ret is None:
-        return '<td style="color:#757575;">–</td>'
-    color = "#26a69a" if ret >= 0 else "#ef5350"
+        return '<td style="color:#bbb;">–</td>'
+    color = "#00838f" if ret >= 0 else "#c62828"
     bold  = "font-weight:800;" if highlight else "font-weight:600;"
-    border = "border-left:2px solid #1a5fa8;" if highlight else ""
+    border = "border-left:2px solid #00838f;" if highlight else ""
     return f'<td style="color:{color};{bold}{border}">{ret:+.1f}%</td>'
 
 def generate_html(all_returns, since_avg, timestamp):
@@ -175,10 +175,10 @@ def generate_html(all_returns, since_avg, timestamp):
     for name, rets in all_returns.items():
         valid = [r for r in rets if r is not None]
         avg   = sum(valid) / len(valid) if valid else 0
-        if avg > 10:   row_bg = "rgba(38,166,154,0.18)"
-        elif avg > 3:  row_bg = "rgba(38,166,154,0.10)"
-        elif avg < -10:row_bg = "rgba(239,83,80,0.18)"
-        elif avg < -3: row_bg = "rgba(239,83,80,0.10)"
+        if avg > 10:   row_bg = "rgba(0,131,143,0.10)"
+        elif avg > 3:  row_bg = "rgba(0,131,143,0.05)"
+        elif avg < -10:row_bg = "rgba(198,40,40,0.10)"
+        elif avg < -3: row_bg = "rgba(198,40,40,0.05)"
         else:           row_bg = "transparent"
 
         cells = "".join(_ret_cell_html(r) for r in rets)
@@ -202,13 +202,13 @@ def generate_html(all_returns, since_avg, timestamp):
         medals = ["🥇", "🥈", "🥉"]
         items = ""
         for i, (n, v) in enumerate(top3):
-            color = "#26a69a" if v >= 0 else "#ef5350"
+            color = "#00838f" if v >= 0 else "#c62828"
             items += f'<span style="margin-right:18px;">{medals[i]} <b>{n}</b> <span style="color:{color};">{v:+.1f}%</span></span>'
         rankings_html += (f'<div style="margin-bottom:10px;">'
-                          f'<span style="color:#90caf9;font-weight:700;min-width:40px;display:inline-block;">{label}</span>'
+                          f'<span style="color:#00838f;font-weight:700;min-width:40px;display:inline-block;">{label}</span>'
                           f' {items}</div>\n')
 
-    since_th = '<th style="color:#ffd54f;border-left:2px solid #1a5fa8;">매입후</th>' if has_since else ''
+    since_th = '<th style="color:#00838f;border-left:2px solid #00838f;">매입후</th>' if has_since else ''
     header_cells = "".join(f'<th>{lbl}</th>' for lbl in period_labels) + since_th
 
     html = f"""<!DOCTYPE html>
@@ -218,19 +218,23 @@ def generate_html(all_returns, since_avg, timestamp):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Jason 수익률 비교</title>
 <style>
-  body {{ background:#1a1a2e; color:#e0e0e0; font-family:'Segoe UI',sans-serif; margin:0; padding:20px 30px; }}
+  body {{ background:#f5f6f8; color:#2c2c2c; font-family:'Segoe UI',sans-serif; margin:0; padding:20px 30px; }}
   .page {{ max-width:1100px; margin:0 auto; }}
-  h1 {{ color:#90caf9; font-size:1.6em; margin-bottom:4px; }}
-  .ts {{ color:#757575; font-size:0.85em; margin-bottom:24px; }}
-  table {{ width:100%; border-collapse:collapse; background:#16213e; border-radius:8px; overflow:hidden; margin-bottom:32px; }}
-  th {{ background:#0f3460; color:#90caf9; padding:10px 14px; text-align:right; font-size:0.9em; }}
-  th:first-child {{ text-align:left; padding-left:10px; }}
-  td {{ padding:9px 14px; text-align:right; font-size:0.88em; border-bottom:1px solid #1e2a45; }}
+  h1 {{ color:#1a1a1a; font-size:1.6em; margin-bottom:4px; }}
+  .ts {{ color:#888; font-size:0.85em; margin-bottom:24px; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden;
+           margin-bottom:32px; box-shadow:0 1px 6px rgba(0,0,0,.07); }}
+  th {{ background:#f0f2f5; color:#444; padding:10px 14px; text-align:right; font-size:0.9em;
+        font-weight:700; border-bottom:2px solid #e0e3e8; }}
+  th:first-child {{ text-align:left; padding-left:14px; }}
+  td {{ padding:9px 14px; text-align:right; font-size:0.88em; border-bottom:1px solid #f0f2f5; }}
   tr:last-child td {{ border-bottom:none; }}
-  tr:hover {{ background:rgba(144,202,249,0.06) !important; }}
-  .section-title {{ color:#90caf9; font-size:1.1em; font-weight:700; margin-bottom:14px; border-left:3px solid #1a5fa8; padding-left:10px; }}
-  .rankings {{ background:#16213e; border-radius:8px; padding:18px 20px; margin-bottom:32px; }}
-  .note {{ color:#757575; font-size:0.8em; margin-top:8px; }}
+  tr:hover {{ background:#fafbfc !important; }}
+  .section-title {{ color:#1a1a1a; font-size:1.05em; font-weight:700; margin-bottom:14px;
+                    border-left:3px solid #00838f; padding-left:10px; }}
+  .rankings {{ background:#fff; border-radius:10px; padding:18px 22px; margin-bottom:32px;
+               box-shadow:0 1px 6px rgba(0,0,0,.07); }}
+  .note {{ color:#999; font-size:0.8em; margin-top:8px; }}
 </style>
 </head>
 <body>
@@ -254,9 +258,9 @@ def generate_html(all_returns, since_avg, timestamp):
   <div class="note">※ YTD = 올해 1월 1일 기준 &nbsp;|&nbsp; ※ 야후 파이낸스 기준 (15분 지연)</div>
 </div>
 
-<button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#1a5fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 3px 12px rgba(0,0,0,.3)">📋 전체 복사</button>
+<button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#00838f;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 2px 10px rgba(0,0,0,.15)">📋 전체 복사</button>
 <script>
-function copyReport(){{var el=document.querySelector('.page')||document.body;navigator.clipboard.writeText(el.innerText).then(function(){{var b=document.getElementById('copy-btn');b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#1a5fa8';}},2500);}}).catch(function(){{var t=document.createElement('textarea');t.value=el.innerText;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);}});}}
+function copyReport(){{var el=document.querySelector('.page')||document.body;navigator.clipboard.writeText(el.innerText).then(function(){{var b=document.getElementById('copy-btn');b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#00838f';}},2500);}}).catch(function(){{var t=document.createElement('textarea');t.value=el.innerText;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);}});}}
 </script>
 </body>
 </html>"""
