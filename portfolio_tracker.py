@@ -584,16 +584,16 @@ tr:hover td{{background:#fafafa}}
 #heatmap-view{{display:none;margin-bottom:20px}}
 #heatmap-view.show{{display:block}}
 .hm-wrap{{
-  background:#131722;border-radius:12px;padding:16px 16px 12px;
-  box-shadow:0 2px 12px rgba(0,0,0,.18);
+  background:#fff;border-radius:12px;padding:16px 16px 12px;
+  box-shadow:0 1px 6px rgba(0,0,0,.08);
 }}
 .hm-header{{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}}
-.hm-title{{font-size:12px;color:#8a9bb0;font-weight:600;letter-spacing:.4px;flex:1}}
+.hm-title{{font-size:12px;color:#666;font-weight:600;letter-spacing:.4px;flex:1}}
 .hm-tabs{{display:flex;gap:6px}}
 .hm-tab{{
   padding:5px 14px;font-size:12px;font-weight:700;border:none;
   border-radius:5px;cursor:pointer;transition:background .15s,color .15s;
-  background:#1e2a3a;color:#8a9bb0;
+  background:#f0f2f5;color:#666;
 }}
 .hm-tab.active{{background:#00838f;color:#fff}}
 #hm-canvas{{
@@ -617,7 +617,7 @@ tr:hover td{{background:#fafafa}}
   text-shadow:0 1px 3px rgba(0,0,0,.6);margin-top:3px;line-height:1;
 }}
 .hm-val{{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px;}}
-.hm-legend{{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#6b7a90}}
+.hm-legend{{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#888}}
 .hm-legend-bar{{
   flex:1;height:8px;border-radius:4px;
   background:linear-gradient(to right,
