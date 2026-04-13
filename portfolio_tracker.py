@@ -601,22 +601,32 @@ tr:hover td{{background:#fafafa}}
 }}
 .hm-tile{{position:absolute;box-sizing:border-box;padding:2px;cursor:default;}}
 .hm-inner{{
-  width:100%;height:100%;border-radius:4px;
+  width:100%;height:100%;border-radius:5px;
   display:flex;flex-direction:column;justify-content:center;align-items:center;
-  overflow:hidden;transition:filter .15s,background .3s;
+  overflow:hidden;transition:filter .15s,background .35s;
+  gap:1px;
 }}
-.hm-tile:hover .hm-inner{{filter:brightness(1.25);}}
+.hm-tile:hover .hm-inner{{filter:brightness(1.18) saturate(1.1);}}
 .hm-name{{
-  font-size:13px;font-weight:800;color:#fff;
-  text-shadow:0 1px 3px rgba(0,0,0,.6);
+  font-size:11px;font-weight:600;color:rgba(255,255,255,.82);
+  text-shadow:0 1px 4px rgba(0,0,0,.7);letter-spacing:.5px;
   text-align:center;line-height:1.2;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:92%;
+  text-transform:uppercase;
 }}
 .hm-pct{{
-  font-size:15px;font-weight:900;color:#fff;
-  text-shadow:0 1px 3px rgba(0,0,0,.6);margin-top:3px;line-height:1;
+  font-size:18px;font-weight:900;color:#fff;
+  text-shadow:0 2px 8px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.4);
+  margin-top:2px;line-height:1;letter-spacing:-.3px;
 }}
-.hm-val{{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px;}}
+.hm-val{{
+  font-size:11px;font-weight:600;color:rgba(255,255,255,.78);
+  text-shadow:0 1px 4px rgba(0,0,0,.6);margin-top:3px;
+}}
+.hm-amount{{
+  font-size:10px;font-weight:500;color:rgba(255,255,255,.65);
+  text-shadow:0 1px 3px rgba(0,0,0,.5);margin-top:1px;
+}}
 .hm-legend{{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#888}}
 .hm-legend-bar{{
   flex:1;height:8px;border-radius:4px;
@@ -802,15 +812,14 @@ function buildHeatmap() {{
     var minSide = Math.min(t.w, t.h);
 
     /* 타일 크기에 따라 표시 레벨 결정 */
-    var showName   = t.w > 45  && t.h > 28;
+    var showName   = t.w > 45  && t.h > 30;
     var showPct    = t.w > 30  && t.h > 22;
-    var showVal    = minSide > 55;
-    var showDaily  = minSide > 75;
-    var showProfit = minSide > 90;
+    var showVal    = minSide > 58;
+    var showAmount = minSide > 78;
 
-    var fName   = Math.max(9,  Math.min(15, minSide*0.17)) + 'px';
-    var fPct    = Math.max(10, Math.min(20, minSide*0.20)) + 'px';
-    var fSub    = Math.max(8,  Math.min(11, minSide*0.11)) + 'px';
+    var fName   = Math.max(9,  Math.min(13, minSide*0.13)) + 'px';
+    var fPct    = Math.max(11, Math.min(22, minSide*0.22)) + 'px';
+    var fSub    = Math.max(8,  Math.min(12, minSide*0.11)) + 'px';
 
     /* 타일 외곽 */
     var div = document.createElement('div');
@@ -848,29 +857,20 @@ function buildHeatmap() {{
       inner.appendChild(el);
     }}
 
-    /* ④ 일일 증감금액 (모드 전환 대상) */
-    var dailyEl = null;
-    if (showDaily) {{
-      dailyEl = document.createElement('div');
-      dailyEl.className = 'hm-val';
-      dailyEl.style.fontSize = fSub;
-      inner.appendChild(dailyEl);
-    }}
-
-    /* ⑤ 총 증감금액 */
-    var profitEl = null;
-    if (showProfit) {{
-      profitEl = document.createElement('div');
-      profitEl.className = 'hm-val';
-      profitEl.style.fontSize = fSub;
-      inner.appendChild(profitEl);
+    /* ④ 증감금액 (모드에 따라 일/총 하나만 표시) */
+    var amountEl = null;
+    if (showAmount) {{
+      amountEl = document.createElement('div');
+      amountEl.className = 'hm-amount';
+      amountEl.style.fontSize = fSub;
+      inner.appendChild(amountEl);
     }}
 
     div.appendChild(inner);
     canvas.appendChild(div);
 
     _tilRefs.push({{
-      inner:inner, pctEl:pctEl, dailyEl:dailyEl, profitEl:profitEl,
+      inner:inner, pctEl:pctEl, amountEl:amountEl,
       div:div, item:item
     }});
   }});
@@ -888,25 +888,28 @@ function _applyMode() {{
     var pct  = _mode === 'daily' ? item.daily_pct : item.pct;
     var sign = pct >= 0 ? '+' : '';
 
-    /* 색상: 현금은 항상 중립 어두운 회색 */
-    ref.inner.style.background = item.is_cash ? '#1e2a3a' : hmColor(pct);
+    /* 색상: 현금은 중립 슬레이트 */
+    ref.inner.style.background = item.is_cash ? '#546e7a' : hmColor(pct);
 
     /* ② 증감율 */
     if (ref.pctEl)
-      ref.pctEl.textContent = item.is_cash ? '0.00%' : (sign+pct+'%');
+      ref.pctEl.textContent = item.is_cash ? '-' : (sign + pct.toFixed(2) + '%');
 
-    /* ④ 일일 증감금액 */
-    if (ref.dailyEl)
-      ref.dailyEl.textContent = '일 ' + fmtKrw(item.daily_krw);
-
-    /* ⑤ 총 증감금액 */
-    if (ref.profitEl)
-      ref.profitEl.textContent = '총 ' + fmtKrw(item.profit_krw);
+    /* ④ 증감금액 — 모드에 따라 일/총 하나만 */
+    if (ref.amountEl) {{
+      if (item.is_cash) {{
+        ref.amountEl.textContent = '';
+      }} else if (_mode === 'daily') {{
+        ref.amountEl.textContent = '일 ' + fmtKrw(item.daily_krw);
+      }} else {{
+        ref.amountEl.textContent = '총 ' + fmtKrw(item.profit_krw);
+      }}
+    }}
 
     /* 툴팁 */
     ref.div.title =
       item.name +
-      ' | ' + (_mode==='daily'?'일일':'총') + ' ' + sign + pct + '%' +
+      ' | ' + (_mode==='daily'?'일일':'총') + ' ' + sign + pct.toFixed(2) + '%' +
       ' | 평가 ' + fmtVal(item.val) +
       ' | 일 ' + fmtKrw(item.daily_krw) +
       ' | 총 ' + fmtKrw(item.profit_krw) +
