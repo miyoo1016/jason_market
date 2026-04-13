@@ -403,6 +403,7 @@ def _classify_headline(title: str) -> tuple:
 def sort_headlines(headlines: list) -> list:
     """우선순위 정렬 후 상위 8개 반환. 각 항목에 'priority', 'label' 키 추가.
     동일 우선순위 내에서는 최신 기사 우선 (date 내림차순).
+    priority 4(개별종목/무관 기사)는 1~3 기사가 8개 미만일 때만 채움.
     Python stable sort 2단계: ① date 내림차순 → ② priority 오름차순"""
     for h in headlines:
         pri, lbl = _classify_headline(h['title'])
@@ -411,7 +412,13 @@ def sort_headlines(headlines: list) -> list:
     # ① date 최신순 (stable)
     by_date = sorted(headlines, key=lambda h: h.get('date', ''), reverse=True)
     # ② priority 우선순위순 (stable → 동일 priority는 ①의 date 순서 유지)
-    return sorted(by_date, key=lambda h: h['priority'])[:8]
+    sorted_all = sorted(by_date, key=lambda h: h['priority'])
+    # 우선순위 1~3 기사 먼저 최대 8개
+    top = [h for h in sorted_all if h['priority'] <= 3][:8]
+    # 좋은 기사가 3개 미만일 때만 4등급(노이즈)으로 보충
+    if len(top) < 3:
+        top += [h for h in sorted_all if h['priority'] == 4][:3 - len(top)]
+    return top
 
 
 def excerpt_md(text: str) -> str:
@@ -776,33 +783,40 @@ def _fetch_cot_sp500() -> dict | None:
 
 
 def _fetch_yahoo_headlines(n: int = 20) -> list:
-    """Yahoo Finance RSS — 거시/증시 헤드라인 (우선순위·날짜 정렬 후 상위 8개 반환)"""
+    """여러 RSS 피드에서 거시/지정학 헤드라인을 전부 수집 후 우선순위·날짜 정렬.
+
+    피드 구성:
+      ① Google News Finance — Reuters/Bloomberg/CNN Business 기사 포함
+      ② Google News 검색 — iran, oil, hormuz, fed 등 키워드 직접 검색
+      ③ MarketWatch 톱스토리
+      ④ Yahoo Finance 티커별 (S&P500·원유선물)
+    모든 피드를 수집한 뒤 제목 기준 중복 제거 → 우선순위+최신 정렬 → 상위 8개.
+    """
     feeds = [
-        'https://finance.yahoo.com/news/rss/',
+        # ① Google News — Business 토픽 (Reuters·Bloomberg·CNN·AP 집계)
+        'https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pWVXlBQVAB?hl=en-US&gl=US&ceid=US:en',
+        # ② Google News 검색 — 지정학·거시경제 키워드 (24h)
+        'https://news.google.com/rss/search?q=iran+oil+hormuz+fed+fomc+inflation+tariff&when=1d&hl=en-US&gl=US&ceid=US:en',
+        # ③ MarketWatch 톱스토리
+        'https://feeds.marketwatch.com/marketwatch/topstories/',
+        # ④ Yahoo Finance 티커별 (원유선물 기사 → 지정학/유가 뉴스 포함)
+        'https://feeds.finance.yahoo.com/rss/2.0/headline?s=CL%3DF&region=US&lang=en-US',
         'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US',
     ]
-    # 캐시 우회 헤더 — Yahoo CDN이 캐시된 RSS를 반환하는 문제 방지
-    no_cache_headers = {
-        **HEADERS,
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-    }
+    from email.utils import parsedate_to_datetime
     cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+
+    seen_titles: set = set()
+    all_results: list = []
 
     for url in feeds:
         try:
-            # 캐시버스터 타임스탬프 쿼리파라미터 추가
-            bust_url = f'{url}{"&" if "?" in url else "?"}t={int(datetime.now().timestamp())}'
-            resp = requests.get(bust_url, headers=no_cache_headers, timeout=20)
-            resp.raise_for_status()
-            xml_text = resp.text
+            xml_text = fetch_curl(url, timeout=12)
             if not xml_text:
                 continue
             xml_clean = strip_namespaces(xml_text)
             root  = ET.fromstring(xml_clean)
             items = root.findall('.//item')
-            results = []
             for item in items[:n]:
                 title   = clean_html(item.findtext('title', ''))
                 link    = item.findtext('link', '').strip()
@@ -810,10 +824,9 @@ def _fetch_yahoo_headlines(n: int = 20) -> list:
                 pub     = parse_date_str(pub_raw)
                 if not title:
                     continue
-                # 72시간 이내 기사만 수집 (pub_raw가 없으면 통과)
+                # 72시간 날짜 컷오프
                 if pub_raw:
                     try:
-                        from email.utils import parsedate_to_datetime
                         pub_dt = parsedate_to_datetime(pub_raw)
                         if pub_dt.tzinfo is None:
                             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
@@ -821,12 +834,16 @@ def _fetch_yahoo_headlines(n: int = 20) -> list:
                             continue
                     except Exception:
                         pass
-                results.append({'title': title, 'url': link, 'date': pub})
-            if results:
-                return sort_headlines(results)
+                # 제목 기준 중복 제거 (앞 30자로 비교)
+                key = title.lower().strip()[:30]
+                if key in seen_titles:
+                    continue
+                seen_titles.add(key)
+                all_results.append({'title': title, 'url': link, 'date': pub or ''})
         except Exception:
             continue
-    return []
+
+    return sort_headlines(all_results) if all_results else []
 
 
 
