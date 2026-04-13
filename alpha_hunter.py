@@ -798,140 +798,8 @@ def _fetch_yahoo_headlines(n: int = 20) -> list:
     return []
 
 
-_POLY_URL = 'https://gamma-api.polymarket.com/events'
-
-# 단어 경계(\b) 정규식으로 false-positive 방지 (예: "award"에서 "war" 매칭 차단)
-# ⚠️ title 필드에만 적용 — desc/tags 매칭 시 오탐 발생
-_POLY_KW_RE = re.compile(
-    r'\b(?:iran|oil|fed|fomc|interest\s+rate|recession|inflation|'
-    r'rate\s+cut|rate\s+hike|war|ceasefire|hormuz|middle\s+east|'
-    r'nuclear|gdp|cpi|unemployment|trump|geopolitics|opec|'
-    r's&p|nasdaq|dollar|wti|brent)\b',
-    re.IGNORECASE,
-)
-# 스포츠 이벤트 제외 키워드 (title 기준)
-_POLY_SPORTS = re.compile(
-    r'\b(?:nba|nfl|nhl|mlb|fifa|nascar|ufc|pga|masters|'
-    r'champion(?:s)?|premier\s+league|la\s+liga|bundesliga|'
-    r'world\s+cup|super\s+bowl|mvp|basketball|football|baseball|'
-    r'soccer|tennis|golf|hockey|esport)\b',
-    re.IGNORECASE,
-)
-_POLY_MIN_VOL = 1_000_000   # $100만 미만 제외 (신뢰도 컷오프)
 
 
-def _poly_prob(market: dict) -> float | None:
-    """Yes 확률 추출 — 3단계 폴백"""
-    try:
-        op = market.get('outcomePrices')
-        if op:
-            prices = json.loads(op) if isinstance(op, str) else op
-            if prices:
-                return round(float(prices[0]) * 100, 1)
-    except Exception:
-        pass
-    try:
-        bid = market.get('bestBid')
-        ask = market.get('bestAsk')
-        if bid is not None and ask is not None:
-            return round((float(bid) + float(ask)) / 2 * 100, 1)
-    except Exception:
-        pass
-    try:
-        ltp = market.get('lastTradePrice')
-        if ltp is not None:
-            return round(float(ltp) * 100, 1)
-    except Exception:
-        pass
-    return None
-
-
-def _poly_vol_str(vol: float) -> str:
-    """거래대금 포맷: $1M+ → XM, 미만 → XXXK"""
-    if vol >= 1_000_000:
-        return f'${vol / 1_000_000:.1f}M'
-    return f'${vol / 1000:.0f}K'
-
-
-def _poly_emoji(pct: float) -> str:
-    if pct >= 70: return '🔴'
-    if pct >= 50: return '🟠'
-    if pct >= 30: return '🟡'
-    return '🟢'
-
-
-def _fetch_polymarket() -> list | None:
-    """Polymarket Gamma API — 거시/지정학 상위 3개 이벤트 반환.
-
-    반환값:
-      None  → API 오류 (기존 지표에 영향 없음)
-      []    → API 정상이나 조건 통과 마켓 없음
-      [...]  → 통과 이벤트 리스트 (최대 3개)
-
-    3단계 필터:
-      1단계: title에만 키워드 매칭 (desc/tags 제외)
-      2단계: 거래대금 $100만 이상 AND 확률 1%<prob<99%
-      3단계: 거래대금 내림차순 상위 3개
-    """
-    try:
-        resp = requests.get(
-            _POLY_URL,
-            params={'active': 'true', 'closed': 'false',
-                    'limit': 100, 'order': 'volume', 'ascending': 'false'},
-            headers=HEADERS,
-            timeout=8,
-        )
-        resp.raise_for_status()
-        events = resp.json()
-    except Exception:
-        return None   # API 실패 — None으로 구분
-
-    results = []
-    for ev in events:
-        title = ev.get('title', '') or ''
-        title_lower = title.lower()
-
-        # ── 1단계: 제목 전용 키워드 매칭 ──────────────────────
-        # 스포츠 제외 먼저 (빠른 탈락)
-        if _POLY_SPORTS.search(title_lower):
-            continue
-        # 거시/지정학 키워드 (단어 경계, title만)
-        if not _POLY_KW_RE.search(title_lower):
-            continue
-
-        # ── 2단계: 신뢰도 컷오프 ──────────────────────────────
-        # 조건 A: volume 또는 liquidity 중 큰 값 기준 $100만 이상
-        vol = 0.0
-        for field in ('volume', 'liquidity', 'volumeNum'):
-            try:
-                val = ev.get(field)
-                if val is not None:
-                    vol = max(vol, float(val))
-            except Exception:
-                pass
-        if vol < _POLY_MIN_VOL:
-            continue
-
-        # 조건 B: Yes 확률 1% 초과 ~ 99% 미만 (결론난 마켓 제외)
-        markets = ev.get('markets') or []
-        prob = None
-        for mkt in markets[:1]:
-            prob = _poly_prob(mkt)
-            if prob is not None:
-                break
-        if prob is None or prob <= 1.0 or prob >= 99.0:
-            continue
-
-        results.append({
-            'title': title,
-            'prob':  prob,
-            'vol':   vol,
-            'url':   f'https://polymarket.com/event/{ev.get("slug", "")}',
-        })
-
-    # ── 3단계: 거래대금 내림차순 정렬 → 상위 3개 ──────────────
-    results.sort(key=lambda x: x['vol'], reverse=True)
-    return results[:3]
 
 
 def build_macro_dashboard() -> tuple:
@@ -951,15 +819,6 @@ def build_macro_dashboard() -> tuple:
     print(f"  {CYAN}→ Yahoo Finance 헤드라인 수집 중...{RESET}", end=' ', flush=True)
     headlines = _fetch_yahoo_headlines(20)
     print(f"{CYAN}{len(headlines)}건{RESET}" if headlines else f"{AMBER}실패{RESET}")
-
-    print(f"  {CYAN}→ Polymarket 예측 시장 수집 중...{RESET}", end=' ', flush=True)
-    poly = _fetch_polymarket()
-    if poly is None:
-        print(f"{AMBER}API 실패{RESET}")
-    elif len(poly) == 0:
-        print(f"{AMBER}해당없음{RESET}")
-    else:
-        print(f"{CYAN}{len(poly)}건{RESET}")
 
     # ── 마크다운 생성 ────────────────────────────────────────
     lines = ['## 🌐 [Macro & Flow Dashboard]', '']
@@ -1011,30 +870,6 @@ def build_macro_dashboard() -> tuple:
     else:
         lines.append('- 헤드라인 조회 실패')
 
-    # 4. Polymarket 예측 시장
-    lines.append('### 🎯 스마트 머니 예측 시장 (Polymarket)')
-    if poly is None:
-        # API 오류 — 기존 지표에 영향 없음
-        lines.append('⚠️ [폴리마켓] API 연결 실패 — 기존 지표는 정상 유지됨')
-    elif len(poly) == 0:
-        # API 정상이나 필터 통과 마켓 없음
-        lines.append('⚠️ 조건 통과 마켓 없음 (거시/지정학 활성 마켓 부재)')
-        lines.append('   → 현재 이슈가 이미 만기 종료(resolved)됐을 가능성')
-        lines.append('   → 월요일 신규 마켓 생성 여부 재확인 권장')
-    else:
-        for item in poly:
-            prob     = item['prob']
-            emoji    = _poly_emoji(prob)
-            prob_str = f'{prob:.1f}%'
-            lines.append(
-                f'- {emoji} [{prob_str}] {item["title"]}'
-                f'  (거래대금: {_poly_vol_str(item["vol"])})'
-            )
-        if len(poly) < 3:
-            lines.append(f'⚠️ {len(poly)}개만 출력 — 나머지는 $100만 미만 또는 확률 범위 이탈')
-        lines.append('- 해석: 돈이 걸린 실시간 거시/지정학 위기 발생 확률'
-                     ' — VIX·COT·Fear&Greed 지표와 교차 해석 권장')
-
     lines += ['', '---', '']
 
     macro_data = {
@@ -1042,7 +877,6 @@ def build_macro_dashboard() -> tuple:
         'vix':       vix,
         'cot':       cot,
         'headlines': headlines,
-        'poly':      poly,
     }
     return '\n'.join(lines), macro_data
 
@@ -1184,8 +1018,6 @@ def build_macro_html(macro_data: dict) -> str:
     vix       = macro_data.get('vix')
     cot       = macro_data.get('cot')
     headlines = macro_data.get('headlines', [])
-    poly      = macro_data.get('poly')   # None=API실패, []=마켓없음, [...]= 결과
-
     # ── Fear & Greed 바 ─────────────────────────────────────
     if fg:
         score   = fg['score']
@@ -1288,52 +1120,6 @@ def build_macro_html(macro_data: dict) -> str:
     else:
         hl_html = '<div class="mcd-headlines"><div class="mcd-card-title">📰 Yahoo Finance 헤드라인</div><div class="mcd-na">조회 실패</div></div>'
 
-    # ── Polymarket ────────────────────────────────────────────
-    if poly is None:
-        # API 오류
-        poly_html = '<div class="poly-section"><div class="mcd-card-title">🎯 스마트 머니 예측 시장 (Polymarket)</div><div class="mcd-na">⚠️ API 연결 실패 — 기존 지표는 정상 유지됨</div></div>'
-    elif len(poly) == 0:
-        # API 정상, 필터 통과 마켓 없음
-        poly_html = '''<div class="poly-section">
-  <div class="mcd-card-title">🎯 스마트 머니 예측 시장 (Polymarket)</div>
-  <div class="mcd-na">
-    ⚠️ 조건 통과 마켓 없음 (거시/지정학 활성 마켓 부재)<br>
-    → 현재 이슈가 이미 만기 종료(resolved)됐을 가능성<br>
-    → 월요일 신규 마켓 생성 여부 재확인 권장
-  </div>
-</div>'''
-    else:
-        poly_items = []
-        for item in poly:
-            prob      = item.get('prob')
-            emoji     = _poly_emoji(prob)
-            prob_str  = f'{prob:.1f}%'
-            # 확률에 따른 색상
-            if prob >= 70:   prob_color = '#c62828'
-            elif prob >= 50: prob_color = '#e65100'
-            elif prob >= 30: prob_color = '#7b6f3a'
-            else:            prob_color = '#1a5c3a'
-            bar_pct   = prob
-            title_esc = item['title'].replace('<','&lt;').replace('>','&gt;')
-            poly_items.append(f'''<li>
-  <span class="poly-prob" style="color:{prob_color}">{emoji} {prob_str}</span>
-  <span class="poly-title">
-    <a href="{item["url"]}" target="_blank" rel="noopener">{title_esc}</a>
-    <div class="poly-bar-bg"><div class="poly-bar-fill" style="width:{bar_pct:.0f}%;background:{prob_color}"></div></div>
-  </span>
-  <span class="poly-vol">{_poly_vol_str(item["vol"])}</span>
-</li>''')
-        extra_note = ''
-        if len(poly) < 3:
-            extra_note = f'<div class="mcd-na" style="margin-top:6px">⚠️ {len(poly)}개만 출력 — 나머지는 $100만 미만 또는 확률 범위 이탈</div>'
-        poly_html = f'''
-<div class="poly-section">
-  <div class="mcd-card-title">🎯 스마트 머니 예측 시장 (Polymarket)</div>
-  <ul class="poly-list">{''.join(poly_items)}</ul>
-  {extra_note}
-  <div class="mcd-hint" style="margin-top:10px">돈이 걸린 실시간 거시/지정학 위기 확률 &nbsp;|&nbsp; VIX·COT·Fear&amp;Greed와 교차 해석 권장</div>
-</div>'''
-
     return f'''
 <section class="macro-section">
   <div class="macro-inner">
@@ -1344,7 +1130,6 @@ def build_macro_html(macro_data: dict) -> str:
       {cot_html}
     </div>
     {hl_html}
-    {poly_html}
   </div>
 </section>'''
 
@@ -1574,32 +1359,6 @@ def generate_html(posts: list, md_text: str, ts: str,
     font-size: 11px; font-weight: 700; letter-spacing: .4px;
     text-transform: uppercase; pointer-events: none;
   }}
-  .poly-section {{
-    background: #fdf9f1; border: 1px solid #e4e1d8; border-radius: 10px;
-    padding: 14px 18px; margin-top: 12px;
-  }}
-  .poly-list {{ list-style: none; padding: 0; margin: 8px 0 0; }}
-  .poly-list li {{
-    padding: 7px 0; border-bottom: 1px solid #eeebe3;
-    display: flex; align-items: center; gap: 10px;
-    font-size: 13.5px; line-height: 1.45;
-  }}
-  .poly-list li:last-child {{ border-bottom: none; }}
-  .poly-prob {{
-    font-size: 16px; font-weight: 800; min-width: 52px;
-    text-align: right; font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }}
-  .poly-title {{ flex: 1; }}
-  .poly-title a {{ color: #3b3529; text-decoration: none; }}
-  .poly-title a:hover {{ color: #6b4f2a; text-decoration: underline; }}
-  .poly-vol {{ font-size: 11px; color: #aaa098; white-space: nowrap; }}
-  .poly-conf {{ font-size: 10px; background: #fff3cd; color: #856404;
-                padding: 1px 6px; border-radius: 8px; font-weight: 700; }}
-  .poly-bar-bg {{ height: 5px; background: #e4e1d8; border-radius: 3px;
-                  overflow: hidden; margin-top: 4px; }}
-  .poly-bar-fill {{ height: 100%; border-radius: 3px; }}
-
   #toast {{
     position: fixed; bottom: 30px; left: 50%;
     transform: translateX(-50%) translateY(20px);
