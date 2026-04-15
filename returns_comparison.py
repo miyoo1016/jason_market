@@ -298,6 +298,7 @@ def main():
         all_returns[name] = row_returns
 
         # 매입 이후 수익률 (평단가 기반, 포트폴리오 종목만)
+        # ※ portfolio_tracker와 동일하게 순수 주가수익률로 계산 (USD는 현재환율로 통일)
         avg_krw = AVG_PRICES.get(ticker)
         if avg_krw and avg_krw > 0:
             try:
@@ -305,7 +306,23 @@ def main():
                 if not hist.empty:
                     curr = float(hist['Close'].dropna().iloc[-1])
                     is_krw = ticker.endswith('.KS') or ticker in ('^KS11', 'USDKRW=X')
-                    curr_krw = curr if is_krw else curr * usdkrw_now
+
+                    if ticker == 'GC=F':
+                        # ── 금현물(KRX) 특수처리: grams vs troy oz 단위 통일 ──
+                        # avg_krw = KRX 금 가격 (원/그램), GC=F (달러/트로이온스)
+                        # 1 troy oz = 31.1035 grams → GC=F를 그램당으로 변환
+                        gram_per_troy_oz = 31.1035
+                        curr_krw = curr * usdkrw_now / gram_per_troy_oz  # KRW/gram
+                    elif is_krw:
+                        # ── 한국 주식/지수 ──
+                        curr_krw = curr
+                    else:
+                        # ── USD 자산: 매입환율이 아닌 현재환율로 통일 (portfolio_tracker 동일) ──
+                        # 순수 주가 수익률만 계산, FX 효과 제외
+                        curr_krw = curr * usdkrw_now
+                        # avg_krw를 현재 환율로 재계산 (구매 당시 환율 아님)
+                        avg_krw = (avg_krw / (h.get('base_usdkrw', 1350) or 1350)) * usdkrw_now
+
                     since_ret = (curr_krw - avg_krw) / avg_krw * 100
                     since_avg[name] = since_ret
                 else:
