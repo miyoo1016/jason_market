@@ -1050,9 +1050,25 @@ def main():
     print(f"{'━'*90}")
     print("  xlsx 동기화 및 가격 조회 중...\n")
 
-    holdings = load_portfolio()
+    # ── [FIX] xlsx 자동 sync 비활성화 → portfolio.json이 덮어씌워지는 문제 방지 ──
+    # holdings = load_portfolio()  # 이 호출은 sync_to_json()을 통해 portfolio.json을 덮어씌움
+    # 대신 직접 portfolio.json을 읽기
+    import os
+    portfolio_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'portfolio.json')
+    if os.path.exists(portfolio_json_path):
+        import json
+        with open(portfolio_json_path, encoding='utf-8') as f:
+            portfolio_data = json.load(f)
+        holdings = []
+        for acc, items in portfolio_data.items():
+            for item in items:
+                item['account'] = acc
+                holdings.append(item)
+    else:
+        holdings = None
+
     if not holdings:
-        print("  보유 종목 없음. xlsx 파일을 확인하세요.")
+        print("  보유 종목 없음. portfolio.json 파일을 확인하세요.")
         return
 
     usdkrw_tuple = get_usdkrw()
