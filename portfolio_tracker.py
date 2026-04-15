@@ -240,13 +240,39 @@ def fmt_usd(val):
 def fmt_pct(val):
     return f"{val:>+7.2f}%"
 
+# ── 현금 추적 (일일·총손익 기준값 저장) ──────────────────────
+import json as _json_module
+
+_CASH_TRACKER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cash_tracker.json')
+
+def _load_cash_tracker():
+    """cash_tracker.json 로드. 없으면 빈 dict 반환."""
+    try:
+        with open(_CASH_TRACKER_PATH, encoding='utf-8') as f:
+            return _json_module.load(f)
+    except Exception:
+        return {}
+
+def _save_cash_tracker(tracker: dict):
+    """cash_tracker.json 저장."""
+    try:
+        with open(_CASH_TRACKER_PATH, 'w', encoding='utf-8') as f:
+            _json_module.dump(tracker, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 # ── 데이터 계산 ───────────────────────────────────────────
 
 def calc_data(holdings, usdkrw_tuple):
-    """모든 계좌 손익 계산 → accounts_data 반환"""
+    """모든 계좌 손익 계산 → (accounts_data, updated_cash_tracker) 반환"""
     usdkrw, prev_usdkrw = usdkrw_tuple
     valid = [h for h in holdings if h.get('ticker') and float(h.get('qty', 0)) > 0]
     price_cache = fetch_all_prices(valid, usdkrw)
+
+    tracker      = _load_cash_tracker()          # 기존 저장값
+    new_tracker  = {}                             # 이번 실행 후 저장할 값
+    today_str    = datetime.now().strftime('%Y-%m-%d')
+    cash_idx_map = {}                             # acc → 이 계좌에서 몇 번째 현금 행인지
 
     accounts = {}
     for h in valid:
@@ -257,6 +283,7 @@ def calc_data(holdings, usdkrw_tuple):
     for acc, items in accounts.items():
         rows = []
         acc_cost = acc_curr = acc_daily_profit = 0
+        acc_list = tracker.get(acc, [])  # 기존 tracker의 이 계좌 데이터
 
         for h in items:
             qty = float(h['qty'])
@@ -265,12 +292,52 @@ def calc_data(holdings, usdkrw_tuple):
 
             if h.get('is_cash') or h.get('ticker') == 'CASH':
                 cash_krw = avg if cur == 'KRW' else avg * usdkrw
-                acc_cost += cash_krw
-                acc_curr += cash_krw
+
+                # ── 이 계좌의 몇 번째 현금 행인지 인덱스 확인 ──────
+                idx = cash_idx_map.get(acc, 0)
+                cash_idx_map[acc] = idx + 1
+
+                # ── tracker 데이터 로드 ──────────────────────────
+                if idx < len(acc_list):
+                    entry = acc_list[idx]
+                else:
+                    # 처음 등장 → 기준값 = 현재 잔액 (손익 0으로 시작)
+                    entry = {'cost_basis': cash_krw, 'prev_balance': cash_krw, 'prev_date': today_str}
+
+                cost_basis   = entry.get('cost_basis', cash_krw)
+                prev_date    = entry.get('prev_date', today_str)
+                prev_balance = entry.get('prev_balance', cash_krw)
+
+                # 전일과 날짜가 같으면 same-day → daily 집계 유지
+                if prev_date == today_str:
+                    daily_profit_krw = cash_krw - prev_balance  # 오늘 이미 한 번 실행했을 때 누적
+                else:
+                    daily_profit_krw = cash_krw - prev_balance  # 전일 대비 변동
+
+                profit_krw = cash_krw - cost_basis
+                pct        = profit_krw / cost_basis * 100 if cost_basis > 0 else 0
+
+                # new_tracker에 기록 (cost_basis 는 보존, prev_balance 만 갱신)
+                new_entry = {
+                    'cost_basis':   cost_basis,       # 절대 덮어쓰지 않음
+                    'prev_balance': cash_krw,          # 이번 실행 기준으로 갱신
+                    'prev_date':    today_str,
+                }
+                if acc not in new_tracker:
+                    new_tracker[acc] = []
+                new_tracker[acc].append(new_entry)
+
+                acc_cost         += cost_basis
+                acc_curr         += cash_krw
+                acc_daily_profit += daily_profit_krw
+
                 rows.append({
                     'name': h['name'], 'qty': '현금', 'is_cash': True,
-                    'avg': '', 'price': '', 'cur': cur,
-                    'val_krw': cash_krw, 'profit_krw': 0, 'daily_profit_krw': 0, 'pct': 0,
+                    'avg': f'₩{cost_basis:,.0f}', 'price': f'₩{cash_krw:,.0f}', 'cur': cur,
+                    'val_krw': cash_krw, 'profit_krw': profit_krw,
+                    'daily_profit_krw': daily_profit_krw, 'pct': pct,
+                    'fx_pnl': 0, 'price_pnl': profit_krw, 'base_fx': 0,
+                    'is_precision': False,
                 })
                 continue
 
@@ -330,7 +397,7 @@ def calc_data(holdings, usdkrw_tuple):
             'profit': acc_profit, 'daily_profit': acc_daily_profit, 'pct': acc_pct,
         }
 
-    return accounts_data
+    return accounts_data, new_tracker
 
 # ── 터미널 출력 ───────────────────────────────────────────
 
@@ -349,8 +416,11 @@ def print_terminal(accounts_data, usdkrw, timestamp):
 
         for r in d['rows']:
             if r['is_cash']:
-                line = (f"  │ {r['name']:<16} {'현금':>8} {'':>12} {'':>12} "
-                        f"{fmt_krw(r['val_krw']):>16} {'₩0':>14} {'₩0':>12} {'0.00%':>8}")
+                line = (f"  │ {r['name']:<16} {'현금':>8} {r['avg']:>12} {r['price']:>12} "
+                        f"{fmt_krw(r['val_krw']):>16} "
+                        f"{fmt_krw(r['profit_krw']):>14} "
+                        f"{fmt_krw(r['daily_profit_krw']):>12} "
+                        f"{fmt_pct(r['pct']):>8}")
             else:
                 line = (f"  │ {r['name']:<16} {r['qty']:>8} "
                         f"{r['avg']:>12} {r['price']:>12} "
@@ -412,15 +482,18 @@ def generate_html(accounts_data, usdkrw_tuple, timestamp):
         rows_html = ''
         for r in d['rows']:
             if r['is_cash']:
+                pc  = pnl_color(r['profit_krw'])
+                pdc = pnl_color(r['daily_profit_krw'])
                 rows_html += f"""
       <tr class="cash-row">
-        <td class="name-cell">{r['name']}</td>
+        <td class="name-cell">{r['name']}<span class="fx-tag" style="background:#e8f5e9;color:#2e7d32;margin-left:4px">예금</span></td>
         <td class="center">현금</td>
-        <td>-</td><td>-</td>
+        <td class="num" style="color:#888">{r['avg']}</td>
+        <td class="num" style="color:#888">{r['price']}</td>
         <td class="num">₩{r['val_krw']:,.0f}</td>
-        <td class="num" style="color:#888">₩0</td>
-        <td class="num" style="color:#888">₩0</td>
-        <td class="num pct" style="color:#888">0.00%</td>
+        <td class="num" style="color:{pc}">{sign(r['profit_krw'])}₩{r['profit_krw']:,.0f}</td>
+        <td class="num" style="color:{pdc}">{sign(r['daily_profit_krw'])}₩{r['daily_profit_krw']:,.0f}</td>
+        <td class="num pct" style="color:{pc}">{sign(r['pct'])}{r['pct']:.2f}%</td>
       </tr>"""
             else:
                 pc = pnl_color(r['profit_krw'])
@@ -989,10 +1062,13 @@ def main():
     # ── [NEW] 엑셀 O14 셀 실시간 업데이트 ───────────────────
     update_xlsx_live_fx(usdkrw)
 
-    accounts_data = calc_data(holdings, usdkrw_tuple)
+    accounts_data, new_cash_tracker = calc_data(holdings, usdkrw_tuple)
     if not accounts_data:
         print("  유효한 보유 종목 없음.")
         return
+
+    # 현금 추적값 저장 (다음 실행 시 일일손익 계산용)
+    _save_cash_tracker(new_cash_tracker)
 
     print_terminal(accounts_data, usdkrw, timestamp)
 

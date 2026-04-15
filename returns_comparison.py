@@ -323,6 +323,28 @@ def main():
         line += f"  {fmt_ret(sa):>8}" if sa is not None else f"  {'–':>8}"
         print(line)
 
+    # ── 예금계좌 현금 (cash_tracker.json 기준) ──────────────
+    _ct_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cash_tracker.json')
+    try:
+        with open(_ct_path, encoding='utf-8') as _f:
+            _ct = json.load(_f)
+        for acc_name, entries in _ct.items():
+            total_cost = sum(e.get('cost_basis', 0) for e in entries)
+            total_curr = sum(e.get('prev_balance', 0) for e in entries)
+            if total_cost <= 0:
+                continue
+            cash_ret = (total_curr - total_cost) / total_cost * 100
+            lbl = f"현금({acc_name[:6]})"
+            # 기간별 수익률은 N/A (현금은 가격 이력 없음), 매입후만 표시
+            all_returns[lbl] = [None] * len(PERIODS)
+            since_avg[lbl]   = cash_ret
+            line = f"  {lbl:<14}" + "".join(f"  {'–':>8}" for _ in PERIODS) + f"  {fmt_ret(cash_ret):>8}"
+            print(line)
+    except FileNotFoundError:
+        print("  ※ 현금 기준값 없음 (2번 포트폴리오 조회 후 자동 생성)")
+    except Exception:
+        pass
+
     print(f"  {'─'*78}")
 
     # 기간별 순위 (TOP 3)
