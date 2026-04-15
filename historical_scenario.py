@@ -510,9 +510,37 @@ EVENTS_DB = [
      "keywords":["AMZN실적","AWS성장","AI클라우드","베드락","물류자동화"],
      "desc":"AMZN Q3 AWS +19% 성장. AI 수요로 클라우드 재가속. 마진 개선. +6%.","impact":6},
 
+    {"date":"2023-07-25","name":"GOOGL Q2 2023 실적 — 유튜브 반등 + 클라우드 재가속","category":"실적",
+     "keywords":["GOOGL실적","유튜브광고","구글클라우드","검색광고","알파벳"],
+     "desc":"GOOGL Q2 EPS $1.44 vs $1.34 예상 대폭 상회. 유튜브 광고 역성장 탈출 +4%. 클라우드 +28% 성장 가속.","impact":6},
+
+    {"date":"2023-10-24","name":"GOOGL Q3 2023 실적 — 검색 서프라이즈 + AI 투자 확대","category":"실적",
+     "keywords":["GOOGL실적","검색광고급증","유튜브성장","구글클라우드","AI투자비용"],
+     "desc":"GOOGL Q3 EPS $1.55 서프라이즈. 검색 광고 +11% YoY. Cloud 22% 성장. 시간외 +4%.","impact":4},
+
+    {"date":"2024-01-30","name":"GOOGL Q4 2023 실적 — 클라우드 기대 하회","category":"실적",
+     "keywords":["GOOGL실적","구글클라우드기대하회","검색견조","유튜브성장","알파벳실적"],
+     "desc":"GOOGL Q4 EPS 서프라이즈. 그러나 클라우드 부문 기대치 소폭 하회로 시간외 -5%.","impact":-5},
+
+    {"date":"2024-04-25","name":"GOOGL Q1 2024 실적 — 첫 배당 + 클라우드 급성장","category":"실적",
+     "keywords":["GOOGL실적","구글첫배당","구글클라우드+28%","자사주매입","제미나이1.5"],
+     "desc":"GOOGL Q1 첫 배당($0.20/주) + 700억 자사주매입 발표. Cloud +28% 어닝 서프라이즈. +10%.","impact":10},
+
+    {"date":"2024-07-23","name":"GOOGL Q2 2024 실적 — 유튜브·클라우드 동반 가속","category":"실적",
+     "keywords":["GOOGL실적","유튜브+13%","구글클라우드+29%","광고수익","제미나이"],
+     "desc":"GOOGL Q2 EPS $1.89 서프라이즈. YouTube +13%, Cloud +29%, 검색 견조. +5%.","impact":5},
+
     {"date":"2024-10-29","name":"GOOGL Q3 2024 실적 — 클라우드 반등 서프라이즈","category":"실적",
      "keywords":["GOOGL실적","구글클라우드","제미나이","검색AI","광고수익"],
      "desc":"GOOGL Q3 대폭 상회. 구글 클라우드 +35% 성장. 광고 견조. +6%.","impact":6},
+
+    {"date":"2025-02-04","name":"GOOGL Q4 2024 실적 — 클라우드 +30% + AI 투자 확대","category":"실적",
+     "keywords":["GOOGL실적","구글클라우드+30%","제미나이2.0","AI인프라투자","유튜브광고"],
+     "desc":"GOOGL Q4 2024 실적 서프라이즈. Cloud +30% 성장. Gemini 2.0 발표. 카펙스 $75B 확대 계획. +3%.","impact":3},
+
+    {"date":"2025-04-29","name":"GOOGL Q1 2025 실적 — AI 검색 전환 + 클라우드 재가속","category":"실적",
+     "keywords":["GOOGL실적","구글AI검색","AI오버뷰","클라우드재가속","광고AI최적화"],
+     "desc":"GOOGL Q1 2025 매출 $90.2B 대폭 상회. Cloud $12.3B +28%. AI Overview 검색 전환 긍정. +6%.","impact":6},
 
     {"date":"2024-10-30","name":"MSFT Q1 FY25 실적 — Azure 성장 둔화 우려","category":"실적",
      "keywords":["MSFT실적","Azure성장둔화","코파일럿","클라우드","AI투자"],
@@ -588,9 +616,7 @@ CATEGORY_EXPAND = {
     '원자재':   ['유가','원유','WTI','브렌트','금','에너지','LNG','천연가스','재고'],
     '환율':     ['달러','환율','엔화','원화','달러인덱스','DXY','강달러','약달러'],
     '실적':     ['실적','분기','EPS','매출','가이던스','어닝','earnings','서프라이즈',
-                 'TSMC','TSM','NVDA','엔비디아','AAPL','애플','MSFT','마이크로소프트',
-                 'GOOGL','구글','META','메타','AMZN','아마존','TSLA','테슬라',
-                 '펩시','PEP','슈왑','SCHW','애보트','ABT','실적발표','장전','장후'],
+                 '실적발표','장전','장후','어닝시즌','분기실적','실적시즌'],
 }
 
 # 티커명 → 이벤트 키워드 매핑
@@ -747,11 +773,20 @@ def match_events(scenario_text: str, top_n: int = 6,
         and (year_to   is None or int(e['date'][:4]) <= year_to)
     ]
 
+    # ── 입력에서 특정 기업 티커 사전 감지 ─────────────────────────────
+    # COMPANY_MAP을 통해 한국어/영어/티커 모두 인식
+    _exclude = {'SPY','QQQ','SMH','GLD','USO','TLT','BTC-USD'}
+    input_company_tickers = set()
+    for key, ticker in COMPANY_MAP.items():
+        if key.lower() in txt_lower and ticker not in _exclude:
+            input_company_tickers.add(ticker)
+
     scored = []
     for ev in target_db:
         score = 0
         matched_kws = []
         ev_year = int(ev['date'][:4])
+        ev_combined = (ev['name'] + ' ' + ' '.join(ev['keywords'])).lower()
 
         # 1) DB 키워드 직접 매칭 (+4점)
         for kw in ev['keywords']:
@@ -772,11 +807,11 @@ def match_events(scenario_text: str, top_n: int = 6,
                 score += 2
                 matched_kws.append(nt)
 
-        # 4) 티커명 특별 매칭 (+3점)
+        # 4) 티커명 특별 매칭: 입력에 티커가 직접 있을 때 (+3점)
         for ticker, kws in TICKER_TO_KW.items():
             if ticker.lower() in txt_lower:
                 for kw in kws:
-                    if kw.lower() in ev['name'].lower() or kw.lower() in ' '.join(ev['keywords']).lower():
+                    if kw.lower() in ev_combined:
                         score += 3
                         if ticker not in matched_kws:
                             matched_kws.append(ticker)
@@ -786,7 +821,28 @@ def match_events(scenario_text: str, top_n: int = 6,
         if ev['date'][:4] in txt_lower:
             score += 1
 
-        # 6) 최신 이벤트 가산점 (최근 우선)
+        # 6) ★ 기업 특정 매칭 — 핵심 정확도 로직
+        if input_company_tickers:
+            company_hit = False
+            for ticker in input_company_tickers:
+                # 이 이벤트가 해당 기업에 대한 것인지 확인
+                aliases = [ticker] + TICKER_TO_KW.get(ticker, [])
+                if any(alias.lower() in ev_combined for alias in aliases):
+                    score += 8  # 해당 기업 이벤트에 강력 가산
+                    if ticker not in matched_kws:
+                        matched_kws.append(ticker)
+                    company_hit = True
+                    break
+            if not company_hit:
+                # 다른 특정 기업 이벤트인지 확인 → 있으면 감점
+                for other_t, other_kws in TICKER_TO_KW.items():
+                    if other_t in input_company_tickers:
+                        continue
+                    if any(kw.lower() in ev_combined for kw in [other_t] + other_kws[:2]):
+                        score -= 4  # 관련 없는 기업 이벤트 감점
+                        break
+
+        # 7) 최신 이벤트 가산점 (최근 우선)
         diff = CURRENT_YEAR - ev_year
         recency = max(0, 6 - diff)  # 0~1년=6, 1~2년=5, ..., 5~6년=1, 7년+=0
         score += recency
