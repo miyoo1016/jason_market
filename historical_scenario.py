@@ -36,12 +36,15 @@ TICKERS_INFO = {
     'META': 'Meta',
     'NVDA': 'NVIDIA',
     'TSLA': 'Tesla',
+    'TSM':  'TSMC',
+    'SMH':  '반도체 ETF',
 }
 
 TICKER_COLORS = {
     'SPY':'#1a3a5c','QQQ':'#00838f','GLD':'#b8860b',
     'AAPL':'#555555','MSFT':'#107C10','GOOGL':'#4285F4',
-    'AMZN':'#FF9900','META':'#0866FF','NVDA':'#76B900','TSLA':'#E31937'
+    'AMZN':'#FF9900','META':'#0866FF','NVDA':'#76B900','TSLA':'#E31937',
+    'TSM':'#CE0E2D','SMH':'#7B2FBE',
 }
 
 # ── 역사적 이벤트 DB (300개) ─────────────────────────────────────
@@ -432,6 +435,142 @@ EVENTS_DB = [
     {"date":"2024-01-10","name":"비트코인 ETF 승인 — 기관 투자 개막","category":"기술혁명",
      "keywords":["비트코인ETF","블랙록","기관투자","디지털금","SEC승인"],
      "desc":"블랙록 등 현물 BTC ETF 승인. 기관 투자 자금 유입 시작. BTC 새 사이클.","impact":8},
+
+    # ─── 2024 경제지표 / 금리 이벤트 ─────────────────────────────
+    {"date":"2024-03-12","name":"CPI 3.2% 예상 상회 — 라스트 마일 난관","category":"경제지표",
+     "keywords":["CPI상회","인플레이션라스트마일","금리인하지연","채권금리상승","연착륙불확실"],
+     "desc":"2월 CPI 3.2%, 예상 3.1% 상회. 금리인하 지연 우려. '라스트 마일' 난관.","impact":-3},
+
+    {"date":"2024-04-10","name":"CPI 3.5% 서프라이즈 — 금리인하 기대 붕괴","category":"경제지표",
+     "keywords":["CPI서프라이즈","금리인하기대붕괴","인플레이션재가속","채권금리급등","스태그플레이션"],
+     "desc":"3월 CPI 3.5%, 예상치 대폭 상회. 6월 금리인하 기대 소멸. S&P500 -1.2%.","impact":-5},
+
+    {"date":"2024-05-03","name":"비농업고용 175K 예상 하회 — 9월 인하 기대 부활","category":"경제지표",
+     "keywords":["비농업고용쇼크","고용둔화","금리인하기대","노동시장냉각","연착륙"],
+     "desc":"4월 고용 175K, 예상 240K 하회. 노동시장 냉각 신호. 9월 인하 기대 부활. 채권 랠리.","impact":3},
+
+    {"date":"2024-07-11","name":"CPI 3.0% 쇼크 하회 — 금리인하 확신","category":"경제지표",
+     "keywords":["CPI하회","디스인플레이션","금리인하확신","연착륙","9월인하"],
+     "desc":"6월 CPI 3.0%, 예상 3.1% 하회. 9월 인하 확신. 소형주 로테이션 급등. 빅테크 차익.","impact":5},
+
+    {"date":"2024-08-02","name":"고용 쇼크 + 삼의 법칙 발동 — 경기침체 공포","category":"경제지표",
+     "keywords":["고용쇼크","삼의법칙","경기침체공포","VIX급등","안전자산"],
+     "desc":"7월 고용 114K, 실업률 4.3% 삼의 법칙 발동. S&P500 -1.8%, VIX 38 급등.","impact":-6},
+
+    {"date":"2024-09-06","name":"고용보고서 재반등 — 경기침체 우려 완화","category":"경제지표",
+     "keywords":["고용반등","경기침체우려완화","연착륙재확인","빅컷","FOMC"],
+     "desc":"8월 고용 142K, 예상 하회지만 삼의 법칙 해제 수준. 빅컷 기대 50:50.","impact":1},
+
+    {"date":"2024-09-18","name":"FOMC 50bp 빅컷 — 연착륙 선언","category":"금리",
+     "keywords":["빅컷","50bp인하","연착륙선언","Fed피벗","금리인하사이클"],
+     "desc":"Fed 50bp 빅컷 단행. 연착륙 자신감 표명. 금리인하 사이클 공식 시작.","impact":8},
+
+    {"date":"2024-11-07","name":"FOMC 25bp 인하 + 트럼프 당선 후 첫 회의","category":"금리",
+     "keywords":["FOMC인하","트럼프관세","인플레이션재우려","중립금리","점도표"],
+     "desc":"11월 FOMC 25bp 추가 인하. 트럼프 당선 이후 관세 인플레이션 우려 언급.","impact":2},
+
+    {"date":"2024-12-18","name":"FOMC 매파적 인하 — 2025년 인하 2회로 축소","category":"금리",
+     "keywords":["매파적인하","2025인하횟수축소","채권금리급등","나스닥급락","점도표충격"],
+     "desc":"25bp 인하 + 2025년 인하 횟수 4→2회로 축소. 채권금리 급등. 나스닥 -3.6%.","impact":-5},
+
+    # ─── 2024 정치 / 지정학 ────────────────────────────────────────
+    {"date":"2024-11-06","name":"트럼프 2기 당선 — 감세·관세·규제완화 기대","category":"정치",
+     "keywords":["트럼프당선","감세","관세","규제완화","비트코인","달러강세"],
+     "desc":"트럼프 2기 압승. S&P500 +2.5%, 비트코인 급등, 달러 강세. 감세·규제완화 기대.","impact":10},
+
+    # ─── 2024 실적발표 이벤트 ─────────────────────────────────────
+    {"date":"2024-01-18","name":"TSMC Q4 2023 실적 — AI 반도체 수요 폭증 확인","category":"실적",
+     "keywords":["TSMC실적","AI반도체","파운드리","HBM","CoWoS","반도체사이클"],
+     "desc":"TSMC Q4 매출 예상 상회. AI 칩 수요 급증 공식 확인. 반도체 섹터 랠리 촉발.","impact":8},
+
+    {"date":"2024-02-21","name":"NVDA Q4 FY24 실적 — AI 사이클 본격화","category":"실적",
+     "keywords":["NVDA실적","H100","데이터센터","AI사이클","EPS서프라이즈"],
+     "desc":"NVDA FY Q4 EPS $5.16 vs $4.56 예상. 매출 $22.1B. 다음 분기 가이던스 대폭 상회.","impact":15},
+
+    {"date":"2024-04-18","name":"TSMC Q1 2024 실적 — AI 수요 사이클 재확인","category":"실적",
+     "keywords":["TSMC실적","AI수요확인","파운드리가동률","반도체사이클","엔비디아수요"],
+     "desc":"TSMC Q1 실적 예상 상회. AI 칩 수요가 반도체 사이클 전체 견인 확인.","impact":5},
+
+    {"date":"2024-04-25","name":"META Q1 2024 실적 쇼크 — AI 투자 부담","category":"실적",
+     "keywords":["META실적쇼크","카펙스급증","AI투자부담","광고매출","빅테크밸류에이션"],
+     "desc":"META 매출 예상 상회 불구 카펙스 가이던스 대폭 상향. AI 투자 부담 우려로 -11%.","impact":-11},
+
+    {"date":"2024-05-02","name":"AAPL Q2 FY24 실적 — AI 슈퍼사이클 기대","category":"실적",
+     "keywords":["AAPL실적","애플인텔리전스","자사주매입1100억","AI폰","아이폰16"],
+     "desc":"AAPL Q2 예상 상회 + 110B 자사주 매입 발표. 애플 인텔리전스 AI 전략 공개.","impact":7},
+
+    {"date":"2024-07-30","name":"META Q2 2024 실적 — AI 광고 혁명","category":"실적",
+     "keywords":["META실적","AI광고효율","라마","오픈소스AI","Advantage+"],
+     "desc":"META Q2 EPS $5.16 서프라이즈. AI 광고 효율화로 마진 급개선. Llama 오픈소스.","impact":6},
+
+    {"date":"2024-08-28","name":"NVDA Q2 FY25 실적 — 기대치 부합 but 시간외 하락","category":"실적",
+     "keywords":["NVDA실적","블랙웰지연","데이터센터","AI인프라","고평가논란"],
+     "desc":"NVDA Q2 대폭 상회 불구 블랙웰 지연 우려 + 시간외 -7%. '서프라이즈 피로감'.","impact":-3},
+
+    {"date":"2024-10-17","name":"TSMC Q3 2024 실적 — AI 붐 최전성기","category":"실적",
+     "keywords":["TSMC실적","AI붐","CoWoS","HBM3E","N3공정","매출+39%"],
+     "desc":"TSMC Q3 매출 +39% YoY. AI 수요 폭발. 2024년 가이던스 상향. 반도체 섹터 강세.","impact":7},
+
+    {"date":"2024-10-24","name":"AMZN Q3 2024 실적 — AWS AI 가속","category":"실적",
+     "keywords":["AMZN실적","AWS성장","AI클라우드","베드락","물류자동화"],
+     "desc":"AMZN Q3 AWS +19% 성장. AI 수요로 클라우드 재가속. 마진 개선. +6%.","impact":6},
+
+    {"date":"2024-10-29","name":"GOOGL Q3 2024 실적 — 클라우드 반등 서프라이즈","category":"실적",
+     "keywords":["GOOGL실적","구글클라우드","제미나이","검색AI","광고수익"],
+     "desc":"GOOGL Q3 대폭 상회. 구글 클라우드 +35% 성장. 광고 견조. +6%.","impact":6},
+
+    {"date":"2024-10-30","name":"MSFT Q1 FY25 실적 — Azure 성장 둔화 우려","category":"실적",
+     "keywords":["MSFT실적","Azure성장둔화","코파일럿","클라우드","AI투자"],
+     "desc":"MSFT Q1 EPS 서프라이즈. Azure 29% vs 31% 예상. 시간외 -4%.","impact":-3},
+
+    {"date":"2024-11-21","name":"NVDA Q3 FY25 실적 — 기대치 상회 but 시장 실망","category":"실적",
+     "keywords":["NVDA실적","블랙웰양산","데이터센터","호퍼매출","AI에이전트"],
+     "desc":"NVDA Q3 EPS $0.81 vs $0.75 예상. 매출 $35.1B. 블랙웰 양산 본격화. 시간외 하락.","impact":-3},
+
+    # ─── 2025 이벤트 ──────────────────────────────────────────────
+    {"date":"2025-01-20","name":"트럼프 2기 취임 + 관세 행정명령 예고","category":"무역",
+     "keywords":["트럼프취임","관세행정명령","DOGE","달러정책","규제완화"],
+     "desc":"트럼프 2기 취임. 캐나다·멕시코 25%, 중국 10% 추가 관세 예고. 시장 혼조.","impact":-3},
+
+    {"date":"2025-01-27","name":"DeepSeek R1 충격 — AI 인프라 투자 의문","category":"기술혁명",
+     "keywords":["DeepSeek","AI인프라","NVDA폭락","중국AI","저비용AI","효율AI"],
+     "desc":"중국 DeepSeek R1 오픈소스 출시. NVDA -17%, 나스닥 -3%. 데이터센터 투자 가치 의문.","impact":-8},
+
+    {"date":"2025-01-29","name":"NVDA Q4 FY25 실적 — 블랙웰 양산 본격화","category":"실적",
+     "keywords":["NVDA실적","블랙웰","AI에이전트","추론칩","DeepSeek충격"],
+     "desc":"블랙웰 GPU 양산 본격화. 매출 $39.3B. DeepSeek 충격 이후 발표 혼조 반응.","impact":-2},
+
+    {"date":"2025-02-19","name":"FOMC 의사록 — 관세 인플레이션 + 금리인하 신중","category":"금리",
+     "keywords":["FOMC의사록","금리인하신중","관세인플레이션","경기불확실","동결"],
+     "desc":"Fed: 관세 불확실성·인플레이션 재가속 우려로 금리 인하 신중. 동결 기조 강화.","impact":-2},
+
+    {"date":"2025-03-04","name":"캐나다·멕시코 25% 관세 발동 — 무역전쟁 현실화","category":"무역",
+     "keywords":["캐나다멕시코관세","자동차관세","USMCA","무역전쟁","스태그플레이션"],
+     "desc":"캐나다·멕시코 25% 관세 실제 발동. 자동차·농산물 타격. 나스닥 -2.8%.","impact":-5},
+
+    {"date":"2025-03-12","name":"CPI 2.8% 예상 하회 — 물가 안도 but 관세 불확실","category":"경제지표",
+     "keywords":["CPI하회","물가안정","관세인플레이션","Fed동결","스태그플레이션우려"],
+     "desc":"2월 CPI 2.8%, 예상 2.9% 하회. 단기 안도감. 그러나 관세 영향 본격화 우려.","impact":2},
+
+    {"date":"2025-04-02","name":"Liberation Day — 전 세계 상호관세 발표","category":"무역",
+     "keywords":["해방의날","상호관세","전면관세전쟁","중국145%","1930대공황재연"],
+     "desc":"전 세계 상호관세 발표. 중국 최대 145%. 글로벌 무역 질서 재편. 나스닥 -5%.","impact":-15},
+
+    {"date":"2025-04-09","name":"90일 관세 유예 발표 — 나스닥 역사적 V반등","category":"무역",
+     "keywords":["관세유예","V자반등","나스닥9.5%","협상기대","단기반등"],
+     "desc":"중국 제외 90일 관세 유예 발표. 나스닥 +9.5%, S&P500 +9.5%. 역사적 단일일 급등.","impact":10},
+
+    {"date":"2025-04-10","name":"중국 보복관세 125% — 미중 관세전쟁 최고조","category":"무역",
+     "keywords":["중국보복관세","미중무역전쟁","125%관세","공급망붕괴","달러약세"],
+     "desc":"중국 미국산 125% 보복관세. 미중 관세전쟁 전면화. 글로벌 공급망 재편 가속.","impact":-8},
+
+    {"date":"2025-04-17","name":"TSMC Q1 2025 실적 — AI 수요 vs 관세 리스크","category":"실적",
+     "keywords":["TSMC실적","AI수요","관세영향","파운드리","지정학리스크","N3공정"],
+     "desc":"TSMC Q1 2025 실적. AI 반도체 수요 지속 확인 vs 관세·지정학 가이던스 주목.","impact":0},
+
+    {"date":"2025-04-16","name":"필라델피아연은 제조업지수 악화 — 경기침체 신호","category":"경제지표",
+     "keywords":["필라델피아연은","제조업지수","경기침체신호","관세충격","제조업둔화"],
+     "desc":"4월 필라델피아연은 제조업지수 급락. 관세 충격으로 제조업 심리 위축 본격화.","impact":-4},
 ]
 
 
@@ -445,8 +584,26 @@ def analyze_with_gemini(scenario_text: str) -> dict:
         for e in EVENTS_DB
     )
 
+    # 실적발표 종목 감지 (프롬프트 강화용)
+    earnings_keywords = ['실적', '분기', 'EPS', '매출', '가이던스', '어닝', 'earnings',
+                         'TSMC', 'TSM', 'NVDA', 'AAPL', 'MSFT', 'GOOGL', 'META', 'AMZN',
+                         '펩시', 'PEP', '슈왑', 'SCHW', '애보트', 'ABT']
+    has_earnings = any(kw.lower() in scenario_text.lower() for kw in earnings_keywords)
+
+    earnings_section = ""
+    if has_earnings:
+        earnings_section = """
+[실적발표 시나리오 감지 — 추가 분석 필수]
+시나리오에 기업 실적발표가 포함되어 있습니다. 반드시 아래 항목을 분석에 포함하세요:
+1. 해당 기업 실적이 서프라이즈/인라인/미스일 때 주가 역사적 반응 패턴
+2. 해당 기업이 속한 섹터 전체에 미치는 파급 효과 (예: TSMC → 반도체 전체, 나스닥)
+3. 동종업계 경쟁사 주가 영향 (예: TSMC 실적 → NVDA, AMD, ASML 연동)
+4. 실적 시즌 전체 분위기에 미치는 영향
+5. earnings_analysis 항목에 위 분석을 별도로 추가할 것"""
+
     prompt = f"""당신은 50년 경력의 월가 수석 투자 전략가입니다.
 현재 시장 시나리오를 분석하고 역사적으로 가장 유사한 시점을 찾아 투자자에게 인사이트를 제공해야 합니다.
+{earnings_section}
 
 [분석할 현재 시나리오]
 {scenario_text}
@@ -456,11 +613,13 @@ def analyze_with_gemini(scenario_text: str) -> dict:
 
 위 DB에서 현재 시나리오와 가장 유사한 이벤트를 최대 4개 선정하세요.
 유사도는 이벤트의 성격, 규모, 시장 구조, 정책 배경을 종합 판단합니다.
+실적 관련 이벤트가 있다면 카테고리가 '실적'인 이벤트를 우선 고려하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요 (다른 텍스트 없이):
 {{
   "analysis": "현재 시나리오의 핵심 분석. 어떤 유형의 위험/기회인지, 시장에 어떤 영향을 줄 수 있는지 (3-4문장, 한국어)",
   "main_risks": ["핵심 리스크1", "핵심 리스크2", "핵심 리스크3"],
+  "earnings_analysis": "실적발표가 포함된 경우: 해당 기업 실적의 예상 범위, 섹터 파급효과, 관련 종목 영향 분석. 없으면 빈 문자열.",
   "matched_events": [
     {{
       "date": "YYYY-MM-DD",
@@ -686,6 +845,18 @@ textarea::placeholder{color:#b0a890;}
 .outlook-box p{line-height:1.72;font-size:.9rem;}
 .key-lvl{margin-top:12px;padding-top:11px;border-top:1px solid #e4e0d4;font-size:.83rem;color:var(--orange);font-weight:700;}
 .disclaimer{text-align:center;font-size:.72rem;color:#bbb;margin-top:14px;padding-top:10px;border-top:1px solid #eee;}
+
+/* ── 실적 분석 박스 ── */
+.earnings-box{background:#fff8e8;border:1.5px solid #e6a817;border-radius:10px;padding:14px 18px;margin-top:12px;font-size:.87rem;line-height:1.68;color:#4a3000;}
+.earnings-box .earn-title{font-weight:800;color:#b8860b;margin-bottom:7px;font-size:.9rem;}
+
+/* ── 복사 버튼 영역 ── */
+.copy-bar{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+.copy-btn{flex:1;min-width:160px;padding:11px 16px;border:1.5px solid var(--navy);border-radius:9px;background:#fff;color:var(--navy);font-size:.84rem;font-weight:700;cursor:pointer;transition:all .18s;display:flex;align-items:center;justify-content:center;gap:7px;}
+.copy-btn:hover{background:var(--navy);color:#fff;}
+.copy-btn.copied{background:#00838f;border-color:#00838f;color:#fff;}
+.copy-btn-raw{border-color:#888;color:#555;}
+.copy-btn-raw:hover{background:#555;border-color:#555;color:#fff;}
 </style>
 </head>
 <body>
@@ -746,6 +917,10 @@ textarea::placeholder{color:#b0a890;}
       <div class="ctitle">🤖 Gemini 시나리오 분석</div>
       <div class="analysis-box" id="aText"></div>
       <div class="risk-tags" id="rTags"></div>
+      <div id="earningsBox" style="display:none" class="earnings-box">
+        <div class="earn-title">📋 실적발표 영향 분석</div>
+        <div id="earningsTxt"></div>
+      </div>
     </div>
 
     <div class="card">
@@ -769,6 +944,11 @@ textarea::placeholder{color:#b0a890;}
         ⚠️ 본 분석은 역사적 패턴 참고용이며 투자 조언이 아닙니다. 과거 패턴이 미래를 보장하지 않습니다.
         적중률은 방향성 기준 55~65% 수준입니다.
       </div>
+      <!-- 복사 버튼 -->
+      <div class="copy-bar">
+        <button class="copy-btn" id="copyAllBtn" onclick="copyAll()">📋 전체 분석 복사 (다른 AI에 붙여넣기)</button>
+        <button class="copy-btn copy-btn-raw" id="copyRawBtn" onclick="copyRaw()">📄 원시 JSON 복사</button>
+      </div>
     </div>
 
   </div>
@@ -780,20 +960,25 @@ const TICKERS = [
   {t:'SPY',d:'S&P500 ETF',on:true},
   {t:'QQQ',d:'나스닥100 ETF',on:true},
   {t:'GLD',d:'금 ETF',on:true},
-  {t:'AAPL',d:'Apple',on:true},
-  {t:'MSFT',d:'Microsoft',on:true},
+  {t:'TSM',d:'TSMC',on:true},
+  {t:'NVDA',d:'NVIDIA',on:true},
+  {t:'SMH',d:'반도체 ETF',on:false},
+  {t:'AAPL',d:'Apple',on:false},
+  {t:'MSFT',d:'Microsoft',on:false},
   {t:'GOOGL',d:'Alphabet',on:false},
   {t:'AMZN',d:'Amazon',on:false},
   {t:'META',d:'Meta',on:false},
-  {t:'NVDA',d:'NVIDIA',on:true},
   {t:'TSLA',d:'Tesla',on:false},
 ];
 
 const COLORS = {
   SPY:'#1a3a5c',QQQ:'#00838f',GLD:'#b8860b',
   AAPL:'#555',MSFT:'#107C10',GOOGL:'#4285F4',
-  AMZN:'#FF9900',META:'#0866FF',NVDA:'#76B900',TSLA:'#E31937'
+  AMZN:'#FF9900',META:'#0866FF',NVDA:'#76B900',TSLA:'#E31937',
+  TSM:'#CE0E2D',SMH:'#7B2FBE'
 };
+
+let lastRawData = null; // 원시 데이터 보관
 
 // 종목 버튼 생성 (checkbox 대신 data-selected 속성으로 상태 관리)
 const tg = document.getElementById('tg');
@@ -854,11 +1039,20 @@ async function doAnalyze() {
 
 function renderAll(data) {
   const g = data.gemini;
+  lastRawData = data; // 원시 데이터 보관
 
   // AI 분석
   document.getElementById('aText').textContent = g.analysis || '';
   document.getElementById('rTags').innerHTML = (g.main_risks||[])
     .map(r=>`<span class="rtag">${r}</span>`).join('');
+
+  // 실적 분석 (있을 때만 표시)
+  if (g.earnings_analysis && g.earnings_analysis.trim()) {
+    document.getElementById('earningsTxt').textContent = g.earnings_analysis;
+    document.getElementById('earningsBox').style.display = 'block';
+  } else {
+    document.getElementById('earningsBox').style.display = 'none';
+  }
 
   // 이벤트 카드
   chartCache = data.charts || {};
@@ -907,6 +1101,60 @@ function renderAll(data) {
     curEvent = g.matched_events[0].date;
     renderChart(curEvent, chartCache[curEvent]);
   }
+}
+
+function copyAll() {
+  if (!lastRawData) return;
+  const g = lastRawData.gemini;
+  const scenario = document.getElementById('si').value.trim();
+  const lines = [];
+  lines.push('=== 역사적 시나리오 분석 결과 ===');
+  lines.push('');
+  lines.push('[입력 시나리오]');
+  lines.push(scenario);
+  lines.push('');
+  lines.push('[핵심 분석]');
+  lines.push(g.analysis || '');
+  lines.push('');
+  if (g.earnings_analysis && g.earnings_analysis.trim()) {
+    lines.push('[실적발표 영향 분석]');
+    lines.push(g.earnings_analysis);
+    lines.push('');
+  }
+  lines.push('[핵심 리스크]');
+  (g.main_risks||[]).forEach((r,i) => lines.push(`${i+1}. ${r}`));
+  lines.push('');
+  lines.push('[역사적 유사 시점]');
+  (g.matched_events||[]).forEach((ev,i) => {
+    lines.push(`${i+1}. [${ev.date}] ${ev.name} (유사도 ${ev.similarity_score}%)`);
+    lines.push(`   카테고리: ${ev.category||''}`);
+    lines.push(`   유사 이유: ${ev.reason}`);
+    lines.push(`   당시 시장 반응: ${ev.market_outcome}`);
+    if (ev.db_desc) lines.push(`   이벤트 설명: ${ev.db_desc}`);
+    lines.push('');
+  });
+  lines.push('[시장 전망]');
+  lines.push(g.outlook || '');
+  lines.push('');
+  lines.push('[주목할 지표]');
+  lines.push(g.key_levels_to_watch || '');
+
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    const btn = document.getElementById('copyAllBtn');
+    btn.textContent = '✅ 복사 완료!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 전체 분석 복사 (다른 AI에 붙여넣기)'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function copyRaw() {
+  if (!lastRawData) return;
+  navigator.clipboard.writeText(JSON.stringify(lastRawData.gemini, null, 2)).then(() => {
+    const btn = document.getElementById('copyRawBtn');
+    btn.textContent = '✅ JSON 복사 완료!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📄 원시 JSON 복사'; btn.classList.remove('copied'); }, 2000);
+  });
 }
 
 function renderChart(evDate, data) {
