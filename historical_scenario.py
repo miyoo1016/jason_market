@@ -647,9 +647,11 @@ def analyze_with_gemini(scenario_text: str) -> dict:
             return json.loads(text)
         except Exception as e:
             last_err = e
-            if '429' in str(e) or 'RESOURCE_EXHAUSTED' in str(e):
-                continue  # 다음 모델 시도
-            raise  # 다른 오류는 즉시 raise
+            err_str = str(e)
+            # 일시적 오류(할당량 초과, 서버 과부하, 서비스 불가)는 다음 모델로 폴백
+            if any(code in err_str for code in ['429', '503', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE', 'quota']):
+                continue
+            raise  # 그 외 오류는 즉시 raise
     raise last_err
 
 
