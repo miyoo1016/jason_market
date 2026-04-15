@@ -629,7 +629,7 @@ TICKER_TO_KW = {
     'ABT':  ['애보트','ABT','헬스케어','의료'],
     'AAPL': ['AAPL','애플','아이폰'],
     'MSFT': ['MSFT','마이크로소프트','Azure'],
-    'GOOGL':['GOOGL','구글','Alphabet','검색'],
+    'GOOGL':['GOOGL','구글','Alphabet','알파벳','유튜브'],
     'META': ['META','메타','페이스북'],
     'AMZN': ['AMZN','아마존','AWS'],
     'TSLA': ['TSLA','테슬라','전기차'],
@@ -758,106 +758,108 @@ def match_events(scenario_text: str, top_n: int = 6,
                  year_from: int = None, year_to: int = None) -> list:
     """
     키워드 기반 이벤트 매칭 — API 불필요, 순수 DB 검색
-    반환: [{event 원본 필드 전체} + matched_keywords, match_score]
-    최신 우선: 최근 연도일수록 가산점 부여
+
+    ★ 핵심 규칙:
+    1. 기업명 감지 시 → 해당 기업 이벤트만 표시 (하드 필터)
+    2. 연도 우선 정렬: 최신 연도 전체 → 없으면 전년도 → 그 전년도 순
     """
-    CURRENT_YEAR = 2026
-
     txt_lower = scenario_text.lower()
-    tokens = set(re.split(r'[\s\n\r\t,·\-\+\(\)/★]+', txt_lower))
 
-    # 연도 범위 필터용 DB 선택
+    # ── 연도 범위 필터 ──────────────────────────────────────────────
     target_db = [
         e for e in EVENTS_DB
         if (year_from is None or int(e['date'][:4]) >= year_from)
         and (year_to   is None or int(e['date'][:4]) <= year_to)
     ]
 
-    # ── 입력에서 특정 기업 티커 사전 감지 ─────────────────────────────
-    # COMPANY_MAP을 통해 한국어/영어/티커 모두 인식
-    _exclude = {'SPY','QQQ','SMH','GLD','USO','TLT','BTC-USD'}
-    input_company_tickers = set()
+    # ── 입력에서 기업명 감지 (한국어·영어·티커 모두 인식) ──────────────
+    _exclude_tickers = {'SPY','QQQ','SMH','GLD','USO','TLT','BTC-USD'}
+    input_companies = set()
     for key, ticker in COMPANY_MAP.items():
-        if key.lower() in txt_lower and ticker not in _exclude:
-            input_company_tickers.add(ticker)
+        if key.lower() in txt_lower and ticker not in _exclude_tickers:
+            input_companies.add(ticker)
 
-    scored = []
-    for ev in target_db:
-        score = 0
-        matched_kws = []
-        ev_year = int(ev['date'][:4])
+    # ── 이벤트별 점수 계산 ─────────────────────────────────────────
+    def _score(ev):
         ev_combined = (ev['name'] + ' ' + ' '.join(ev['keywords'])).lower()
+        score = 0
+        matched = []
 
-        # 1) DB 키워드 직접 매칭 (+4점)
+        # ① 기업 감지 시: 해당 기업 이벤트인지 확인 (하드 필터)
+        if input_companies:
+            company_hit = False
+            for ticker in input_companies:
+                aliases = [ticker] + TICKER_TO_KW.get(ticker, [])
+                if any(a.lower() in ev_combined for a in aliases):
+                    company_hit = True
+                    score += 10
+                    if ticker not in matched:
+                        matched.append(ticker)
+                    break
+            if not company_hit:
+                return None  # 다른 기업 이벤트는 완전 제외
+
+        # ② DB 키워드 직접 매칭 (+4점)
         for kw in ev['keywords']:
             if kw.lower() in txt_lower:
                 score += 4
-                matched_kws.append(kw)
+                matched.append(kw)
 
-        # 2) 카테고리 확장 키워드 매칭 (+2점)
+        # ③ 카테고리 확장 키워드 매칭 (+2점)
         for kw in CATEGORY_EXPAND.get(ev['category'], []):
-            if kw.lower() in txt_lower and kw not in matched_kws:
+            if kw.lower() in txt_lower and kw not in matched:
                 score += 2
-                matched_kws.append(kw)
+                matched.append(kw)
 
-        # 3) 이벤트 이름 단어 매칭 (+2점, 2글자 이상)
-        name_tokens = re.split(r'[\s\-—·]+', ev['name'].lower())
-        for nt in name_tokens:
-            if len(nt) >= 2 and nt in txt_lower and nt not in matched_kws:
+        # ④ 이벤트 이름 단어 매칭 (+2점, 2글자 이상)
+        for nt in re.split(r'[\s\-—·\(\)]+', ev['name'].lower()):
+            if len(nt) >= 2 and nt in txt_lower and nt not in matched:
                 score += 2
-                matched_kws.append(nt)
+                matched.append(nt)
 
-        # 4) 티커명 특별 매칭: 입력에 티커가 직접 있을 때 (+3점)
+        # ⑤ 티커 직접 입력 매칭 (+3점)
         for ticker, kws in TICKER_TO_KW.items():
             if ticker.lower() in txt_lower:
-                for kw in kws:
-                    if kw.lower() in ev_combined:
-                        score += 3
-                        if ticker not in matched_kws:
-                            matched_kws.append(ticker)
-                        break
+                if any(kw.lower() in ev_combined for kw in kws):
+                    score += 3
+                    if ticker not in matched:
+                        matched.append(ticker)
+                    break
 
-        # 5) 연도 언급 매칭 (+1점)
+        # ⑥ 연도 직접 언급 (+1점)
         if ev['date'][:4] in txt_lower:
             score += 1
 
-        # 6) ★ 기업 특정 매칭 — 핵심 정확도 로직
-        if input_company_tickers:
-            company_hit = False
-            for ticker in input_company_tickers:
-                # 이 이벤트가 해당 기업에 대한 것인지 확인
-                aliases = [ticker] + TICKER_TO_KW.get(ticker, [])
-                if any(alias.lower() in ev_combined for alias in aliases):
-                    score += 8  # 해당 기업 이벤트에 강력 가산
-                    if ticker not in matched_kws:
-                        matched_kws.append(ticker)
-                    company_hit = True
-                    break
-            if not company_hit:
-                # 다른 특정 기업 이벤트인지 확인 → 있으면 감점
-                for other_t, other_kws in TICKER_TO_KW.items():
-                    if other_t in input_company_tickers:
-                        continue
-                    if any(kw.lower() in ev_combined for kw in [other_t] + other_kws[:2]):
-                        score -= 4  # 관련 없는 기업 이벤트 감점
-                        break
+        # 기업 미지정 시 최소 점수 기준
+        if not input_companies and score < 3:
+            return None
 
-        # 7) 최신 이벤트 가산점 (최근 우선)
-        diff = CURRENT_YEAR - ev_year
-        recency = max(0, 6 - diff)  # 0~1년=6, 1~2년=5, ..., 5~6년=1, 7년+=0
-        score += recency
+        return score, list(dict.fromkeys(matched))
 
-        if score >= 3:  # 최소 임계값
-            scored.append({
-                **ev,
-                'matched_keywords': list(dict.fromkeys(matched_kws)),
-                'match_score':      round(score - recency),  # 표시용은 recency 제외
-                'recency_bonus':    recency,
-            })
+    # ── 전체 이벤트 채점 ───────────────────────────────────────────
+    candidates = []
+    for ev in target_db:
+        result = _score(ev)
+        if result is None:
+            continue
+        score, matched = result
+        candidates.append({
+            **ev,
+            'matched_keywords': matched,
+            'match_score':      score,
+            'recency_bonus':    0,
+            '_year':            int(ev['date'][:4]),
+        })
 
-    # 최신 우선: 점수 내림차순, 동점 시 날짜 내림차순(최근)
-    scored.sort(key=lambda x: (-(x['match_score'] + x['recency_bonus']), x['date']))
-    return scored[:top_n]
+    # ── ★ 정렬: 최신 연도 전체 우선 → 동년도는 점수 내림차순 ──────────
+    # "2025년 매칭 전부 → 없으면 2024년 전부 → ..." 방식
+    candidates.sort(key=lambda x: (-x['_year'], -x['match_score']))
+
+    # 결과에서 _year 내부 필드 제거
+    for c in candidates:
+        c.pop('_year', None)
+
+    return candidates[:top_n]
 
 
 # ── yfinance 주가 데이터 수집 ─────────────────────────────────────
@@ -1500,9 +1502,30 @@ function renderChart(evDate, data) {
 
 
 # ── 실행 ─────────────────────────────────────────────────────────
+def _kill_port(port: int):
+    """이전에 실행 중인 같은 포트 프로세스 강제 종료"""
+    import subprocess, signal
+    try:
+        r = subprocess.run(['lsof', '-ti', f':{port}'],
+                           capture_output=True, text=True, timeout=3)
+        for pid in r.stdout.strip().split('\n'):
+            pid = pid.strip()
+            if pid.isdigit():
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except Exception:
+                    pass
+        import time; time.sleep(0.5)
+    except Exception:
+        pass
+
+
 def main():
     port = 5151
     url  = f"http://127.0.0.1:{port}"
+
+    # 이전 서버 프로세스 정리 (코드 변경 후 재실행 시 새 버전 반영)
+    _kill_port(port)
 
     def _open():
         import time; time.sleep(1.3)
