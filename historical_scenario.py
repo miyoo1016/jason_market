@@ -609,22 +609,151 @@ TICKER_TO_KW = {
     'TSLA': ['TSLA','테슬라','전기차'],
 }
 
+# ── 한국어/영어/티커 → 정식 티커 매핑 ─────────────────────────────
+COMPANY_MAP = {
+    # 한국어
+    '엔비디아':'NVDA','엔비':'NVDA',
+    '애플':'AAPL','아이폰':'AAPL',
+    '마이크로소프트':'MSFT','마소':'MSFT',
+    '구글':'GOOGL','알파벳':'GOOGL','유튜브':'GOOGL',
+    '아마존':'AMZN',
+    '메타':'META','페이스북':'META','인스타그램':'META',
+    '테슬라':'TSLA',
+    'TSMC':'TSM','대만반도체':'TSM','티에스엠씨':'TSM',
+    '퀄컴':'QCOM','인텔':'INTC','브로드컴':'AVGO',
+    '에이에스엠엘':'ASML','암드':'AMD',
+    '펩시':'PEP','펩시코':'PEP',
+    '슈왑':'SCHW','찰스슈왑':'SCHW',
+    '애보트':'ABT',
+    '반도체':'SMH','나스닥':'QQQ',
+    '에스앤피':'SPY','금':'GLD','원유':'USO','채권':'TLT',
+    '제이피모건':'JPM','JP모건':'JPM','골드만삭스':'GS',
+    '모건스탠리':'MS','비자':'V','마스터카드':'MA',
+    '존슨앤존슨':'JNJ','화이자':'PFE','일라이릴리':'LLY','릴리':'LLY',
+    '코카콜라':'KO','맥도날드':'MCD','월마트':'WMT',
+    '엑슨모빌':'XOM','쉐브론':'CVX',
+    '뱅크오브아메리카':'BAC','뱅크오':'BAC',
+    # 영어 소문자
+    'nvidia':'NVDA','apple':'AAPL','microsoft':'MSFT',
+    'google':'GOOGL','alphabet':'GOOGL','youtube':'GOOGL',
+    'amazon':'AMZN','facebook':'META','instagram':'META',
+    'tesla':'TSLA','tsmc':'TSM','taiwan semiconductor':'TSM',
+    'qualcomm':'QCOM','intel':'INTC','broadcom':'AVGO',
+    'asml':'ASML','amd':'AMD',
+    'pepsi':'PEP','pepsico':'PEP',
+    'schwab':'SCHW','charles schwab':'SCHW','abbott':'ABT',
+    'semiconductor':'SMH','gold':'GLD','oil':'USO',
+    'jpmorgan':'JPM','jp morgan':'JPM','goldman':'GS','goldman sachs':'GS',
+    'morgan stanley':'MS','visa':'V','mastercard':'MA',
+    'pfizer':'PFE','eli lilly':'LLY','lilly':'LLY',
+    'johnson':'JNJ','coca cola':'KO','cocacola':'KO',
+    'mcdonald':'MCD','walmart':'WMT','exxon':'XOM','chevron':'CVX',
+    'bank of america':'BAC',
+    # 티커 소문자
+    'nvda':'NVDA','aapl':'AAPL','msft':'MSFT','googl':'GOOGL','goog':'GOOGL',
+    'amzn':'AMZN','tsla':'TSLA','tsm':'TSM','qcom':'QCOM','intc':'INTC',
+    'avgo':'AVGO','smh':'SMH','spy':'SPY','qqq':'QQQ','gld':'GLD',
+    'uso':'USO','tlt':'TLT','jpm':'JPM','bac':'BAC','gs':'GS',
+    'pfe':'PFE','lly':'LLY','jnj':'JNJ','ko':'KO','mcd':'MCD',
+    'wmt':'WMT','xom':'XOM','cvx':'CVX','pep':'PEP','schw':'SCHW','abt':'ABT',
+}
 
-def match_events(scenario_text: str, top_n: int = 5) -> list:
+# 티커 표시명
+TICKER_DISPLAY = {
+    'NVDA':'NVIDIA','AAPL':'Apple','MSFT':'Microsoft','GOOGL':'Alphabet',
+    'AMZN':'Amazon','META':'Meta','TSLA':'Tesla','TSM':'TSMC','QCOM':'Qualcomm',
+    'INTC':'Intel','AVGO':'Broadcom','AMD':'AMD','ASML':'ASML',
+    'SMH':'반도체ETF','SPY':'S&P500','QQQ':'나스닥100','GLD':'금ETF',
+    'USO':'원유ETF','TLT':'장기채권','JPM':'JPMorgan','BAC':'BofA',
+    'GS':'Goldman','MS':'Morgan Stanley','V':'Visa','MA':'Mastercard',
+    'PFE':'Pfizer','LLY':'Eli Lilly','JNJ':'J&J','KO':'Coca-Cola',
+    'MCD':"McDonald's",'WMT':'Walmart','XOM':'ExxonMobil','CVX':'Chevron',
+    'PEP':'PepsiCo','SCHW':'Charles Schwab','ABT':'Abbott',
+}
+
+# 관련주 매핑
+RELATED_TICKERS = {
+    'TSM':  ['NVDA','AMD','ASML','QCOM','SMH'],
+    'NVDA': ['TSM','AMD','ASML','AVGO','SMH'],
+    'AMD':  ['NVDA','TSM','INTC','SMH'],
+    'INTC': ['AMD','TSM','NVDA','SMH'],
+    'ASML': ['TSM','NVDA','AMD','SMH'],
+    'QCOM': ['TSM','NVDA','AAPL','SMH'],
+    'AVGO': ['TSM','NVDA','QCOM','SMH'],
+    'SMH':  ['TSM','NVDA','AMD'],
+    'AAPL': ['MSFT','GOOGL','META','NVDA'],
+    'MSFT': ['GOOGL','AMZN','AAPL','NVDA'],
+    'GOOGL':['META','MSFT','AMZN'],
+    'META': ['GOOGL','AAPL','AMZN'],
+    'AMZN': ['MSFT','GOOGL','AAPL'],
+    'TSLA': ['NVDA','QQQ'],
+    'GLD':  ['SPY','TLT'],
+    'USO':  ['XOM','CVX','SPY'],
+    'TLT':  ['SPY','GLD'],
+    'PEP':  ['KO','WMT','SPY'],
+    'SCHW': ['JPM','GS','MS'],
+    'ABT':  ['JNJ','PFE','LLY'],
+    'JPM':  ['GS','MS','BAC'],
+    'GS':   ['JPM','MS','BAC'],
+    'PFE':  ['LLY','JNJ','ABT'],
+    'LLY':  ['PFE','JNJ','ABT'],
+    'XOM':  ['CVX','USO'],
+    'CVX':  ['XOM','USO'],
+}
+
+
+def detect_tickers(scenario_text: str) -> dict:
+    """시나리오에서 종목 자동 감지 → main / related / baseline 분류"""
+    txt_lower = scenario_text.lower()
+    main = set()
+    for key, ticker in COMPANY_MAP.items():
+        if key.lower() in txt_lower:
+            main.add(ticker)
+    main -= {'SPY', 'QQQ'}  # baseline 별도 관리
+
+    related = set()
+    for t in list(main):
+        for r in RELATED_TICKERS.get(t, [])[:3]:
+            if r not in main and r not in ('SPY', 'QQQ'):
+                related.add(r)
+
+    main_list    = sorted(main)
+    related_list = sorted(related)[:4]
+    all_tickers  = ['SPY','QQQ'] + main_list + related_list
+    return {
+        'main':     main_list,
+        'related':  related_list,
+        'baseline': ['SPY','QQQ'],
+        'all':      all_tickers,
+    }
+
+
+def match_events(scenario_text: str, top_n: int = 6,
+                 year_from: int = None, year_to: int = None) -> list:
     """
     키워드 기반 이벤트 매칭 — API 불필요, 순수 DB 검색
     반환: [{event 원본 필드 전체} + matched_keywords, match_score]
+    최신 우선: 최근 연도일수록 가산점 부여
     """
+    CURRENT_YEAR = 2026
+
     txt_lower = scenario_text.lower()
-    # 공백/특수문자로 분리한 토큰
-    tokens = set(re.split(r'[\s\n\r\t,·\-\+\(\)/]+', txt_lower))
+    tokens = set(re.split(r'[\s\n\r\t,·\-\+\(\)/★]+', txt_lower))
+
+    # 연도 범위 필터용 DB 선택
+    target_db = [
+        e for e in EVENTS_DB
+        if (year_from is None or int(e['date'][:4]) >= year_from)
+        and (year_to   is None or int(e['date'][:4]) <= year_to)
+    ]
 
     scored = []
-    for ev in EVENTS_DB:
+    for ev in target_db:
         score = 0
         matched_kws = []
+        ev_year = int(ev['date'][:4])
 
-        # 1) DB 키워드 직접 매칭 (가장 중요, +4점)
+        # 1) DB 키워드 직접 매칭 (+4점)
         for kw in ev['keywords']:
             if kw.lower() in txt_lower:
                 score += 4
@@ -636,7 +765,7 @@ def match_events(scenario_text: str, top_n: int = 5) -> list:
                 score += 2
                 matched_kws.append(kw)
 
-        # 3) 이벤트 이름 내 단어 매칭 (+2점, 2글자 이상)
+        # 3) 이벤트 이름 단어 매칭 (+2점, 2글자 이상)
         name_tokens = re.split(r'[\s\-—·]+', ev['name'].lower())
         for nt in name_tokens:
             if len(nt) >= 2 and nt in txt_lower and nt not in matched_kws:
@@ -654,20 +783,24 @@ def match_events(scenario_text: str, top_n: int = 5) -> list:
                         break
 
         # 5) 연도 언급 매칭 (+1점)
-        year = ev['date'][:4]
-        if year in txt_lower:
+        if ev['date'][:4] in txt_lower:
             score += 1
 
-        if score >= 2:  # 최소 임계값
+        # 6) 최신 이벤트 가산점 (최근 우선)
+        diff = CURRENT_YEAR - ev_year
+        recency = max(0, 6 - diff)  # 0~1년=6, 1~2년=5, ..., 5~6년=1, 7년+=0
+        score += recency
+
+        if score >= 3:  # 최소 임계값
             scored.append({
                 **ev,
-                'matched_keywords': list(dict.fromkeys(matched_kws)),  # 중복제거
-                'match_score': round(score),
+                'matched_keywords': list(dict.fromkeys(matched_kws)),
+                'match_score':      round(score - recency),  # 표시용은 recency 제외
+                'recency_bonus':    recency,
             })
 
-    # 점수 내림차순 → 최근 날짜 우선 (동점)
-    scored.sort(key=lambda x: (-x['match_score'], x['date']), reverse=False)
-    scored.sort(key=lambda x: x['match_score'], reverse=True)
+    # 최신 우선: 점수 내림차순, 동점 시 날짜 내림차순(최근)
+    scored.sort(key=lambda x: (-(x['match_score'] + x['recency_bonus']), x['date']))
     return scored[:top_n]
 
 
@@ -733,21 +866,37 @@ def index():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    data     = request.get_json()
-    scenario = data.get('scenario', '').strip()
-    tickers  = data.get('tickers', ['SPY','QQQ','GLD','TSM','NVDA'])
+    req      = request.get_json()
+    scenario = req.get('scenario', '').strip()
+    year_from = req.get('year_from')  # None = 전체
+    year_to   = req.get('year_to')
 
     if not scenario:
         return jsonify({'error': '시나리오를 입력해주세요.'}), 400
 
     try:
-        matched = match_events(scenario, top_n=5)
+        # 연도 정수 변환
+        yf_ = int(year_from) if year_from else None
+        yt_ = int(year_to)   if year_to   else None
 
+        # 종목 자동 감지
+        ticker_info = detect_tickers(scenario)
+
+        # 이벤트 매칭
+        matched = match_events(scenario, top_n=6, year_from=yf_, year_to=yt_)
+
+        # 차트 데이터 수집 (자동 감지된 종목 + baseline)
+        all_tickers = ticker_info['all'] if ticker_info['all'] else ['SPY','QQQ','GLD']
         charts = {}
         for ev in matched:
-            charts[ev['date']] = get_chart_data(ev['date'], tickers)
+            charts[ev['date']] = get_chart_data(ev['date'], all_tickers)
 
-        return jsonify({'events': matched, 'charts': charts})
+        return jsonify({
+            'events':      matched,
+            'charts':      charts,
+            'ticker_info': ticker_info,
+            'ticker_display': TICKER_DISPLAY,
+        })
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -857,6 +1006,21 @@ textarea::placeholder{color:#b0a890;}
 .copy-btn-raw{border-color:#888;color:#555;}
 .copy-btn-raw:hover{background:#555;border-color:#555;color:#fff;}
 .no-result{text-align:center;padding:40px 20px;color:var(--sub);font-size:.9rem;}
+
+/* ── 조사 기간 ── */
+.period-row{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:4px;}
+.period-grp{display:flex;flex-direction:column;gap:4px;}
+.period-lbl{font-size:.75rem;color:var(--sub);font-weight:600;}
+.year-sel{padding:7px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:.88rem;background:#fafaf6;cursor:pointer;color:var(--text);min-width:90px;}
+.year-sel:focus{outline:none;border-color:var(--navy);}
+.period-sep{font-size:1.1rem;font-weight:700;color:var(--sub);padding-bottom:6px;}
+
+/* ── 종목 pill ── */
+.ticker-pills{display:flex;flex-wrap:wrap;gap:8px;}
+.t-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:20px;font-size:.78rem;font-weight:700;border:1.5px solid;}
+.t-pill.main{background:#1a3a5c;color:#fff;border-color:#1a3a5c;}
+.t-pill.related{background:#e8eef8;color:#1a3a5c;border-color:#1a3a5c55;}
+.t-pill.baseline{background:#f5f5f5;color:#888;border-color:#ccc;}
 </style>
 </head>
 <body>
@@ -896,22 +1060,47 @@ textarea::placeholder{color:#b0a890;}
     </div>
   </div>
 
-  <!-- 종목 선택 -->
+  <!-- 조사 기간 + 실행 -->
   <div class="card">
-    <div class="ctitle">📈 차트에 표시할 종목</div>
-    <div class="ticker-grid" id="tg"></div>
+    <div class="ctitle">🗓️ 조사 기간 설정</div>
+    <div class="period-row">
+      <div class="period-grp">
+        <label class="period-lbl">시작 연도</label>
+        <select id="yearFrom" class="year-sel"></select>
+      </div>
+      <div class="period-sep">~</div>
+      <div class="period-grp">
+        <label class="period-lbl">종료 연도</label>
+        <select id="yearTo" class="year-sel"></select>
+      </div>
+      <div style="flex:1;font-size:.77rem;color:var(--sub);align-self:flex-end;padding-bottom:4px">
+        전체 DB: 1929~2026 | 기본값: 2018~2026 (최신 우선 정렬)
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:.8rem;color:var(--sub)">
+      💡 종목명은 한국어·영어·티커 모두 인식 — 예) <b>엔비디아, TSMC, nvda, 나스닥</b>
+    </div>
     <button class="btn-go" id="goBtn" onclick="doAnalyze()">🔍 역사적 유사 시점 분석 시작</button>
   </div>
 
   <!-- 로딩 -->
   <div class="loading" id="ld">
     <div class="spin"></div>
-    <p><strong>Gemini AI</strong>가 역사적 패턴을 분석 중...</p>
-    <p>주가 데이터 수집 포함 약 15~40초 소요됩니다.</p>
+    <p><strong>키워드 매칭</strong> + 주가 데이터 수집 중...</p>
+    <p>약 10~30초 소요됩니다.</p>
   </div>
 
   <!-- 결과 -->
   <div id="results">
+
+    <!-- 감지 종목 표시 -->
+    <div class="card" id="tickerInfoCard" style="display:none">
+      <div class="ctitle" style="margin-bottom:10px">🔎 감지된 종목 및 차트 구성</div>
+      <div id="tickerPills"></div>
+      <div style="font-size:.75rem;color:var(--sub);margin-top:8px">
+        ★ 강조선 = 직접 언급 종목 | 보조선 = 관련주 | 회색선 = SPY·QQQ 기준선
+      </div>
+    </div>
 
     <div class="card">
       <div class="result-header">
@@ -945,84 +1134,62 @@ textarea::placeholder{color:#b0a890;}
 </div>
 
 <script>
-// 종목 정의
-const TICKERS = [
-  {t:'SPY',d:'S&P500 ETF',on:true},
-  {t:'QQQ',d:'나스닥100 ETF',on:true},
-  {t:'GLD',d:'금 ETF',on:true},
-  {t:'TSM',d:'TSMC',on:true},
-  {t:'NVDA',d:'NVIDIA',on:true},
-  {t:'SMH',d:'반도체 ETF',on:false},
-  {t:'AAPL',d:'Apple',on:false},
-  {t:'MSFT',d:'Microsoft',on:false},
-  {t:'GOOGL',d:'Alphabet',on:false},
-  {t:'AMZN',d:'Amazon',on:false},
-  {t:'META',d:'Meta',on:false},
-  {t:'TSLA',d:'Tesla',on:false},
-];
-
-const COLORS = {
-  SPY:'#1a3a5c',QQQ:'#00838f',GLD:'#b8860b',
-  AAPL:'#555',MSFT:'#107C10',GOOGL:'#4285F4',
-  AMZN:'#FF9900',META:'#0866FF',NVDA:'#76B900',TSLA:'#E31937',
-  TSM:'#CE0E2D',SMH:'#7B2FBE'
+// ── 종목 색상 (main 강조용) ─────────────────────────────────────
+const MAIN_COLORS = {
+  NVDA:'#76B900',TSM:'#CE0E2D',AMD:'#ED1C24',AAPL:'#555555',
+  MSFT:'#107C10',GOOGL:'#4285F4',AMZN:'#FF9900',META:'#0866FF',
+  TSLA:'#E31937',QCOM:'#3253DC',INTC:'#0071C5',AVGO:'#CC0000',
+  ASML:'#F7941D',SMH:'#7B2FBE',GLD:'#b8860b',USO:'#795548',
+  TLT:'#00796B',JPM:'#003087',GS:'#6D8B74',PFE:'#00549e',
+  LLY:'#D52B1E',JNJ:'#D62828',KO:'#F40009',MCD:'#FFC72C',
+  WMT:'#007DC6',XOM:'#E32218',CVX:'#00829B',PEP:'#004B93',
+  SCHW:'#00A0DF',ABT:'#0065BD',BAC:'#E31837',MS:'#002244',
 };
 
-let lastRawData = null;
-let lastScenario = '';
+let lastRawData   = null;
+let lastScenario  = '';
+let chartCache    = {};
+let curEvent      = null;
+let curTickerInfo = {main:[], related:[], baseline:['SPY','QQQ'], all:[]};
 
-// 종목 버튼 생성 (checkbox 대신 data-selected 속성으로 상태 관리)
-const tg = document.getElementById('tg');
-TICKERS.forEach(({t,d,on}) => {
-  const div = document.createElement('div');
-  div.className = 'tick-lbl' + (on?' on':'');
-  div.dataset.t = t;
-  div.dataset.selected = on ? '1' : '0';
-  div.innerHTML = `<span class="tick-check">${on?'✓':''}</span><div><div class="t-name">${t}</div><div class="t-desc">${d}</div></div>`;
-  div.addEventListener('click', () => {
-    const isOn = div.dataset.selected === '1';
-    div.dataset.selected = isOn ? '0' : '1';
-    div.classList.toggle('on', !isOn);
-    div.querySelector('.tick-check').textContent = isOn ? '' : '✓';
-    if (curEvent && chartCache[curEvent]) renderChart(curEvent, chartCache[curEvent]);
-  });
-  tg.appendChild(div);
-});
+// ── 연도 select 생성 ────────────────────────────────────────────
+(function buildYearSelects() {
+  const fromSel = document.getElementById('yearFrom');
+  const toSel   = document.getElementById('yearTo');
+  for (let y = 2026; y >= 1929; y--) {
+    fromSel.add(new Option(y, y, y===2018, y===2018));
+    toSel  .add(new Option(y, y, y===2026, y===2026));
+  }
+})();
 
-function getSelected() {
-  return [...document.querySelectorAll('.tick-lbl[data-selected="1"]')].map(d=>d.dataset.t);
-}
-
-function setEx(btn) {
-  document.getElementById('si').value = btn.textContent;
-}
-
-let chartCache = {};
-let curEvent = null;
+function setEx(btn) { document.getElementById('si').value = btn.textContent; }
 
 async function doAnalyze() {
-  const scenario = document.getElementById('si').value.trim();
-  if (!scenario) { alert('시나리오를 입력해주세요.'); return; }
-  lastScenario = scenario;
+  const scenario  = document.getElementById('si').value.trim();
+  if (!scenario)  { alert('시나리오를 입력해주세요.'); return; }
+  lastScenario    = scenario;
+  const year_from = parseInt(document.getElementById('yearFrom').value);
+  const year_to   = parseInt(document.getElementById('yearTo').value);
+
+  if (year_from > year_to) { alert('시작 연도가 종료 연도보다 클 수 없습니다.'); return; }
 
   const btn = document.getElementById('goBtn');
   btn.disabled = true;
-  document.getElementById('ld').style.display = 'block';
+  document.getElementById('ld').style.display      = 'block';
   document.getElementById('results').style.display = 'none';
   document.getElementById('chartCard').style.display = 'none';
   chartCache = {}; curEvent = null;
 
   try {
-    const res = await fetch('/analyze', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ scenario, tickers: getSelected() })
+    const res  = await fetch('/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ scenario, year_from, year_to })
     });
     const data = await res.json();
-    if (data.error) { alert('오류: '+data.error); return; }
+    if (data.error) { alert('오류: ' + data.error); return; }
     renderAll(data);
   } catch(e) {
-    alert('오류: '+e.message);
+    alert('오류: ' + e.message);
   } finally {
     btn.disabled = false;
     document.getElementById('ld').style.display = 'none';
@@ -1037,18 +1204,45 @@ const CAT_COLOR = {
 };
 
 function renderAll(data) {
-  lastRawData = data;
-  chartCache = data.charts || {};
-  const events = data.events || [];
+  lastRawData    = data;
+  chartCache     = data.charts || {};
+  curTickerInfo  = data.ticker_info || {main:[],related:[],baseline:['SPY','QQQ'],all:[]};
+  const tdisplay = data.ticker_display || {};
+  const events   = data.events || [];
 
-  document.getElementById('resultCount').textContent =
-    `${events.length}개 이벤트 매칭됨`;
+  // ── 감지 종목 pills ───────────────────────────────────────────
+  const pillCard = document.getElementById('tickerInfoCard');
+  const pillEl   = document.getElementById('tickerPills');
+  pillEl.innerHTML = '';
+  const allPills = [
+    ...curTickerInfo.main.map(t=>({t,cls:'main',lbl:`★ ${t} (${tdisplay[t]||t})`})),
+    ...curTickerInfo.related.map(t=>({t,cls:'related',lbl:`${t} (${tdisplay[t]||t}) 관련`})),
+    ...curTickerInfo.baseline.map(t=>({t,cls:'baseline',lbl:`${t} 기준선`})),
+  ];
+  if (allPills.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ticker-pills';
+    allPills.forEach(({t,cls,lbl}) => {
+      const sp = document.createElement('span');
+      sp.className = `t-pill ${cls}`;
+      if (cls==='main') sp.style.borderColor = MAIN_COLORS[t]||'#1a3a5c';
+      if (cls==='main') sp.style.background  = MAIN_COLORS[t]||'#1a3a5c';
+      sp.textContent = lbl;
+      wrap.appendChild(sp);
+    });
+    pillEl.appendChild(wrap);
+    pillCard.style.display = 'block';
+  } else {
+    pillCard.style.display = 'none';
+  }
 
+  // ── 이벤트 카드 ───────────────────────────────────────────────
+  document.getElementById('resultCount').textContent = `${events.length}개 이벤트 매칭됨`;
   const evEl = document.getElementById('evCards');
   evEl.innerHTML = '';
 
   if (!events.length) {
-    evEl.innerHTML = '<div class="no-result">⚠️ 매칭된 이벤트가 없습니다. 키워드를 더 구체적으로 입력해보세요.</div>';
+    evEl.innerHTML = '<div class="no-result">⚠️ 해당 기간에 매칭된 이벤트가 없습니다. 연도 범위를 넓히거나 키워드를 변경해보세요.</div>';
     document.getElementById('results').style.display = 'block';
     return;
   }
@@ -1057,13 +1251,13 @@ function renderAll(data) {
     const impact = ev.impact;
     const impCls = impact == null ? 'neu' : impact > 0 ? 'pos' : impact < 0 ? 'neg' : 'neu';
     const impTxt = impact == null ? '데이터 없음'
-      : impact === 0 ? '±0% (영향 중립 또는 혼조)'
+      : impact === 0 ? '±0% (중립 / 혼조)'
       : `${impact > 0 ? '+' : ''}${impact}%`;
 
     const catColor = CAT_COLOR[ev.category] || '#555';
-    const allKws = ev.keywords || [];
-    const hitSet = new Set((ev.matched_keywords||[]).map(k=>k.toLowerCase()));
-    const kwHtml = allKws.map(kw =>
+    const allKws   = ev.keywords || [];
+    const hitSet   = new Set((ev.matched_keywords||[]).map(k=>k.toLowerCase()));
+    const kwHtml   = allKws.map(kw =>
       `<span class="kw-tag${hitSet.has(kw.toLowerCase())?' hit':''}">${kw}</span>`
     ).join('');
 
@@ -1074,7 +1268,7 @@ function renderAll(data) {
         <div class="ev-date">📅 ${ev.date}</div>
         <div class="ev-meta">
           <span class="cat-badge" style="background:${catColor}18;color:${catColor};border:1px solid ${catColor}44">${ev.category}</span>
-          <span class="score-badge">매칭점수 ${ev.match_score}</span>
+          <span class="score-badge">매칭 ${ev.match_score}점</span>
         </div>
       </div>
       <div class="ev-name">${ev.name}</div>
@@ -1083,26 +1277,28 @@ function renderAll(data) {
       <div class="ev-impact ${impCls}">
         <span class="impact-lbl">당시 시장 영향</span>
         <span class="impact-val ${impCls}">${impTxt}</span>
-        <span class="impact-note">(${ev.category} 이벤트 기준 S&P500/나스닥 대략)</span>
+        <span class="impact-note">(S&P500 / 나스닥 기준 추정)</span>
       </div>
     `;
     div.onclick = () => {
       document.querySelectorAll('.ev-card').forEach(c=>c.classList.remove('sel'));
       div.classList.add('sel');
       curEvent = ev.date;
-      if (chartCache[ev.date] && Object.keys(chartCache[ev.date]).length) {
+      if (chartCache[ev.date] && Object.keys(chartCache[ev.date]).length)
         renderChart(ev.date, chartCache[ev.date]);
-      }
     };
     evEl.appendChild(div);
   });
 
   document.getElementById('results').style.display = 'block';
 
-  // 첫 번째 이벤트 자동 차트
-  if (events.length && chartCache[events[0].date] && Object.keys(chartCache[events[0].date]).length) {
-    curEvent = events[0].date;
-    renderChart(curEvent, chartCache[curEvent]);
+  // 첫 이벤트 자동 차트
+  if (events.length) {
+    const first = events[0];
+    if (chartCache[first.date] && Object.keys(chartCache[first.date]).length) {
+      curEvent = first.date;
+      renderChart(curEvent, chartCache[curEvent]);
+    }
   }
 }
 
@@ -1156,43 +1352,91 @@ function copyRaw() {
 function renderChart(evDate, data) {
   if (!data || !Object.keys(data).length) return;
 
-  const sel = getSelected();
-  const traces = sel
-    .filter(t => data[t])
-    .map(t => ({
-      x: data[t].dates,
-      y: data[t].values,
+  const mainSet     = new Set(curTickerInfo.main);
+  const relatedSet  = new Set(curTickerInfo.related);
+  const baselineSet = new Set(['SPY','QQQ']);
+  const available   = Object.keys(data).filter(t => data[t] && data[t].dates?.length);
+
+  const traces = [];
+
+  // ① SPY · QQQ — 얇은 회색 기준선 (뒤에 그림)
+  ['SPY','QQQ'].filter(t => available.includes(t)).forEach(t => {
+    traces.push({
+      x: data[t].dates, y: data[t].values,
+      name: `${t} (기준)`,
+      type:'scatter', mode:'lines',
+      line:{color: t==='QQQ'?'#90CAF9':'#BDBDBD', width:1.5, dash:'dot'},
+      opacity:0.65,
+      hovertemplate:`<b>${t}</b> %{y:.1f}<extra></extra>`,
+    });
+  });
+
+  // ② 관련주 — 중간 두께, 반투명
+  available.filter(t => relatedSet.has(t) && !baselineSet.has(t)).forEach(t => {
+    traces.push({
+      x: data[t].dates, y: data[t].values,
       name: t,
       type:'scatter', mode:'lines',
-      line:{color:COLORS[t]||'#888',width:2.2},
-      hovertemplate:`<b>${t}</b><br>%{x}<br>%{y:.1f}<extra></extra>`
-    }));
+      line:{color: MAIN_COLORS[t]||'#888', width:2},
+      opacity:0.72,
+      hovertemplate:`<b>${t}</b> %{y:.1f}<extra></extra>`,
+    });
+  });
+
+  // ③ 직접 언급 main 종목 — 굵고 선명하게, 맨 앞
+  const mainAvail = available.filter(t => mainSet.has(t) && !baselineSet.has(t));
+  mainAvail.forEach(t => {
+    traces.push({
+      x: data[t].dates, y: data[t].values,
+      name: `★ ${t}`,
+      type:'scatter', mode:'lines',
+      line:{color: MAIN_COLORS[t]||'#E31937', width:3.8},
+      opacity:1.0,
+      hovertemplate:`<b>★${t}</b> %{y:.1f}<extra></extra>`,
+    });
+  });
+
+  // ④ 감지된 종목 없을 때 — 기준선 외 모든 종목 중간 두께로 표시
+  if (mainAvail.length === 0 && relatedSet.size === 0) {
+    available.filter(t => !baselineSet.has(t)).forEach(t => {
+      traces.push({
+        x: data[t].dates, y: data[t].values,
+        name: t,
+        type:'scatter', mode:'lines',
+        line:{color: MAIN_COLORS[t]||'#888', width:2.5},
+        opacity:0.9,
+        hovertemplate:`<b>${t}</b> %{y:.1f}<extra></extra>`,
+      });
+    });
+  }
 
   if (!traces.length) return;
 
   const layout = {
     paper_bgcolor:'#fff', plot_bgcolor:'#fafaf6',
     font:{family:'Apple SD Gothic Neo,sans-serif',size:11.5},
-    xaxis:{showgrid:true,gridcolor:'#eeeee8',zeroline:false,
-           showspikes:true,spikecolor:'#999',spikethickness:1},
+    xaxis:{showgrid:true, gridcolor:'#eeeee8', zeroline:false,
+           showspikes:true, spikecolor:'#aaa', spikethickness:1},
     yaxis:{title:'상대 수익률 (이벤트 당일 = 100)',
-           showgrid:true,gridcolor:'#eeeee8',zeroline:true,zerolinecolor:'#ccc'},
-    legend:{orientation:'h',y:-0.16,x:0.5,xanchor:'center'},
+           showgrid:true, gridcolor:'#eeeee8',
+           zeroline:true, zerolinecolor:'#ccc'},
+    legend:{orientation:'h', y:-0.18, x:0.5, xanchor:'center',
+            font:{size:11}, traceorder:'reversed'},
     hovermode:'x unified',
-    shapes:[{type:'line',x0:evDate,x1:evDate,y0:0,y1:1,yref:'paper',
-             line:{color:'#c62828',width:2,dash:'dash'}}],
-    annotations:[{x:evDate,y:0.97,yref:'paper',
-                  text:'이벤트',showarrow:false,
-                  font:{color:'#c62828',size:10},
-                  xanchor:'left',xshift:5}],
-    margin:{t:18,b:60,l:62,r:18}
+    shapes:[{type:'line', x0:evDate, x1:evDate, y0:0, y1:1, yref:'paper',
+             line:{color:'#c62828', width:2, dash:'dash'}}],
+    annotations:[{x:evDate, y:0.97, yref:'paper', text:'이벤트일',
+                  showarrow:false, font:{color:'#c62828', size:10},
+                  xanchor:'left', xshift:6}],
+    margin:{t:20, b:70, l:64, r:20},
   };
 
   document.getElementById('chartTitle').textContent = `📈 ${evDate} 전후 주가 흐름`;
   document.getElementById('chartCard').style.display = 'block';
-  Plotly.newPlot('chartDiv', traces, layout, {responsive:true,displayModeBar:true,
-    modeBarButtonsToRemove:['toImage','sendDataToCloud']});
-  document.getElementById('chartCard').scrollIntoView({behavior:'smooth',block:'start'});
+  Plotly.newPlot('chartDiv', traces, layout,
+    {responsive:true, displayModeBar:true,
+     modeBarButtonsToRemove:['toImage','sendDataToCloud']});
+  document.getElementById('chartCard').scrollIntoView({behavior:'smooth', block:'start'});
 }
 </script>
 </body>
