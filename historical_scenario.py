@@ -474,13 +474,24 @@ def analyze_with_gemini(scenario_text: str) -> dict:
   "key_levels_to_watch": "지금 가장 주목해야 할 지표·수준·이벤트 (한국어, 1-2문장)"
 }}"""
 
-    resp = _genai_client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-    text = resp.text.strip()
-    if "```json" in text:
-        text = text.split("```json")[1].split("```")[0].strip()
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0].strip()
-    return json.loads(text)
+    # 모델 폴백: 2.5-flash → 2.0-flash → 2.0-flash-lite (할당량 초과 시 순차 시도)
+    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
+    last_err = None
+    for model_name in models_to_try:
+        try:
+            resp = _genai_client.models.generate_content(model=model_name, contents=prompt)
+            text = resp.text.strip()
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
+        except Exception as e:
+            last_err = e
+            if '429' in str(e) or 'RESOURCE_EXHAUSTED' in str(e):
+                continue  # 다음 모델 시도
+            raise  # 다른 오류는 즉시 raise
+    raise last_err
 
 
 # ── yfinance 주가 데이터 수집 ─────────────────────────────────────
@@ -505,7 +516,12 @@ def get_chart_data(event_date_str: str, selected_tickers: list) -> dict:
         try:
             df = yf.download(ticker, start=start, end=end,
                              progress=False, auto_adjust=True)
-            if df.empty or 'Close' not in df.columns:
+            if df.empty:
+                continue
+            # yfinance 최신 버전 MultiIndex 컬럼 처리
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            if 'Close' not in df.columns:
                 continue
             close = df['Close'].dropna()
             if len(close) < 5:
