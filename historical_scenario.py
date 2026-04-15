@@ -728,14 +728,40 @@ RELATED_TICKERS = {
 }
 
 
+def _company_key_matches(key: str, text: str) -> bool:
+    """
+    COMPANY_MAP 키 매칭 — 단어경계 적용으로 부분문자열 오매칭 방지
+    - ASCII 키(영문 티커/단어): 앞뒤가 영숫자면 매칭 안 함  ('gs' in 'earnings' → False)
+    - 한국어 키: 뒤에 한글이 이어지면 매칭 안 함  ('메타' in '메타버스' → False)
+    """
+    kl = key.lower()
+    if re.match(r'^[a-z0-9 ]+$', kl):
+        # 영어/숫자: 단어경계 필요
+        return bool(re.search(r'(?<![a-z0-9])' + re.escape(kl) + r'(?![a-z0-9])', text))
+    else:
+        # 한국어: 뒤에 한글 음절이 연속되지 않는 경우만 매칭
+        idx = text.find(kl)
+        while idx != -1:
+            end = idx + len(kl)
+            after_ok = (end >= len(text) or
+                        not ('\uAC00' <= text[end] <= '\uD7A3' or
+                             '\u1100' <= text[end] <= '\u11FF'))
+            if after_ok:
+                return True
+            idx = text.find(kl, idx + 1)
+        return False
+
+
 def detect_tickers(scenario_text: str) -> dict:
     """시나리오에서 종목 자동 감지 → main / related / baseline 분류"""
     txt_lower = scenario_text.lower()
+    _baseline = {'SPY', 'QQQ'}
+    _etf_only = {'SMH', 'GLD', 'USO', 'TLT'}  # 단독 ETF는 chart baseline 제외
     main = set()
     for key, ticker in COMPANY_MAP.items():
-        if key.lower() in txt_lower:
+        if _company_key_matches(key, txt_lower):
             main.add(ticker)
-    main -= {'SPY', 'QQQ'}  # baseline 별도 관리
+    main -= _baseline  # baseline 별도 관리
 
     related = set()
     for t in list(main):
@@ -772,12 +798,27 @@ def match_events(scenario_text: str, top_n: int = 6,
         and (year_to   is None or int(e['date'][:4]) <= year_to)
     ]
 
-    # ── 입력에서 기업명 감지 (한국어·영어·티커 모두 인식) ──────────────
+    # ── 입력에서 기업명 감지 (한국어·영어·티커 모두 인식, 단어경계 적용) ──
     _exclude_tickers = {'SPY','QQQ','SMH','GLD','USO','TLT','BTC-USD'}
     input_companies = set()
     for key, ticker in COMPANY_MAP.items():
-        if key.lower() in txt_lower and ticker not in _exclude_tickers:
+        if ticker not in _exclude_tickers and _company_key_matches(key, txt_lower):
             input_companies.add(ticker)
+
+    # 이벤트 ev_combined 내 기업 존재 여부 확인 함수
+    # ★ ASCII 티커만 사용 — 한국어 별칭(예: '메타')은 '메타버스' 등에 오매칭됨
+    def _ticker_in_event(ticker: str, ev_combined: str) -> bool:
+        # 기본: ASCII 티커 심볼 단어경계 매칭
+        tl = ticker.lower()
+        if re.search(r'(?<![a-z0-9])' + re.escape(tl) + r'(?![a-z0-9])', ev_combined):
+            return True
+        # TSM → TSMC로도 표기되는 경우
+        if ticker == 'TSM' and re.search(r'\btsmc\b', ev_combined):
+            return True
+        # GOOGL → GOOG로도 표기
+        if ticker == 'GOOGL' and re.search(r'\bgoog\b', ev_combined):
+            return True
+        return False
 
     # ── 이벤트별 점수 계산 ─────────────────────────────────────────
     def _score(ev):
@@ -785,12 +826,12 @@ def match_events(scenario_text: str, top_n: int = 6,
         score = 0
         matched = []
 
-        # ① 기업 감지 시: 해당 기업 이벤트인지 확인 (하드 필터)
+        # ① 기업 감지 시: ASCII 티커로만 이벤트 매칭 (하드 필터)
+        #    한국어 별칭 사용 금지 → '메타' in '메타버스' 같은 오매칭 방지
         if input_companies:
             company_hit = False
             for ticker in input_companies:
-                aliases = [ticker] + TICKER_TO_KW.get(ticker, [])
-                if any(a.lower() in ev_combined for a in aliases):
+                if _ticker_in_event(ticker, ev_combined):
                     company_hit = True
                     score += 10
                     if ticker not in matched:
@@ -817,10 +858,10 @@ def match_events(scenario_text: str, top_n: int = 6,
                 score += 2
                 matched.append(nt)
 
-        # ⑤ 티커 직접 입력 매칭 (+3점)
+        # ⑤ 티커 직접 입력 매칭 (+3점, 단어경계 적용)
         for ticker, kws in TICKER_TO_KW.items():
-            if ticker.lower() in txt_lower:
-                if any(kw.lower() in ev_combined for kw in kws):
+            if _company_key_matches(ticker, txt_lower):
+                if _ticker_in_event(ticker, ev_combined):
                     score += 3
                     if ticker not in matched:
                         matched.append(ticker)
@@ -1503,19 +1544,30 @@ function renderChart(evDate, data) {
 
 # ── 실행 ─────────────────────────────────────────────────────────
 def _kill_port(port: int):
-    """이전에 실행 중인 같은 포트 프로세스 강제 종료"""
-    import subprocess, signal
+    """이전에 실행 중인 같은 포트 프로세스 강제 종료 후 포트 해제 확인"""
+    import subprocess, signal, socket, time
     try:
         r = subprocess.run(['lsof', '-ti', f':{port}'],
                            capture_output=True, text=True, timeout=3)
+        killed = False
         for pid in r.stdout.strip().split('\n'):
             pid = pid.strip()
-            if pid.isdigit():
+            if pid.isdigit() and int(pid) != os.getpid():
                 try:
-                    os.kill(int(pid), signal.SIGTERM)
+                    os.kill(int(pid), signal.SIGKILL)  # SIGTERM 대신 즉시 강제종료
+                    killed = True
+                    print(f"  ⚡ 기존 서버(PID {pid}) 종료")
                 except Exception:
                     pass
-        import time; time.sleep(0.5)
+        if killed:
+            # 포트 완전 해제까지 대기 (최대 3초)
+            for _ in range(12):
+                time.sleep(0.25)
+                try:
+                    with socket.create_connection(('127.0.0.1', port), timeout=0.1):
+                        pass  # 아직 사용 중
+                except Exception:
+                    break  # 포트 해제됨
     except Exception:
         pass
 
