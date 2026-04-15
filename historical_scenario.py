@@ -629,11 +629,12 @@ textarea::placeholder{color:#b0a890;}
 .ex-btn:hover{background:var(--navy);color:#fff;border-color:var(--navy);}
 
 /* ── 종목 선택 ── */
-.ticker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:8px;margin-top:10px;}
-.tick-lbl{display:flex;align-items:center;gap:7px;padding:8px 10px;border:1.5px solid var(--border);border-radius:9px;cursor:pointer;transition:all .18s;user-select:none;}
+.ticker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-top:10px;}
+.tick-lbl{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1.5px solid var(--border);border-radius:9px;cursor:pointer;transition:all .18s;user-select:none;background:#fff;}
 .tick-lbl:hover{border-color:var(--navy);background:#eef2f7;}
 .tick-lbl.on{border-color:var(--navy);background:#e8eef8;}
-.tick-lbl input{display:none;}
+.tick-check{width:17px;height:17px;border:1.5px solid #bbb;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--navy);font-weight:900;flex-shrink:0;background:#fff;transition:all .15s;}
+.tick-lbl.on .tick-check{background:var(--navy);border-color:var(--navy);color:#fff;}
 .t-name{font-weight:800;font-size:.84rem;}
 .t-desc{font-size:.68rem;color:var(--sub);}
 
@@ -794,24 +795,26 @@ const COLORS = {
   AMZN:'#FF9900',META:'#0866FF',NVDA:'#76B900',TSLA:'#E31937'
 };
 
-// 종목 버튼 생성
+// 종목 버튼 생성 (checkbox 대신 data-selected 속성으로 상태 관리)
 const tg = document.getElementById('tg');
 TICKERS.forEach(({t,d,on}) => {
-  const lbl = document.createElement('label');
-  lbl.className = 'tick-lbl' + (on?' on':'');
-  lbl.dataset.t = t;
-  lbl.innerHTML = `<input type="checkbox" ${on?'checked':''}><div><div class="t-name">${t}</div><div class="t-desc">${d}</div></div>`;
-  lbl.onclick = () => {
-    lbl.classList.toggle('on');
-    const cb = lbl.querySelector('input');
-    cb.checked = !cb.checked;
+  const div = document.createElement('div');
+  div.className = 'tick-lbl' + (on?' on':'');
+  div.dataset.t = t;
+  div.dataset.selected = on ? '1' : '0';
+  div.innerHTML = `<span class="tick-check">${on?'✓':''}</span><div><div class="t-name">${t}</div><div class="t-desc">${d}</div></div>`;
+  div.addEventListener('click', () => {
+    const isOn = div.dataset.selected === '1';
+    div.dataset.selected = isOn ? '0' : '1';
+    div.classList.toggle('on', !isOn);
+    div.querySelector('.tick-check').textContent = isOn ? '' : '✓';
     if (curEvent && chartCache[curEvent]) renderChart(curEvent, chartCache[curEvent]);
-  };
-  tg.appendChild(lbl);
+  });
+  tg.appendChild(div);
 });
 
 function getSelected() {
-  return [...document.querySelectorAll('.tick-lbl.on')].map(l=>l.dataset.t);
+  return [...document.querySelectorAll('.tick-lbl[data-selected="1"]')].map(d=>d.dataset.t);
 }
 
 function setEx(btn) {
