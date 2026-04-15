@@ -8,21 +8,16 @@ historical_scenario.py — 역사적 시나리오 패턴 분석기
 → 역사적 유사 시점 매칭 → Plotly 인터랙티브 차트
 """
 
-import os, json, threading, webbrowser
+import os, json, re, threading, webbrowser
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template_string
 import yfinance as yf
 import pandas as pd
-from google import genai
 
 load_dotenv()
 
 app = Flask(__name__)
-
-# ── Gemini 설정 ─────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-_genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ── 종목 정보 ────────────────────────────────────────────────────
 TICKERS_INFO = {
@@ -574,85 +569,106 @@ EVENTS_DB = [
 ]
 
 
-# ── Gemini 분석 함수 ─────────────────────────────────────────────
-def analyze_with_gemini(scenario_text: str) -> dict:
-    """시나리오를 Gemini로 분석 → 유사 역사적 이벤트 매칭"""
+# ── 카테고리별 확장 키워드 (입력 텍스트 → 이벤트 매칭용) ────────────
+CATEGORY_EXPAND = {
+    '금융위기': ['위기','붕괴','파산','폭락','패닉','뱅크런','금융위기','신용위기','레버리지'],
+    '금리':     ['금리','연준','Fed','FOMC','인상','인하','기준금리','빅컷','피벗','점도표',
+                 '윌리엄스','파월','이사','총재','통화정책','긴축','완화','동결','베이비스텝'],
+    '경제지표': ['CPI','물가','인플레이션','고용','실업','비농업','GDP','ISM','PMI','제조업',
+                 '소비자물가','신규실업','실업수당','산업생산','소매판매','주택','PCE',
+                 '필라델피아','시카고','리치먼드','경기침체','연착륙','스태그플레이션'],
+    '지정학':   ['전쟁','러시아','우크라이나','중동','이란','북한','핵','미사일','테러','분쟁',
+                 '이스라엘','하마스','가자','NATO','지정학'],
+    '무역':     ['관세','무역','미중','중국','보호무역','해방의날','상호관세','Liberation',
+                 '수출','수입','무역적자','공급망','USMCA'],
+    '기술혁명': ['AI','인공지능','ChatGPT','GPT','DeepSeek','반도체','칩','클라우드',
+                 '데이터센터','빅테크','기술주','나스닥'],
+    '팬데믹':   ['코로나','팬데믹','바이러스','봉쇄','백신','감염','확진'],
+    '정치':     ['선거','트럼프','대통령','행정명령','DOGE','취임','정치'],
+    '원자재':   ['유가','원유','WTI','브렌트','금','에너지','LNG','천연가스','재고'],
+    '환율':     ['달러','환율','엔화','원화','달러인덱스','DXY','강달러','약달러'],
+    '실적':     ['실적','분기','EPS','매출','가이던스','어닝','earnings','서프라이즈',
+                 'TSMC','TSM','NVDA','엔비디아','AAPL','애플','MSFT','마이크로소프트',
+                 'GOOGL','구글','META','메타','AMZN','아마존','TSLA','테슬라',
+                 '펩시','PEP','슈왑','SCHW','애보트','ABT','실적발표','장전','장후'],
+}
 
-    # 이벤트 DB 요약 (Gemini 컨텍스트용)
-    events_list = "\n".join(
-        f"[{e['date']}] {e['name']} | 카테고리:{e['category']} | 키워드:{','.join(e['keywords'][:4])}"
-        for e in EVENTS_DB
-    )
+# 티커명 → 이벤트 키워드 매핑
+TICKER_TO_KW = {
+    'TSMC': ['TSMC','TSM','파운드리','반도체'],
+    'TSM':  ['TSMC','TSM','파운드리','반도체'],
+    'NVDA': ['NVDA','엔비디아','GPU','블랙웰','H100'],
+    'PEP':  ['펩시','PEP','소비재','음료'],
+    'SCHW': ['슈왑','SCHW','증권','브로커리지'],
+    'ABT':  ['애보트','ABT','헬스케어','의료'],
+    'AAPL': ['AAPL','애플','아이폰'],
+    'MSFT': ['MSFT','마이크로소프트','Azure'],
+    'GOOGL':['GOOGL','구글','Alphabet','검색'],
+    'META': ['META','메타','페이스북'],
+    'AMZN': ['AMZN','아마존','AWS'],
+    'TSLA': ['TSLA','테슬라','전기차'],
+}
 
-    # 실적발표 종목 감지 (프롬프트 강화용)
-    earnings_keywords = ['실적', '분기', 'EPS', '매출', '가이던스', '어닝', 'earnings',
-                         'TSMC', 'TSM', 'NVDA', 'AAPL', 'MSFT', 'GOOGL', 'META', 'AMZN',
-                         '펩시', 'PEP', '슈왑', 'SCHW', '애보트', 'ABT']
-    has_earnings = any(kw.lower() in scenario_text.lower() for kw in earnings_keywords)
 
-    earnings_section = ""
-    if has_earnings:
-        earnings_section = """
-[실적발표 시나리오 감지 — 추가 분석 필수]
-시나리오에 기업 실적발표가 포함되어 있습니다. 반드시 아래 항목을 분석에 포함하세요:
-1. 해당 기업 실적이 서프라이즈/인라인/미스일 때 주가 역사적 반응 패턴
-2. 해당 기업이 속한 섹터 전체에 미치는 파급 효과 (예: TSMC → 반도체 전체, 나스닥)
-3. 동종업계 경쟁사 주가 영향 (예: TSMC 실적 → NVDA, AMD, ASML 연동)
-4. 실적 시즌 전체 분위기에 미치는 영향
-5. earnings_analysis 항목에 위 분석을 별도로 추가할 것"""
+def match_events(scenario_text: str, top_n: int = 5) -> list:
+    """
+    키워드 기반 이벤트 매칭 — API 불필요, 순수 DB 검색
+    반환: [{event 원본 필드 전체} + matched_keywords, match_score]
+    """
+    txt_lower = scenario_text.lower()
+    # 공백/특수문자로 분리한 토큰
+    tokens = set(re.split(r'[\s\n\r\t,·\-\+\(\)/]+', txt_lower))
 
-    prompt = f"""당신은 50년 경력의 월가 수석 투자 전략가입니다.
-현재 시장 시나리오를 분석하고 역사적으로 가장 유사한 시점을 찾아 투자자에게 인사이트를 제공해야 합니다.
-{earnings_section}
+    scored = []
+    for ev in EVENTS_DB:
+        score = 0
+        matched_kws = []
 
-[분석할 현재 시나리오]
-{scenario_text}
+        # 1) DB 키워드 직접 매칭 (가장 중요, +4점)
+        for kw in ev['keywords']:
+            if kw.lower() in txt_lower:
+                score += 4
+                matched_kws.append(kw)
 
-[참고 가능한 역사적 이벤트 DB]
-{events_list}
+        # 2) 카테고리 확장 키워드 매칭 (+2점)
+        for kw in CATEGORY_EXPAND.get(ev['category'], []):
+            if kw.lower() in txt_lower and kw not in matched_kws:
+                score += 2
+                matched_kws.append(kw)
 
-위 DB에서 현재 시나리오와 가장 유사한 이벤트를 최대 4개 선정하세요.
-유사도는 이벤트의 성격, 규모, 시장 구조, 정책 배경을 종합 판단합니다.
-실적 관련 이벤트가 있다면 카테고리가 '실적'인 이벤트를 우선 고려하세요.
+        # 3) 이벤트 이름 내 단어 매칭 (+2점, 2글자 이상)
+        name_tokens = re.split(r'[\s\-—·]+', ev['name'].lower())
+        for nt in name_tokens:
+            if len(nt) >= 2 and nt in txt_lower and nt not in matched_kws:
+                score += 2
+                matched_kws.append(nt)
 
-반드시 아래 JSON 형식으로만 응답하세요 (다른 텍스트 없이):
-{{
-  "analysis": "현재 시나리오의 핵심 분석. 어떤 유형의 위험/기회인지, 시장에 어떤 영향을 줄 수 있는지 (3-4문장, 한국어)",
-  "main_risks": ["핵심 리스크1", "핵심 리스크2", "핵심 리스크3"],
-  "earnings_analysis": "실적발표가 포함된 경우: 해당 기업 실적의 예상 범위, 섹터 파급효과, 관련 종목 영향 분석. 없으면 빈 문자열.",
-  "matched_events": [
-    {{
-      "date": "YYYY-MM-DD",
-      "name": "이벤트명",
-      "similarity_score": 유사도(0-100 정수),
-      "reason": "현재 시나리오와 유사한 이유. 어떤 공통점이 있는지 구체적으로 (2-3문장, 한국어)",
-      "market_outcome": "당시 S&P500/나스닥/금 등의 시장 반응 결과 요약 (1-2문장, 한국어)"
-    }}
-  ],
-  "outlook": "역사적 패턴을 기반으로 현재 시나리오에서 향후 시장 전망. 주의사항 포함 (4-5문장, 한국어)",
-  "key_levels_to_watch": "지금 가장 주목해야 할 지표·수준·이벤트 (한국어, 1-2문장)"
-}}"""
+        # 4) 티커명 특별 매칭 (+3점)
+        for ticker, kws in TICKER_TO_KW.items():
+            if ticker.lower() in txt_lower:
+                for kw in kws:
+                    if kw.lower() in ev['name'].lower() or kw.lower() in ' '.join(ev['keywords']).lower():
+                        score += 3
+                        if ticker not in matched_kws:
+                            matched_kws.append(ticker)
+                        break
 
-    # 모델 폴백: 2.5-flash → 2.0-flash → 2.0-flash-lite (할당량 초과 시 순차 시도)
-    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
-    last_err = None
-    for model_name in models_to_try:
-        try:
-            resp = _genai_client.models.generate_content(model=model_name, contents=prompt)
-            text = resp.text.strip()
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            # 일시적 오류(할당량 초과, 서버 과부하, 서비스 불가)는 다음 모델로 폴백
-            if any(code in err_str for code in ['429', '503', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE', 'quota']):
-                continue
-            raise  # 그 외 오류는 즉시 raise
-    raise last_err
+        # 5) 연도 언급 매칭 (+1점)
+        year = ev['date'][:4]
+        if year in txt_lower:
+            score += 1
+
+        if score >= 2:  # 최소 임계값
+            scored.append({
+                **ev,
+                'matched_keywords': list(dict.fromkeys(matched_kws)),  # 중복제거
+                'match_score': round(score),
+            })
+
+    # 점수 내림차순 → 최근 날짜 우선 (동점)
+    scored.sort(key=lambda x: (-x['match_score'], x['date']), reverse=False)
+    scored.sort(key=lambda x: x['match_score'], reverse=True)
+    return scored[:top_n]
 
 
 # ── yfinance 주가 데이터 수집 ─────────────────────────────────────
@@ -719,33 +735,20 @@ def index():
 def analyze():
     data     = request.get_json()
     scenario = data.get('scenario', '').strip()
-    tickers  = data.get('tickers', ['SPY','QQQ','GLD','AAPL','MSFT','NVDA'])
+    tickers  = data.get('tickers', ['SPY','QQQ','GLD','TSM','NVDA'])
 
     if not scenario:
         return jsonify({'error': '시나리오를 입력해주세요.'}), 400
 
     try:
-        gemini_result = analyze_with_gemini(scenario)
+        matched = match_events(scenario, top_n=5)
 
         charts = {}
-        for ev in gemini_result.get('matched_events', []):
-            date = ev.get('date', '')
-            if date:
-                charts[date] = get_chart_data(date, tickers)
+        for ev in matched:
+            charts[ev['date']] = get_chart_data(ev['date'], tickers)
 
-        # 이벤트 DB에서 해당 날짜 상세 정보 추가
-        db_map = {e['date']: e for e in EVENTS_DB}
-        for ev in gemini_result.get('matched_events', []):
-            date = ev.get('date', '')
-            if date in db_map:
-                ev['db_desc']   = db_map[date]['desc']
-                ev['category']  = db_map[date]['category']
-                ev['impact']    = db_map[date].get('impact')
+        return jsonify({'events': matched, 'charts': charts})
 
-        return jsonify({'gemini': gemini_result, 'charts': charts})
-
-    except json.JSONDecodeError:
-        return jsonify({'error': 'Gemini 응답 파싱 오류. 다시 시도해주세요.'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -813,44 +816,38 @@ textarea::placeholder{color:#b0a890;}
 
 /* ── 결과 ── */
 #results{display:none;}
-
-.analysis-box{background:linear-gradient(135deg,rgba(26,58,92,.04),rgba(154,114,9,.04));border-left:4px solid var(--navy);padding:16px 18px;border-radius:0 9px 9px 0;margin-bottom:12px;line-height:1.72;font-size:.91rem;}
-.risk-tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;}
-.rtag{background:#fff3e0;border:1px solid #e65100;color:#e65100;padding:3px 10px;border-radius:16px;font-size:.77rem;font-weight:700;}
+.result-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+.result-count{font-size:.82rem;color:var(--sub);}
 
 /* ── 이벤트 카드 ── */
-.ev-grid{display:grid;gap:10px;}
-.ev-card{border:1.5px solid var(--border);border-radius:11px;padding:15px 18px;cursor:pointer;transition:all .18s;}
-.ev-card:hover{border-color:var(--navy);box-shadow:0 2px 10px rgba(26,58,92,.1);}
-.ev-card.sel{border-color:var(--navy);background:#f0f4fa;}
-.ev-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
-.ev-date{font-size:.78rem;color:var(--sub);font-family:monospace;letter-spacing:.3px;}
-.ev-meta{display:flex;gap:6px;align-items:center;}
-.cat-badge{font-size:.68rem;padding:2px 7px;border-radius:10px;font-weight:700;background:#e8eef8;color:var(--navy);}
-.sim-badge{background:var(--navy);color:#fff;padding:2px 8px;border-radius:10px;font-size:.73rem;font-weight:700;}
-.ev-name{font-weight:800;font-size:.93rem;margin-bottom:6px;}
-.ev-reason{font-size:.82rem;color:var(--sub);line-height:1.55;}
-.ev-outcome{margin-top:8px;font-size:.78rem;padding:6px 10px;background:#f5f5f0;border-radius:7px;color:#555;}
-.ev-db-desc{margin-top:6px;font-size:.78rem;color:#888;line-height:1.45;font-style:italic;}
-.impact-bar{display:flex;align-items:center;gap:6px;margin-top:8px;}
-.impact-lbl{font-size:.72rem;color:var(--sub);}
-.impact-val{font-size:.8rem;font-weight:800;}
-.impact-val.pos{color:var(--up);}
-.impact-val.neg{color:var(--down);}
+.ev-grid{display:grid;gap:12px;}
+.ev-card{border:1.5px solid var(--border);border-radius:12px;padding:16px 20px;cursor:pointer;transition:all .18s;background:#fff;}
+.ev-card:hover{border-color:var(--navy);box-shadow:0 3px 12px rgba(26,58,92,.1);}
+.ev-card.sel{border-color:var(--navy);background:#f0f4fa;box-shadow:0 3px 12px rgba(26,58,92,.12);}
+.ev-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;gap:6px;}
+.ev-date{font-size:.82rem;color:var(--sub);font-family:monospace;letter-spacing:.5px;font-weight:700;}
+.ev-meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.cat-badge{font-size:.7rem;padding:3px 9px;border-radius:10px;font-weight:700;background:#e8eef8;color:var(--navy);}
+.score-badge{background:var(--navy);color:#fff;padding:3px 9px;border-radius:10px;font-size:.7rem;font-weight:700;}
+.ev-name{font-weight:800;font-size:.96rem;margin-bottom:7px;color:#1a1a1a;}
+.ev-desc{font-size:.85rem;color:#333;line-height:1.62;margin-bottom:8px;}
+.ev-kws{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px;}
+.kw-tag{font-size:.7rem;padding:2px 8px;border-radius:12px;background:#f0f4fa;color:var(--navy);border:1px solid #c8d8ee;font-weight:600;}
+.kw-tag.hit{background:#e8f5e9;color:#1b5e20;border-color:#a5d6a7;font-weight:700;}
+.ev-impact{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;margin-top:6px;}
+.ev-impact.pos{background:#e8f5e9;border:1px solid #a5d6a7;}
+.ev-impact.neg{background:#fce4e4;border:1px solid #e57373;}
+.ev-impact.neu{background:#f5f5f0;border:1px solid #ddd;}
+.impact-lbl{font-size:.75rem;color:#555;}
+.impact-val{font-size:.95rem;font-weight:900;}
+.impact-val.pos{color:#1b5e20;}
+.impact-val.neg{color:#c62828;}
+.impact-val.neu{color:#555;}
+.impact-note{font-size:.73rem;color:#888;margin-left:4px;}
 
 /* ── 차트 ── */
-.chart-wrap{width:100%;height:440px;}
+.chart-wrap{width:100%;height:460px;}
 .chart-note{text-align:center;font-size:.73rem;color:#aaa;margin-top:8px;}
-
-/* ── 전망 ── */
-.outlook-box{background:#f9f7f0;border:1px solid #e4e0d4;border-radius:10px;padding:18px 20px;}
-.outlook-box p{line-height:1.72;font-size:.9rem;}
-.key-lvl{margin-top:12px;padding-top:11px;border-top:1px solid #e4e0d4;font-size:.83rem;color:var(--orange);font-weight:700;}
-.disclaimer{text-align:center;font-size:.72rem;color:#bbb;margin-top:14px;padding-top:10px;border-top:1px solid #eee;}
-
-/* ── 실적 분석 박스 ── */
-.earnings-box{background:#fff8e8;border:1.5px solid #e6a817;border-radius:10px;padding:14px 18px;margin-top:12px;font-size:.87rem;line-height:1.68;color:#4a3000;}
-.earnings-box .earn-title{font-weight:800;color:#b8860b;margin-bottom:7px;font-size:.9rem;}
 
 /* ── 복사 버튼 영역 ── */
 .copy-bar{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
@@ -859,6 +856,7 @@ textarea::placeholder{color:#b0a890;}
 .copy-btn.copied{background:#00838f;border-color:#00838f;color:#fff;}
 .copy-btn-raw{border-color:#888;color:#555;}
 .copy-btn-raw:hover{background:#555;border-color:#555;color:#fff;}
+.no-result{text-align:center;padding:40px 20px;color:var(--sub);font-size:.9rem;}
 </style>
 </head>
 <body>
@@ -868,7 +866,7 @@ textarea::placeholder{color:#b0a890;}
     <div class="hdr-title">📊 역사적 시나리오 분석기</div>
     <div class="hdr-sub">Historical Pattern Matcher — Jason Market</div>
   </div>
-  <div class="hdr-badge">Gemini 2.0 Flash</div>
+  <div class="hdr-badge">API 불필요 · 키워드 매칭</div>
 </div>
 
 <div class="wrap">
@@ -916,40 +914,30 @@ textarea::placeholder{color:#b0a890;}
   <div id="results">
 
     <div class="card">
-      <div class="ctitle">🤖 Gemini 시나리오 분석</div>
-      <div class="analysis-box" id="aText"></div>
-      <div class="risk-tags" id="rTags"></div>
-      <div id="earningsBox" style="display:none" class="earnings-box">
-        <div class="earn-title">📋 실적발표 영향 분석</div>
-        <div id="earningsTxt"></div>
+      <div class="result-header">
+        <div class="ctitle" style="margin-bottom:0">🕰️ 키워드 매칭 역사적 이벤트 — 클릭하면 차트 표시</div>
+        <span class="result-count" id="resultCount"></span>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="ctitle">🕰️ 역사적 유사 시점 — 클릭하면 차트가 표시됩니다</div>
       <div class="ev-grid" id="evCards"></div>
     </div>
 
     <div class="card" id="chartCard" style="display:none">
       <div class="ctitle" id="chartTitle">📈 주가 흐름</div>
       <div class="chart-wrap" id="chartDiv"></div>
-      <div class="chart-note">빨간 점선 = 이벤트 발생일 (기준 100) | 전후 6개월 / 12개월</div>
+      <div class="chart-note">빨간 점선 = 이벤트 발생일 (기준 100) | 전(6개월) / 후(12개월)</div>
     </div>
 
     <div class="card">
-      <div class="ctitle">🔭 역사적 패턴 기반 시장 전망</div>
-      <div class="outlook-box">
-        <p id="outlookTxt"></p>
-        <div class="key-lvl" id="keyLvl"></div>
+      <div class="ctitle">📤 데이터 내보내기 — 다른 AI로 분석하기</div>
+      <div style="font-size:.82rem;color:var(--sub);margin-bottom:12px;line-height:1.6">
+        위 매칭 결과를 복사해서 ChatGPT·Claude·Gemini 등에 붙여넣으면 더 깊은 분석이 가능합니다.
       </div>
-      <div class="disclaimer">
-        ⚠️ 본 분석은 역사적 패턴 참고용이며 투자 조언이 아닙니다. 과거 패턴이 미래를 보장하지 않습니다.
-        적중률은 방향성 기준 55~65% 수준입니다.
-      </div>
-      <!-- 복사 버튼 -->
       <div class="copy-bar">
-        <button class="copy-btn" id="copyAllBtn" onclick="copyAll()">📋 전체 분석 복사 (다른 AI에 붙여넣기)</button>
+        <button class="copy-btn" id="copyAllBtn" onclick="copyAll()">📋 전체 텍스트 복사 (AI 분석용)</button>
         <button class="copy-btn copy-btn-raw" id="copyRawBtn" onclick="copyRaw()">📄 원시 JSON 복사</button>
+      </div>
+      <div style="font-size:.72rem;color:#bbb;margin-top:12px;text-align:center">
+        ⚠️ 역사적 팩트 데이터 기반 참고용 — 투자 조언 아님 | DB 이벤트 총 127개
       </div>
     </div>
 
@@ -980,7 +968,8 @@ const COLORS = {
   TSM:'#CE0E2D',SMH:'#7B2FBE'
 };
 
-let lastRawData = null; // 원시 데이터 보관
+let lastRawData = null;
+let lastScenario = '';
 
 // 종목 버튼 생성 (checkbox 대신 data-selected 속성으로 상태 관리)
 const tg = document.getElementById('tg');
@@ -1014,6 +1003,7 @@ let curEvent = null;
 async function doAnalyze() {
   const scenario = document.getElementById('si').value.trim();
   if (!scenario) { alert('시나리오를 입력해주세요.'); return; }
+  lastScenario = scenario;
 
   const btn = document.getElementById('goBtn');
   btn.disabled = true;
@@ -1039,123 +1029,127 @@ async function doAnalyze() {
   }
 }
 
+// 카테고리 색상
+const CAT_COLOR = {
+  '금융위기':'#c62828','금리':'#1565c0','경제지표':'#00838f','지정학':'#6a1b9a',
+  '무역':'#e65100','기술혁명':'#2e7d32','팬데믹':'#558b2f','정치':'#37474f',
+  '원자재':'#f57f17','환율':'#0277bd','실적':'#ad1457',
+};
+
 function renderAll(data) {
-  const g = data.gemini;
-  lastRawData = data; // 원시 데이터 보관
-
-  // AI 분석
-  document.getElementById('aText').textContent = g.analysis || '';
-  document.getElementById('rTags').innerHTML = (g.main_risks||[])
-    .map(r=>`<span class="rtag">${r}</span>`).join('');
-
-  // 실적 분석 (있을 때만 표시)
-  if (g.earnings_analysis && g.earnings_analysis.trim()) {
-    document.getElementById('earningsTxt').textContent = g.earnings_analysis;
-    document.getElementById('earningsBox').style.display = 'block';
-  } else {
-    document.getElementById('earningsBox').style.display = 'none';
-  }
-
-  // 이벤트 카드
+  lastRawData = data;
   chartCache = data.charts || {};
+  const events = data.events || [];
+
+  document.getElementById('resultCount').textContent =
+    `${events.length}개 이벤트 매칭됨`;
+
   const evEl = document.getElementById('evCards');
   evEl.innerHTML = '';
-  (g.matched_events||[]).forEach((ev,i) => {
+
+  if (!events.length) {
+    evEl.innerHTML = '<div class="no-result">⚠️ 매칭된 이벤트가 없습니다. 키워드를 더 구체적으로 입력해보세요.</div>';
+    document.getElementById('results').style.display = 'block';
+    return;
+  }
+
+  events.forEach((ev, i) => {
     const impact = ev.impact;
-    const impHtml = impact != null
-      ? `<div class="impact-bar"><span class="impact-lbl">당시 시장영향:</span>
-         <span class="impact-val ${impact>=0?'pos':'neg'}">${impact>=0?'+':''}${impact}%</span></div>`
-      : '';
+    const impCls = impact == null ? 'neu' : impact > 0 ? 'pos' : impact < 0 ? 'neg' : 'neu';
+    const impTxt = impact == null ? '데이터 없음'
+      : impact === 0 ? '±0% (영향 중립 또는 혼조)'
+      : `${impact > 0 ? '+' : ''}${impact}%`;
+
+    const catColor = CAT_COLOR[ev.category] || '#555';
+    const allKws = ev.keywords || [];
+    const hitSet = new Set((ev.matched_keywords||[]).map(k=>k.toLowerCase()));
+    const kwHtml = allKws.map(kw =>
+      `<span class="kw-tag${hitSet.has(kw.toLowerCase())?' hit':''}">${kw}</span>`
+    ).join('');
+
     const div = document.createElement('div');
-    div.className = 'ev-card'+(i===0?' sel':'');
+    div.className = 'ev-card' + (i===0?' sel':'');
     div.innerHTML = `
       <div class="ev-top">
         <div class="ev-date">📅 ${ev.date}</div>
         <div class="ev-meta">
-          ${ev.category?`<span class="cat-badge">${ev.category}</span>`:''}
-          <span class="sim-badge">유사도 ${ev.similarity_score}%</span>
+          <span class="cat-badge" style="background:${catColor}18;color:${catColor};border:1px solid ${catColor}44">${ev.category}</span>
+          <span class="score-badge">매칭점수 ${ev.match_score}</span>
         </div>
       </div>
       <div class="ev-name">${ev.name}</div>
-      <div class="ev-reason">${ev.reason}</div>
-      <div class="ev-outcome">📊 ${ev.market_outcome}</div>
-      ${ev.db_desc?`<div class="ev-db-desc">💬 ${ev.db_desc}</div>`:''}
-      ${impHtml}
+      <div class="ev-desc">${ev.desc}</div>
+      <div class="ev-kws">${kwHtml}</div>
+      <div class="ev-impact ${impCls}">
+        <span class="impact-lbl">당시 시장 영향</span>
+        <span class="impact-val ${impCls}">${impTxt}</span>
+        <span class="impact-note">(${ev.category} 이벤트 기준 S&P500/나스닥 대략)</span>
+      </div>
     `;
     div.onclick = () => {
       document.querySelectorAll('.ev-card').forEach(c=>c.classList.remove('sel'));
       div.classList.add('sel');
       curEvent = ev.date;
-      if (chartCache[ev.date]) renderChart(ev.date, chartCache[ev.date]);
+      if (chartCache[ev.date] && Object.keys(chartCache[ev.date]).length) {
+        renderChart(ev.date, chartCache[ev.date]);
+      }
     };
     evEl.appendChild(div);
   });
 
-  // 전망
-  document.getElementById('outlookTxt').textContent = g.outlook||'';
-  document.getElementById('keyLvl').textContent = g.key_levels_to_watch
-    ? '👁️ '+g.key_levels_to_watch : '';
-
   document.getElementById('results').style.display = 'block';
 
   // 첫 번째 이벤트 자동 차트
-  if (g.matched_events?.length && chartCache[g.matched_events[0].date]) {
-    curEvent = g.matched_events[0].date;
+  if (events.length && chartCache[events[0].date] && Object.keys(chartCache[events[0].date]).length) {
+    curEvent = events[0].date;
     renderChart(curEvent, chartCache[curEvent]);
   }
 }
 
 function copyAll() {
   if (!lastRawData) return;
-  const g = lastRawData.gemini;
-  const scenario = document.getElementById('si').value.trim();
+  const events = lastRawData.events || [];
   const lines = [];
-  lines.push('=== 역사적 시나리오 분석 결과 ===');
+  lines.push('=== 역사적 시나리오 — 키워드 매칭 결과 ===');
   lines.push('');
   lines.push('[입력 시나리오]');
-  lines.push(scenario);
+  lines.push(lastScenario);
   lines.push('');
-  lines.push('[핵심 분석]');
-  lines.push(g.analysis || '');
+  lines.push(`[매칭된 역사적 이벤트 ${events.length}건]`);
+  lines.push('아래 각 이벤트의 역사적 사실을 참고하여 현재 시나리오와 비교 분석해주세요.');
   lines.push('');
-  if (g.earnings_analysis && g.earnings_analysis.trim()) {
-    lines.push('[실적발표 영향 분석]');
-    lines.push(g.earnings_analysis);
-    lines.push('');
-  }
-  lines.push('[핵심 리스크]');
-  (g.main_risks||[]).forEach((r,i) => lines.push(`${i+1}. ${r}`));
-  lines.push('');
-  lines.push('[역사적 유사 시점]');
-  (g.matched_events||[]).forEach((ev,i) => {
-    lines.push(`${i+1}. [${ev.date}] ${ev.name} (유사도 ${ev.similarity_score}%)`);
-    lines.push(`   카테고리: ${ev.category||''}`);
-    lines.push(`   유사 이유: ${ev.reason}`);
-    lines.push(`   당시 시장 반응: ${ev.market_outcome}`);
-    if (ev.db_desc) lines.push(`   이벤트 설명: ${ev.db_desc}`);
+  events.forEach((ev, i) => {
+    lines.push(`──── ${i+1}번 이벤트 ────`);
+    lines.push(`날짜: ${ev.date}`);
+    lines.push(`이벤트명: ${ev.name}`);
+    lines.push(`카테고리: ${ev.category}`);
+    lines.push(`설명: ${ev.desc}`);
+    lines.push(`키워드: ${(ev.keywords||[]).join(', ')}`);
+    lines.push(`당시 시장 영향: ${ev.impact != null ? (ev.impact >= 0 ? '+' : '') + ev.impact + '%' : '미상'}`);
+    lines.push(`매칭 키워드: ${(ev.matched_keywords||[]).join(', ')}`);
     lines.push('');
   });
-  lines.push('[시장 전망]');
-  lines.push(g.outlook || '');
-  lines.push('');
-  lines.push('[주목할 지표]');
-  lines.push(g.key_levels_to_watch || '');
+  lines.push('[분석 요청]');
+  lines.push('위 역사적 이벤트들과 현재 입력한 시나리오를 비교하여:');
+  lines.push('1. 현재 상황과 가장 유사한 역사적 패턴은 무엇인가?');
+  lines.push('2. 당시 이후 시장이 어떻게 움직였는가?');
+  lines.push('3. 현재 시나리오에서 주목해야 할 리스크와 기회는?');
 
   navigator.clipboard.writeText(lines.join('\n')).then(() => {
     const btn = document.getElementById('copyAllBtn');
     btn.textContent = '✅ 복사 완료!';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = '📋 전체 분석 복사 (다른 AI에 붙여넣기)'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => { btn.textContent = '📋 전체 텍스트 복사 (AI 분석용)'; btn.classList.remove('copied'); }, 2500);
   });
 }
 
 function copyRaw() {
   if (!lastRawData) return;
-  navigator.clipboard.writeText(JSON.stringify(lastRawData.gemini, null, 2)).then(() => {
+  navigator.clipboard.writeText(JSON.stringify(lastRawData.events, null, 2)).then(() => {
     const btn = document.getElementById('copyRawBtn');
     btn.textContent = '✅ JSON 복사 완료!';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = '📄 원시 JSON 복사'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => { btn.textContent = '📄 원시 JSON 복사'; btn.classList.remove('copied'); }, 2500);
   });
 }
 
@@ -1207,10 +1201,6 @@ function renderChart(evDate, data) {
 
 # ── 실행 ─────────────────────────────────────────────────────────
 def main():
-    if not GEMINI_API_KEY:
-        print("  ⚠️  .env 파일에 GEMINI_API_KEY가 없습니다.")
-        return
-
     port = 5151
     url  = f"http://127.0.0.1:{port}"
 
@@ -1221,7 +1211,8 @@ def main():
     threading.Thread(target=_open, daemon=True).start()
     print(f"\n  📊 역사적 시나리오 분석기 시작")
     print(f"  🌐 브라우저 자동 오픈: {url}")
-    print(f"  ⚡ Gemini 2.0 Flash (무료 최강 모델)")
+    print(f"  🔍 키워드 매칭 엔진 — API 불필요")
+    print(f"  📚 이벤트 DB: {len(EVENTS_DB)}개")
     print(f"  🛑 종료: Ctrl+C\n")
     app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False)
 
