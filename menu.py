@@ -31,6 +31,7 @@ MENU = [
     ('15', '포트폴리오 리스크 — VaR·Beta·변동성 분석',     'portfolio_risk.py',           [], True),
     ('16', '시장 스트레스    — VIX구조·금리역전·신용스프레드', 'market_stress.py',           [], True),
     ('17', 'Alpha Hunter   — 증시 고수 글 자동 수집 → AI분석용 MD', 'alpha_hunter.py',          [], True),
+    ('18', '역사적 시나리오 — 리스크 입력 → 유사 시점 차트 [Gemini🆓]', 'historical_scenario.py',   [], True),
 ]
 
 SEPARATOR = '─' * 58
