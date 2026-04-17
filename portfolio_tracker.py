@@ -85,8 +85,17 @@ def get_usdkrw():
     except Exception:
         return 1450.0, 1450.0
 
+def _reset_yf_cookie():
+    """yfinance 쿠키 캐시 초기화 — s키 동기화 후 Invalid Crumb 방지"""
+    try:
+        from yfinance.cache import get_cookie_cache
+        get_cookie_cache().store('curlCffi', None)
+    except Exception:
+        pass
+
 def fetch_all_prices(holdings, usdkrw):
     """병렬로 모든 종목 현재가+전일종가 조회 (1일 손익용)"""
+    _reset_yf_cookie()
     tickers = set()
     for h in holdings:
         t = h.get('ticker', '')

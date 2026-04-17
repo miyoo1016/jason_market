@@ -136,43 +136,37 @@ def read_xlsx():
         return None
 
     holdings = []
-    # ── [NEW] L열 헤더 확인 및 강제 너비/스타일 조정 (9행) ──────────
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(XLSX_PATH)
-        ws = wb[SHEET_NAME]
-        
-        # 잘못 들어간 H1 삭제
-        if ws.cell(row=1, column=8).value == "매수원가(₩)":
-            ws.cell(row=1, column=8).value = None
-        
-        # L열 9행(Table Header) 제목 및 스타일 강제 적용
-        l_header = ws.cell(row=9, column=12)
-        l_header.value = "매입환율"
-        l_header.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
-        l_header.fill = openpyxl.styles.PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
-        l_header.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
-        
-        # 너비 강제 조정 (20으로 넉넉하게)
-        ws.column_dimensions['L'].width = 20
-        
-        # ── [NEW] 아래 데이터 칸들 스타일 복사 (K열 -> L열) ──────────
-        # 10행부터 데이터가 있는 구석구석까지 스타일 복제
-        for r_idx in range(10, 101): # 100행까지 넉넉하게 적용
-            source_cell = ws.cell(row=r_idx, column=11) # K열(11)
-            target_cell = ws.cell(row=r_idx, column=12) # L열(12)
-            
-            # 스타일 복사 (배경색, 테두리 등)
-            if source_cell.has_style:
-                from copy import copy
-                target_cell.fill = copy(source_cell.fill)
-                target_cell.border = copy(source_cell.border)
-                target_cell.alignment = copy(source_cell.alignment)
-        
-        wb.save(XLSX_PATH)
-        print("  ✅ 엑셀 L열(매입환율)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
-    except Exception as e:
-        print(f"  ⚠️ 엑셀 스타일 조정 중 오류: {e}")
+    # L열 헤더/스타일 조정 — "(원본)" 백업 파일은 건드리지 않음
+    is_backup = "(원본)" in XLSX_PATH
+    if not is_backup:
+        try:
+            import openpyxl
+            from copy import copy
+            wb = openpyxl.load_workbook(XLSX_PATH)
+            ws = wb[SHEET_NAME]
+
+            if ws.cell(row=1, column=8).value == "매수원가(₩)":
+                ws.cell(row=1, column=8).value = None
+
+            l_header = ws.cell(row=9, column=12)
+            l_header.value = "매입환율"
+            l_header.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
+            l_header.fill = openpyxl.styles.PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+            l_header.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+            ws.column_dimensions['L'].width = 20
+
+            for r_idx in range(10, 101):
+                source_cell = ws.cell(row=r_idx, column=11)
+                target_cell = ws.cell(row=r_idx, column=12)
+                if source_cell.has_style:
+                    target_cell.fill = copy(source_cell.fill)
+                    target_cell.border = copy(source_cell.border)
+                    target_cell.alignment = copy(source_cell.alignment)
+
+            wb.save(XLSX_PATH)
+            print("  ✅ 엑셀 L열(매입환율)의 스타일이 기존 표와 동일하게 맞춰졌습니다.")
+        except Exception as e:
+            print(f"  ⚠️ 엑셀 스타일 조정 중 오류: {e}")
 
     # ── [NEW] 기준 환율(Base FX) 읽기: 14행 O열 (index 13, 14) ────────
     try:
@@ -366,12 +360,27 @@ def _num(val):
 
 def _get_gspread_ws():
     """OAuth 캐시 토큰으로 구글시트 워크시트 반환. 실패 시 None."""
-    try:
-        import gspread
-        gc = gspread.oauth()            # ~/.config/gspread/credentials.json
+    import gspread
+    _auth_json = os.path.expanduser("~/.config/gspread/authorized_user.json")
+
+    def _try_connect():
+        gc = gspread.oauth()
         sh = gc.open_by_key(SPREADSHEET_ID)
         return sh.worksheet(SHEET_NAME)
+
+    try:
+        return _try_connect()
     except Exception as e:
+        err = str(e)
+        if "invalid_grant" in err or "Token has been expired" in err or "revoked" in err:
+            print("  🔄 구글 OAuth 토큰 만료 — 재인증 중 (브라우저가 열립니다)...")
+            if os.path.exists(_auth_json):
+                os.remove(_auth_json)
+            try:
+                return _try_connect()
+            except Exception as e2:
+                print(f"  ⚠ 재인증 실패: {e2}")
+                return None
         print(f"  ⚠ 구글시트 API 연결 실패: {e}")
         return None
 
@@ -782,6 +791,9 @@ def main():
 
     src = "구글시트 API" if use_gsheet else f"xlsx ({XLSX_PATH.split('/')[-1]})"
     print(f"  소스: {src}")
+    if not use_gsheet and "(원본)" in XLSX_PATH:
+        print("  ⚠ 경고: '(원본)' 백업 파일 사용 중 — 최신 데이터가 아닐 수 있습니다.")
+        print("         (구글 OAuth 토큰 재발급 후 다시 실행하면 구글시트 직접 연동됩니다)")
     print(f"  완료: 종목 {len(stocks)}개 + 현금 {len(cashes)}개 = 총 {len(holdings)}개  ({len(accounts)}개 계좌)\n")
     print(f"  {'계좌':<22} {'종목':<18} {'구분':<10} {'금액/평단가':>14} {'통화'}")
     print("  " + "─" * 72)
@@ -810,6 +822,13 @@ def main():
     print("━"*56)
     fetch_and_write_prices()   # xlsx O열 업데이트 (있을 때만 작동)
     print()
+
+    # yfinance 쿠키 캐시 초기화 — 이후 다른 스크립트에서 Invalid Crumb 방지
+    try:
+        from yfinance.cache import get_cookie_cache
+        get_cookie_cache().store('curlCffi', None)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
