@@ -107,11 +107,13 @@ def get_data(ticker, name=""):
 
         if not curr or not prev: return None
 
-        if open_val:
+        if is_global and open_val:
             pct = (curr - open_val) / open_val * 100
-        else:
+        elif prev:
             pct = (curr - prev) / prev * 100
-            
+        else:
+            return None
+
         return curr, pct
     except Exception:
         return None
@@ -150,7 +152,7 @@ def main():
             print(f"  {name}  {'데이터 없음':>13}")
 
     print(f"  {'─'*54}")
-    print(f"  ※ 지수: Investing.com (현물기반) | 글로벌: 00:00 GMT 시가 대비 등락률\n")
+    print(f"  ※ 주식·ETF: 전일 종가 대비 | 선물·FX·크립토·지수: 00:00 GMT 시가 대비\n")
 
 if __name__ == '__main__':
     main()
