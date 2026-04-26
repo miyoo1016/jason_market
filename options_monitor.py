@@ -19,6 +19,18 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
+try:
+    from scipy.stats import norm
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
 ALERT = '\033[38;5;203m'
 RESET = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
@@ -43,6 +55,29 @@ CBOE_URL = 'https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json'
 HEADERS  = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                           'AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/120.0.0.0 Safari/537.36'}
+
+# ── 전역 설정 및 공식 ──────────────────────────────────────────
+R_FREE = 0.045  # 미국 무위험금리 근사치
+
+def bs_vanna(S, K, T_days, r, sigma):
+    """Vanna = dDelta/dIV — IV 변화 시 딜러 헤징 방향"""
+    if not SCIPY_AVAILABLE: return 0
+    T = T_days / 365
+    if T <= 0 or sigma <= 0 or K <= 0: return 0
+    sigma_v = sigma / 100.0
+    d1 = (np.log(S/K) + (r + 0.5*sigma_v**2)*T) / (sigma_v*np.sqrt(T))
+    d2 = d1 - sigma_v*np.sqrt(T)
+    return -norm.pdf(d1) * d2 / sigma_v
+
+def bs_charm(S, K, T_days, r, sigma):
+    """Charm = dDelta/dT — 시간 경과에 따른 딜러 델타 변화"""
+    if not SCIPY_AVAILABLE: return 0
+    T = T_days / 365
+    if T <= 0 or sigma <= 0 or K <= 0: return 0
+    sigma_v = sigma / 100.0
+    d1 = (np.log(S/K) + (r + 0.5*sigma_v**2)*T) / (sigma_v*np.sqrt(T))
+    d2 = d1 - sigma_v*np.sqrt(T)
+    return -norm.pdf(d1) * (2*r*T - d2*sigma_v*np.sqrt(T)) / (2*T*sigma_v*np.sqrt(T))
 
 # ── 데이터 수집 ───────────────────────────────────────────
 
@@ -427,6 +462,124 @@ def process(sym, label):
         },
     }
 
+# ── MODULE 2: Vanna & Charm 추정 모듈 ──────────────────────────
+def calc_vanna_charm(r):
+    try:
+        sym = r['sym']
+        # [수정 2] 디버그 프린트
+        # print(f"DEBUG [{sym}] SCIPY_AVAILABLE: {SCIPY_AVAILABLE}, CURR: {r['curr']}")
+
+        if not SCIPY_AVAILABLE:
+            return {'vanna': 0, 'charm': 0, 'err': 'scipy 미설치: pip install scipy'}
+        
+        curr = r['curr']
+        gex_data = r.get('gex', {})
+        strikes = gex_data.get('strikes', [])
+        
+        # [수정 2] 스트라이크/OI 확인
+        # print(f"DEBUG [{sym}] strikes count: {len(strikes)}")
+        
+        if not strikes: return {'vanna': 0, 'charm': 0}
+
+        net_vanna = 0
+        net_charm = 0
+        
+        avg_iv = (r['iv_call'] + r['iv_put']) / 2
+        if avg_iv <= 0: avg_iv = 20.0
+
+        for row in r['exp_rows']:
+            T = row['days']
+            # [수정 2] T=0 이면 Greeks가 0이 되므로 아주 작은 값으로 처리하거나 당일 만기 제외
+            if T < 0: continue
+            if T == 0: T = 0.01 # 0.01일 (약 15분) 로 근사하여 0 방지
+            
+            # [수정 2] 스트라이크별 정밀 계산 시도
+            # 여기서는 aggregate chart 데이터를 활용
+            for i, strike in enumerate(r['chart']['strikes']):
+                c_oi = r['chart']['call_oi'][i]
+                p_oi = r['chart']['put_oi'][i]
+                oi_total = c_oi + p_oi
+                
+                if oi_total <= 0: continue
+                
+                v = bs_vanna(curr, strike, T, R_FREE, avg_iv)
+                c = bs_charm(curr, strike, T, R_FREE, avg_iv)
+                
+                # 가중치 부여 (만기별 OI 비중에 따라)
+                weight = (row['c_oi'] + row['p_oi']) / (r['tc_oi'] + r['tp_oi']) if (r['tc_oi'] + r['tp_oi']) > 0 else 1.0
+                
+                net_vanna += v * oi_total * 100 * curr * weight
+                net_charm += c * oi_total * 100 * curr * weight
+
+        # [수정 2] 중간 결과 확인
+        # print(f"DEBUG [{sym}] net_vanna: {net_vanna}, net_charm: {net_charm}")
+
+        return {
+            'vanna': round(net_vanna / 1e9, 3), 
+            'charm': round(net_charm / 1e9, 3)
+        }
+    except Exception as e:
+        return {'vanna': 0, 'charm': 0, 'err': str(e)}
+
+# ── MODULE 3: IV Rank / IV Percentile 표시 ────────────────────
+def render_iv_rank(r):
+    try:
+        if not YFINANCE_AVAILABLE:
+            return {'rank': 0, 'pct': 0, 'status': 'yfinance 미설치', 'new_high': False}
+        
+        mapper = {"SPX":"^SPX", "NDX":"^NDX", "QQQ":"QQQ", "SPY":"SPY", "GOOGL":"GOOGL", "GLD":"GLD"}
+        y_sym = mapper.get(r['sym'], r['sym'])
+        
+        ticker = yf.Ticker(y_sym)
+        hist = ticker.history(period="1y")
+        if hist.empty:
+            return {'rank': 0, 'pct': 0, 'status': '데이터 수집 중 (초기 실행)', 'new_high': False}
+        
+        returns = np.log(hist['Close'] / hist['Close'].shift(1))
+        vol_hist = returns.rolling(window=21).std() * np.sqrt(252) * 100
+        vol_hist = vol_hist.dropna()
+        
+        curr_iv = (r['iv_call'] + r['iv_put']) / 2
+        if curr_iv <= 0: curr_iv = vol_hist.iloc[-1] if not vol_hist.empty else 20
+        
+        min_iv = vol_hist.min()
+        max_iv = vol_hist.max()
+        
+        iv_rank_raw = (curr_iv - min_iv) / (max_iv - min_iv) * 100 if max_iv > min_iv else 50
+        iv_rank = min(100.0, max(0.0, iv_rank_raw))
+        is_new_high = iv_rank_raw > 100
+        
+        iv_pct = (vol_hist < curr_iv).sum() / len(vol_hist) * 100 if not vol_hist.empty else 50
+        
+        return {'rank': round(iv_rank, 1), 'pct': round(iv_pct, 1), 'status': 'OK', 'new_high': is_new_high}
+    except Exception as e:
+        return {'rank': 0, 'pct': 0, 'status': f'오류: {str(e)}', 'new_high': False}
+
+# ── MODULE 1: 0DTE 전용 렌더링 블록 ──────────────────────────
+def render_0dte_block(r):
+    try:
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        zdte = next((row for row in r['exp_rows'] if row['days'] == 0 or row['exp'] == today_str), None)
+        if not zdte:
+            return None
+        
+        # Intraday 편향 판단
+        gex_dir = "롱감마 ✅" if r['curr'] > r['gex']['gamma_flip'] else "숏감마 ⚠"
+        bias = "중립 / 이벤트 대기 🟡"
+        if zdte['pc_vol'] < 0.9 and "롱감마" in gex_dir: bias = "상방 편향 🟢"
+        elif zdte['pc_vol'] > 1.3 and "숏감마" in gex_dir: bias = "하방 편향 🔴"
+        
+        return {
+            'exp': zdte['exp'], 'iv': zdte['iv'],
+            'pc_vol': zdte['pc_vol'], 'pc_oi': zdte['pc_oi'],
+            'em_pct': zdte['straddle_em_pct'], 'em_val': zdte['straddle_em'],
+            'upper': zdte['upper_price'], 'lower': zdte['lower_price'],
+            'mp': zdte['max_pain'], 'mp_diff': zdte['mp_diff'],
+            'gex_dir': gex_dir, 'bias': bias
+        }
+    except:
+        return None
+
 # ── HTML 생성 ─────────────────────────────────────────────
 
 def pc_signal(pc):
@@ -764,6 +917,48 @@ def generate_html(results, timestamp):
                 warning = ' <span style="color:#ef5350;font-weight:700">⚠ 괴리율 경고</span>' if ratio < 7.8 or ratio > 8.2 else ''
                 pair_ratio_html = f'<div class="meta-sub" id="SPX-pair-ratio" style="margin-top:4px;color:#333;font-weight:500">📎 페어 ETF: SPY | SPX ÷ SPY 비율: {ratio:.2f}x{warning}</div>'
 
+        # [MODULE 2 & 3] 데이터 계산 (HTML용)
+        vc = calc_vanna_charm(r)
+        iv_rank_data = render_iv_rank(r)
+        
+        vanna_cls = 'gex-pos' if vc['vanna'] >= 0 else 'gex-neg'
+        charm_cls = 'gex-pos' if vc['charm'] >= 0 else 'gex-neg'
+        rank_color = '#26a69a' if iv_rank_data['rank'] <= 30 else ('#ef5350' if iv_rank_data['rank'] >= 70 else '#ffb300')
+        rank_desc = 'IV 저렴 🟢' if iv_rank_data['rank'] <= 30 else ('IV 고가 🔴' if iv_rank_data['rank'] >= 70 else 'IV 보통 🟡')
+        if iv_rank_data.get('new_high'):
+            rank_desc += ' <span style="font-size:10px; color:#d32f2f">⚠ 1년 신고IV</span>'
+
+        # [MODULE 1] 0DTE 데이터 (HTML용)
+        zdte = render_0dte_block(r)
+        zdte_html = ''
+        if zdte:
+            zdte_bg = '#1a3a1a' if '롱감마' in zdte['gex_dir'] else '#3a1a1a'
+            zdte_html = f"""
+<div class="card" style="background:{zdte_bg}; color:#fff; border:none; margin-bottom:15px;">
+  <div style="font-size:16px; font-weight:800; margin-bottom:10px;">🔥 0DTE 당일 결전</div>
+  <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px; border:none;">
+    <div class="sbox" style="background:rgba(255,255,255,0.1);">
+      <div class="slbl" style="color:#ccc">기대변동 (±%)</div>
+      <div class="sval" style="color:#fff">±{zdte['em_pct']:.1f}%</div>
+      <div class="ssub" style="color:#aaa">±${zdte['em_val']:,.2f}</div>
+    </div>
+    <div class="sbox" style="background:rgba(255,255,255,0.1);">
+      <div class="slbl" style="color:#ccc">Intraday 편향</div>
+      <div class="sval" style="color:#fff; font-size:13px;">{zdte['bias']}</div>
+      <div class="ssub" style="color:#aaa">P/C Vol: {zdte['pc_vol']:.2f}</div>
+    </div>
+    <div class="sbox" style="background:rgba(255,255,255,0.1);">
+      <div class="slbl" style="color:#ccc">0DTE GEX</div>
+      <div class="sval" style="color:#fff; font-size:13px;">{zdte['gex_dir']}</div>
+      <div class="ssub" style="color:#aaa">당일 결전 방향</div>
+    </div>
+    <div class="sbox" style="background:rgba(255,255,255,0.1);">
+      <div class="slbl" style="color:#ccc">기대 범위</div>
+      <div class="sval" style="color:#fff; font-size:11px;">▲${zdte['upper']:,.1f}<br>▼${zdte['lower']:,.1f}</div>
+    </div>
+  </div>
+</div>"""
+
         cards += f"""
 <div class="card" id="{sym}-card">
 
@@ -791,10 +986,28 @@ def generate_html(results, timestamp):
       <div class="sval">{r['pc_vol']:.2f}</div>
       <div class="ssub">{pc_signal(r['pc_vol'])[0]}</div>
     </div>
+    <div class="sbox" style="border-left: 3px solid {rank_color}">
+      <div class="slbl">IV RANK / PCT</div>
+      <div class="sval" style="color:{rank_color}">{iv_rank_data['rank']}% / {iv_rank_data['pct']}%</div>
+      <div class="ssub">{rank_desc}</div>
+    </div>
     <div class="sbox">
       <div class="slbl">1개월 Max Pain</div>
       <div class="sval">{mp_str}</div>
       <div class="ssub">옵션 매도자 유리 가격{f' &nbsp;<span style="color:#e65100;font-size:9px">{mp_urgency}</span>' if mp_urgency else ''}</div>
+    </div>
+  </div>
+
+  <div class="stats-grid" style="margin-top:10px; border-top:1px solid #eee; padding-top:10px;">
+    <div class="sbox" title="Vanna: IV 변화 시 델타 변화 (Black-Scholes 추정)">
+      <div class="slbl">⚡ Net VANNA</div>
+      <div class="sval {vanna_cls}">${vc['vanna']:.3f}B</div>
+      <div class="ssub" style="font-size:8px">{'VIX 하락시 매수' if vc['vanna']>=0 else 'VIX 하락시 매도'} <span style="opacity:0.5">⚠추정치</span></div>
+    </div>
+    <div class="sbox" title="Charm: 시간 경과 시 델타 변화 (Black-Scholes 추정)">
+      <div class="slbl">⏱ Net CHARM</div>
+      <div class="sval {charm_cls}">${vc['charm']:.3f}B</div>
+      <div class="ssub" style="font-size:8px">{'시간경과시 상방' if vc['charm']>=0 else '시간경과시 하방'} <span style="opacity:0.5">⚠추정치</span></div>
     </div>
     <div class="sbox">
       <div class="slbl">콜 OI / 풋 OI</div>
@@ -802,23 +1015,8 @@ def generate_html(results, timestamp):
       <div class="ssub">전체 Open Interest</div>
     </div>
     <div class="sbox">
-      <div class="slbl">이번주 만기 OI</div>
-      <div class="sval">{r['near_oi']:,}</div>
-      <div class="ssub">7일 이내</div>
-    </div>
-    <div class="sbox">
-      <div class="slbl">1개월 이내 만기 OI</div>
-      <div class="sval">{r['far_oi']:,}</div>
-      <div class="ssub">8~35일</div>
-    </div>
-    <div class="sbox">
-      <div class="slbl">IV 콜 평균</div>
-      <div class="sval">{r['iv_call']:.1f}%</div>
-      <div class="ssub">1개월 이내 만기</div>
-    </div>
-    <div class="sbox">
-      <div class="slbl">IV 풋 평균</div>
-      <div class="sval">{r['iv_put']:.1f}%</div>
+      <div class="slbl">IV 콜/풋 평균</div>
+      <div class="sval">{r['iv_call']:.1f}% / {r['iv_put']:.1f}%</div>
       <div class="ssub">1개월 이내 만기</div>
     </div>
   </div>
@@ -856,6 +1054,8 @@ def generate_html(results, timestamp):
     Call Wall = 강한 저항선 &nbsp;|&nbsp; Put Wall = 강한 지지선 &nbsp;|&nbsp;
     Black-Scholes 감마 × OI × 100 × 현재가 (CBOE IV 사용, = GexScreener 동일 방식)
   </div>
+
+  {zdte_html}
 
   <!-- GEX by Strike 차트 -->
   <div class="section">
@@ -1439,6 +1639,41 @@ def main():
                 print(f"  {pwall_text}")
                 print(f"\nP/C OI  : {r['pc_oi']:.2f} → {sig_oi}")
                 print(f"P/C VOL : {r['pc_vol']:.2f} → {sig_vol}")
+                print("──────────────────────────────────")
+
+                # [MODULE 2 & 3] 터미널 추가 출력
+                vc = calc_vanna_charm(r)
+                if 'err' in vc: print(f"  ⚠ Greeks 오류: {vc['err']}")
+                else:
+                    print(f"⚡ VANNA EXPOSURE (추정): ${vc['vanna']:.3f}B")
+                    print(f"    · [{'양수' if vc['vanna']>=0 else '음수'}] VIX 하락 시 딜러 {'매수 압력 → 상승 가속 가능 ✅' if vc['vanna']>=0 else '매도 압력 → 상승 제한 가능 ⚠'}")
+                    print(f"⏱ CHARM EXPOSURE (추정): ${vc['charm']:.3f}B")
+                    print(f"    · [{'양수' if vc['charm']>=0 else '음수'}] 시간 경과 시 딜러 {'매수 드리프트 → 서서히 상승 인력 ✅' if vc['charm']>=0 else '매도 드리프트 → 서서히 하방 인력 ⚠'}")
+
+                iv_data = render_iv_rank(r)
+                if iv_data['status'] != 'OK': print(f"\n📊 IV Rank: {iv_data['status']}")
+                else:
+                    new_high_lbl = " ⚠ 1년 신고IV" if iv_data.get('new_high') else ""
+                    print(f"\n📊 IV RANK: {iv_data['rank']}%{new_high_lbl} | IV PERCENTILE: {iv_data['pct']}%")
+                    status_icon = "🟢" if iv_data['rank']<=30 else ("🔴" if iv_data['rank']>=70 else "🟡")
+                    status_txt = "IV 저렴 → 옵션 매수 유리" if iv_data['rank']<=30 else ("IV 고가 → 옵션 매도 유리 / 이벤트 내포" if iv_data['rank']>=70 else "IV 보통 → 방향성 배팅 중립")
+                    print(f"    · [{iv_data['rank']}%] {status_txt} {status_icon}")
+
+                # [수정 3] 0DTE 터미널 출력 보장
+                zdte = render_0dte_block(r)
+                if not zdte:
+                    print("\n⚡ 0DTE: 오늘 만기 없음 (주말/공휴일)")
+                else:
+                    print("\n┌─────────────────────────────────────────┐")
+                    print("│  🔥 0DTE 당일 결전 데이터               │")
+                    print(f"│  만기: {zdte['exp']} | IV: {zdte['iv']:.1f}%           │")
+                    print(f"│  P/C Vol: {zdte['pc_vol']:.2f} | P/C OI: {zdte['pc_oi']:.2f}          │")
+                    print(f"│  기대변동: ±{zdte['em_pct']:.1f}% / ±${zdte['em_val']:,.2f}               │")
+                    print(f"│  기대범위: ▲${zdte['upper']:,.1f} ~ ▼${zdte['lower']:,.1f}           │")
+                    print(f"│  Max Pain: ${zdte['mp']:,.1f} ({zdte['mp_diff']:+.1f}%)     │")
+                    print(f"│  0DTE GEX 방향: [딜러 {zdte['gex_dir']}] │")
+                    print(f"│  당일 Intraday 편향: [{zdte['bias']}] │")
+                    print("└─────────────────────────────────────────┘")
                 print("──────────────────────────────────")
                 continue
 
