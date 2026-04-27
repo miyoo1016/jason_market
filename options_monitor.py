@@ -1304,25 +1304,25 @@ a{{color:inherit;}}
 .tbl-box{{padding:12px 18px;background:#fff;}}
 
 /* [수정 블록 E] 프리미엄 디자인 가이드 */
-.section-title{font-size:14px;font-weight:700;color:#e2e8f0;margin-bottom:12px;}
-.item-label{font-size:12px;color:#94a3b8;}
-.item-value{font-size:13px;color:#f1f5f9;font-weight:500;}
+.section-title{{font-size:14px;font-weight:700;color:#e2e8f0;margin-bottom:12px;}}
+.item-label{{font-size:12px;color:#94a3b8;}}
+.item-value{{font-size:13px;color:#f1f5f9;font-weight:500;}}
 
-.badge{font-size:11px;padding:2px 8px;border-radius:4px;color:white;font-weight:600;display:inline-block;}
-.b-long-gamma{background-color:#16a34a;}
-.b-short-gamma{background-color:#dc2626;}
-.b-warning{background-color:#d97706;}
-.b-neutral{background-color:#6b7280;}
+.badge{{font-size:11px;padding:2px 8px;border-radius:4px;color:white;font-weight:600;display:inline-block;}}
+.b-long-gamma{{background-color:#16a34a;}}
+.b-short-gamma{{background-color:#dc2626;}}
+.b-warning{{background-color:#d97706;}}
+.b-neutral{{background-color:#6b7280;}}
 
 /* GEX 섹션 프리미엄화 */
-.gex-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:10px;}
-.gex-box{padding:14px;background:#1e293b;}
-.gex-lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
-.gex-val{font-size:16px;font-weight:700;color:#f8fafc;}
-.gex-sub{font-size:11px;color:#cbd5e1;margin-top:6px;line-height:1.4;}
-.gex-pos{color:#22c55e;}
-.gex-neg{color:#ef4444;}
-.gex-neu{color:#94a3b8;}
+.gex-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:10px;}}
+.gex-box{{padding:14px;background:#1e293b;}}
+.gex-lbl{{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}}
+.gex-val{{font-size:16px;font-weight:700;color:#f8fafc;}}
+.gex-sub{{font-size:11px;color:#cbd5e1;margin-top:6px;line-height:1.4;}}
+.gex-pos{{color:#22c55e;}}
+.gex-neg{{color:#ef4444;}}
+.gex-neu{{color:#94a3b8;}}
 </style>
 </head>
 <body>
