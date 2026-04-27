@@ -563,11 +563,31 @@ def render_0dte_block(r):
         if not zdte:
             return None
         
-        # Intraday 편향 판단
-        gex_dir = "롱감마 ✅" if r['curr'] > r['gex']['gamma_flip'] else "숏감마 ⚠"
-        bias = "중립 / 이벤트 대기 🟡"
-        if zdte['pc_vol'] < 0.9 and "롱감마" in gex_dir: bias = "상방 편향 🟢"
-        elif zdte['pc_vol'] > 1.3 and "숏감마" in gex_dir: bias = "하방 편향 🔴"
+        # [규칙 A-1] Gamma Flip 및 Net GEX 레짐 판단 (부호 무시, spot vs flip 비교)
+        if r['curr'] > r['gex']['gamma_flip']:
+            gex_dir = "딜러 롱감마 ✅ — 딜러가 하락시 매수·상승시 매도 → 시장 안정화"
+            flip_text = "▼ 현재가 아래 ✅ — 딜러 롱감마 구간, 안정화 작동 중"
+            bias = "Pos Pinning (딜러 롱감마, 안정화)"
+            regime_color = "#22c55e" # 초록
+        else:
+            gex_dir = "딜러 숏감마 ⚠ — 딜러가 하락을 따라 팜 → 변동성 증폭 위험"
+            flip_text = "▲ 현재가 위 ⚠ — 딜러 숏감마 구간, 변동 증폭 위험"
+            bias = "숏감마 구간 (딜러 변동성 증폭 가능)"
+            regime_color = "#f97316" # 주황
+
+        # [규칙 A-2] Call Wall 돌파 판단
+        cw = r['gex']['call_wall']
+        if r['curr'] > cw:
+            call_wall_text = f"돌파 완료 구간 / 하방 지지 전환 ({(cw/r['curr']-1)*100:.1f}%)"
+            call_wall_color = "#22c55e"
+        else:
+            call_wall_text = f"콜 감마 집중 저항 (+{(cw/r['curr']-1)*100:.1f}%)"
+            call_wall_color = "#ef4444"
+
+        # [규칙 A-3] Put Wall 텍스트 고정
+        pw = r['gex']['put_wall']
+        put_wall_text = f"풋 감마 집중 지지 ({(pw/r['curr']-1)*100:.1f}%)"
+        put_wall_color = "#3b82f6"
         
         return {
             'exp': zdte['exp'], 'iv': zdte['iv'],
@@ -575,9 +595,12 @@ def render_0dte_block(r):
             'em_pct': zdte['straddle_em_pct'], 'em_val': zdte['straddle_em'],
             'upper': zdte['upper_price'], 'lower': zdte['lower_price'],
             'mp': zdte['max_pain'], 'mp_diff': zdte['mp_diff'],
-            'gex_dir': gex_dir, 'bias': bias
+            'gex_dir': gex_dir, 'flip_text': flip_text, 'bias': bias, 'regime_color': regime_color,
+            'call_wall_text': call_wall_text, 'call_wall_color': call_wall_color,
+            'put_wall_text': put_wall_text, 'put_wall_color': put_wall_color
         }
-    except:
+    except Exception as e:
+        print(f"DEBUG: render_0dte_block error: {e}")
         return None
 
 # ── HTML 생성 ─────────────────────────────────────────────
@@ -843,22 +866,25 @@ def generate_html(results, timestamp):
         ngb_cls  = 'gex-pos' if ngb >= 0 else 'gex-neg'
         ngb_str  = f'{"+" if ngb >= 0 else ""}${ngb:.3f}B'
 
-        # [버그 1] NET GEX 및 Gamma Flip 레짐 레이블
+        # [규칙 A-1, A-2, A-3] GEX 레짐 및 월 레이블 업데이트
         if gflip:
             if curr > gflip:
-                # 딜러 롱감마 ✅
-                gex_regime  = "딜러 롱감마 ✅ — 딜러가 하락시 매수·상승시 매도 → 시장 안정화"
-                gflip_label = "▼ 현재가 아래 ✅ — 딜러 롱감마 구간, 안정화 작동 중"
+                # 딜러 롱감마 구간 (Spot > Flip)
+                gex_regime  = "딜러 롱감마 구간 ✅ — 시장 안정화 작동 중"
+                gflip_label = "▼ 현재가 아래 ✅ — 딜러 롱감마 (Gamma Flip 하회 전까지 안정)"
                 gflip_cls   = "gex-pos"
+                regime_badge = "b-long-gamma"
             else:
-                # 딜러 숏감마 ⚠
-                gex_regime  = "딜러 숏감마 ⚠ — 딜러가 하락을 따라 팜 → 변동성 증폭 위험"
-                gflip_label = "▲ 현재가 위 ⚠ — 딜러 숏감마 구간, 변동 증폭 위험"
+                # 딜러 숏감마 구간 (Spot <= Flip)
+                gex_regime  = "딜러 숏감마 구간 ⚠ — 변동성 증폭 위험"
+                gflip_label = "▲ 현재가 위 ⚠ — 딜러 숏감마 (Gamma Flip 돌파 전까지 위험)"
                 gflip_cls   = "gex-neg"
+                regime_badge = "b-short-gamma"
         else:
             gex_regime  = "데이터 부족"
             gflip_label = "감마 플립 데이터 없음"
             gflip_cls   = ""
+            regime_badge = "b-neutral"
 
         # [버그 2] Call Wall 돌파 판단
         cwall_str = f'${cwall:,.2f}' if cwall else 'N/A'
@@ -928,33 +954,37 @@ def generate_html(results, timestamp):
         if iv_rank_data.get('new_high'):
             rank_desc += ' <span style="font-size:10px; color:#d32f2f">⚠ 1년 신고IV</span>'
 
-        # [MODULE 1] 0DTE 데이터 (HTML용)
+        # [수정 블록 E] 0DTE 프리미엄 카드 디자인
         zdte = render_0dte_block(r)
         zdte_html = ''
         if zdte:
-            zdte_bg = '#1a3a1a' if '롱감마' in zdte['gex_dir'] else '#3a1a1a'
+            is_long = '롱감마' in zdte['gex_dir']
+            zdte_cls = 'b-long-gamma' if is_long else 'b-short-gamma'
             zdte_html = f"""
-<div class="card" style="background:{zdte_bg}; color:#fff; border:none; margin-bottom:15px;">
-  <div style="font-size:16px; font-weight:800; margin-bottom:10px;">🔥 0DTE 당일 결전</div>
-  <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px; border:none;">
-    <div class="sbox" style="background:rgba(255,255,255,0.1);">
-      <div class="slbl" style="color:#ccc">기대변동 (±%)</div>
-      <div class="sval" style="color:#fff">±{zdte['em_pct']:.1f}%</div>
-      <div class="ssub" style="color:#aaa">±${zdte['em_val']:,.2f}</div>
+<div class="card" style="background:#0f172a; border-left: 4px solid {'#16a34a' if is_long else '#dc2626'}; margin-bottom:15px; padding:16px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div style="font-size:16px; font-weight:800; color:#f8fafc;">🔥 0DTE 당일 결전 데이터</div>
+    <span class="badge {zdte_cls}">딜러 { '롱감마 ✅' if is_long else '숏감마 ⚠'}</span>
+  </div>
+  <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:1px; background:#334155; border-radius:6px; overflow:hidden;">
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">기대변동 (±%)</div>
+      <div class="sval" style="color:#f8fafc">±{zdte['em_pct']:.1f}%</div>
+      <div class="ssub">±${zdte['em_val']:,.2f}</div>
     </div>
-    <div class="sbox" style="background:rgba(255,255,255,0.1);">
-      <div class="slbl" style="color:#ccc">Intraday 편향</div>
-      <div class="sval" style="color:#fff; font-size:13px;">{zdte['bias']}</div>
-      <div class="ssub" style="color:#aaa">P/C Vol: {zdte['pc_vol']:.2f}</div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">당일 편향</div>
+      <div class="sval" style="color:#f8fafc; font-size:12px;">{zdte['bias']}</div>
+      <div class="ssub">P/C Vol: {zdte['pc_vol']:.2f}</div>
     </div>
-    <div class="sbox" style="background:rgba(255,255,255,0.1);">
-      <div class="slbl" style="color:#ccc">0DTE GEX</div>
-      <div class="sval" style="color:#fff; font-size:13px;">{zdte['gex_dir']}</div>
-      <div class="ssub" style="color:#aaa">당일 결전 방향</div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">기대 범위</div>
+      <div class="sval" style="color:#f8fafc; font-size:11px;">▲${zdte['upper']:,.1f} ~ ▼${zdte['lower']:,.1f}</div>
     </div>
-    <div class="sbox" style="background:rgba(255,255,255,0.1);">
-      <div class="slbl" style="color:#ccc">기대 범위</div>
-      <div class="sval" style="color:#fff; font-size:11px;">▲${zdte['upper']:,.1f}<br>▼${zdte['lower']:,.1f}</div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">Max Pain</div>
+      <div class="sval" style="color:#f8fafc">${zdte['mp']:,.1f}</div>
+      <div class="ssub">{zdte['mp_diff']:+.1f}% 차이</div>
     </div>
   </div>
 </div>"""
@@ -1273,27 +1303,26 @@ a{{color:inherit;}}
 .tables-row{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#eee;border-top:1px solid #eee;}}
 .tbl-box{{padding:12px 18px;background:#fff;}}
 
-/* GEX 섹션 */
-/* GEX 섹션 - 밝은 테마로 수정 */
-.gex-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#ddd;border-top:2px solid #ff9800;}}
-.gex-box{{padding:10px 14px;background:#fff;}}
-.gex-lbl{{font-size:9px;color:#e65100;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;font-weight:700;}}
-.gex-val{{font-size:15px;font-weight:700;color:#222;}}
-.gex-sub{{font-size:9px;color:#666;margin-top:2px;}}
-.gex-pos{{color:#1a8a7a;}}
-.gex-neg{{color:#d32f2f;}}
-.gex-neu{{color:#f57c00;}}
-.gex-note{{padding:7px 14px;background:#fcfcfc;font-size:10px;color:#777;border-top:1px solid #eee;}}
-.gex-note span{{color:#e65100;font-weight:700;}}
-.ndx-regime-bar{{padding:10px 20px;background:#fff8e1;border-bottom:1px solid #ffe082;display:flex;align-items:center;gap:10px;}}
-.nr-lbl{{font-weight:700;color:#795548;font-size:12px;}}
-.nr-val{{font-size:14px;font-weight:800;}}
-.tbl-title{{font-size:11px;font-weight:700;margin-bottom:8px;}}
-table{{width:100%;border-collapse:collapse;font-size:12px;}}
-th{{color:#999;font-weight:500;padding:4px 8px;border-bottom:1px solid #eee;text-align:right;}}
-th:first-child{{text-align:left;}}
-td{{padding:4px 8px;border-bottom:1px solid #f5f5f5;text-align:right;}}
-td:first-child{{text-align:left;color:#333;}}
+/* [수정 블록 E] 프리미엄 디자인 가이드 */
+.section-title{font-size:14px;font-weight:700;color:#e2e8f0;margin-bottom:12px;}
+.item-label{font-size:12px;color:#94a3b8;}
+.item-value{font-size:13px;color:#f1f5f9;font-weight:500;}
+
+.badge{font-size:11px;padding:2px 8px;border-radius:4px;color:white;font-weight:600;display:inline-block;}
+.b-long-gamma{background-color:#16a34a;}
+.b-short-gamma{background-color:#dc2626;}
+.b-warning{background-color:#d97706;}
+.b-neutral{background-color:#6b7280;}
+
+/* GEX 섹션 프리미엄화 */
+.gex-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:10px;}
+.gex-box{padding:14px;background:#1e293b;}
+.gex-lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+.gex-val{font-size:16px;font-weight:700;color:#f8fafc;}
+.gex-sub{font-size:11px;color:#cbd5e1;margin-top:6px;line-height:1.4;}
+.gex-pos{color:#22c55e;}
+.gex-neg{color:#ef4444;}
+.gex-neu{color:#94a3b8;}
 </style>
 </head>
 <body>
@@ -1588,6 +1617,7 @@ def main():
                 sig_oi, _ = pc_signal(r['pc_oi'])
                 sig_vol, _ = pc_signal(r['pc_vol'])
 
+                # [규칙 A-1, A-2, A-3] 터미널 출력 업데이트
                 if gflip:
                     if curr > gflip:
                         regime_text = "딜러 롱감마 ✅ — 딜러가 하락시 매수·상승시 매도 → 시장 안정화"

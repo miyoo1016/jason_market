@@ -13,6 +13,7 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from scipy.stats import norm
 from dotenv import load_dotenv
 from xlsx_sync import load_portfolio
 
@@ -303,12 +304,16 @@ def calc_portfolio_risk(metrics_list):
     else:
         port_beta = None
 
-    # VaR (리스크 자산 기준)
-    var_95 = var_99 = None
+    # [규칙 D-1] VaR / CVaR 계산 수정
+    var_95 = var_99 = cvar_95 = None
     if port_vol is not None:
         daily_vol = port_vol / 100 / np.sqrt(252)
-        var_95 = -risky_val * 1.645 * daily_vol
-        var_99 = -risky_val * 2.326 * daily_vol
+        z_95 = norm.ppf(0.95) # 1.64485
+        z_99 = norm.ppf(0.99) # 2.32635
+        
+        var_95 = risky_val * daily_vol * z_95
+        var_99 = risky_val * daily_vol * z_99
+        cvar_95 = risky_val * daily_vol * norm.pdf(z_95) / (1 - 0.95)
 
     # Sharpe
     sharpe = None
@@ -333,6 +338,7 @@ def calc_portfolio_risk(metrics_list):
         'port_beta':  port_beta,
         'var_95':     var_95,
         'var_99':     var_99,
+        'cvar_95':    cvar_95,
         'sharpe':     sharpe,
         'weights':    weights_all,
     }
