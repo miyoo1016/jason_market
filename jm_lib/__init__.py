@@ -10,6 +10,9 @@ from .yf_helpers import (
     classify_ticker, get_current_price, get_prev_close,
     get_open_today_utc, get_price_data,
 )
+from .options import (
+    bs_vanna, bs_charm, _bs_gamma, calc_max_pain, calc_vanna_charm, R_FREE
+)
 
 __all__ = [
     # Colors
@@ -20,6 +23,8 @@ __all__ = [
     # YFinance helpers
     'classify_ticker', 'get_current_price', 'get_prev_close',
     'get_open_today_utc', 'get_price_data',
+    # Options Greeks
+    'bs_vanna', 'bs_charm', '_bs_gamma', 'calc_max_pain', 'calc_vanna_charm', 'R_FREE',
 ]
 
 __version__ = '1.0.0'

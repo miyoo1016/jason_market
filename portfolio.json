@@ -7,7 +7,7 @@
       "avg_price": 251.5,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": 273.03,
+      "xlsx_price": 271.89,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": 1463.01
@@ -19,7 +19,7 @@
       "avg_price": 299.89,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": 350.83,
+      "xlsx_price": 351.26,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": 1447.01
@@ -33,7 +33,7 @@
       "avg_price": 207279.0,
       "currency": "KRW",
       "asset_type": "국내일반(원화)",
-      "xlsx_price": 222000.0,
+      "xlsx_price": 226000.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -47,7 +47,7 @@
       "avg_price": 22134.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -61,7 +61,7 @@
       "avg_price": 23145.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -73,7 +73,7 @@
       "avg_price": 24819.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -87,7 +87,7 @@
       "avg_price": 22885.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -101,7 +101,7 @@
       "avg_price": 22968.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -113,7 +113,7 @@
       "avg_price": 24677.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -125,7 +125,7 @@
       "avg_price": 43977.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 50815.0,
+      "xlsx_price": 49990.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -139,7 +139,7 @@
       "avg_price": 21894.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -165,7 +165,7 @@
       "avg_price": 202610.0,
       "currency": "KRW",
       "asset_type": "원자재(원화)",
-      "xlsx_price": 219860.0,
+      "xlsx_price": 217060.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -176,7 +176,7 @@
       "name": "현금",
       "ticker": "CASH",
       "qty": 1,
-      "avg_price": 13721000.0,
+      "avg_price": 12848000.0,
       "currency": "KRW",
       "asset_type": "은행현금(원화)",
       "xlsx_price": null,
@@ -205,7 +205,7 @@
       "avg_price": 250.43,
       "currency": "USD",
       "asset_type": "미국주식(달러)",
-      "xlsx_price": 273.03,
+      "xlsx_price": 271.89,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": 1442.0
@@ -219,7 +219,7 @@
       "avg_price": 22090.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -231,7 +231,7 @@
       "avg_price": 22511.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -245,7 +245,7 @@
       "avg_price": 23139.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -257,7 +257,7 @@
       "avg_price": 24346.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -271,7 +271,7 @@
       "avg_price": 22980.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 24015.0,
+      "xlsx_price": 23885.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -283,7 +283,7 @@
       "avg_price": 24684.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 26700.0,
+      "xlsx_price": 26600.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -295,7 +295,7 @@
       "avg_price": 44109.0,
       "currency": "KRW",
       "asset_type": "국내ETF(원화)",
-      "xlsx_price": 50815.0,
+      "xlsx_price": 49990.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
@@ -309,7 +309,7 @@
       "avg_price": 203228.0,
       "currency": "KRW",
       "asset_type": "원자재(원화)",
-      "xlsx_price": 219860.0,
+      "xlsx_price": 217060.0,
       "is_cash": false,
       "base_usdkrw": 1350.0,
       "precision_cost_krw": null
