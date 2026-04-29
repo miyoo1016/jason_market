@@ -1,0 +1,113 @@
+"""옵션 모니터 — 분석 렌더링 모듈
+IV Rank/Percentile, 0DTE 데이터 블록"""
+
+from datetime import datetime
+import numpy as np
+
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
+
+# ── MODULE 3: IV Rank / IV Percentile ────────────────────
+
+def render_iv_rank(r: dict) -> dict:
+    """현재 IV의 1년 내 위치(Rank, Percentile)"""
+    try:
+        if not YFINANCE_AVAILABLE:
+            return {'rank': 0, 'pct': 0, 'status': 'yfinance 미설치', 'new_high': False}
+
+        mapper = {"SPX": "^SPX", "NDX": "^NDX",
+                  "QQQ": "QQQ", "SPY": "SPY",
+                  "GOOGL": "GOOGL", "GLD": "GLD"}
+        y_sym = mapper.get(r['sym'], r['sym'])
+
+        ticker = yf.Ticker(y_sym)
+        hist = ticker.history(period="1y")
+        if hist.empty:
+            return {'rank': 0, 'pct': 0,
+                    'status': '데이터 수집 중 (초기 실행)', 'new_high': False}
+
+        returns = np.log(hist['Close'] / hist['Close'].shift(1))
+        vol_hist = returns.rolling(window=21).std() * np.sqrt(252) * 100
+        vol_hist = vol_hist.dropna()
+
+        curr_iv = (r['iv_call'] + r['iv_put']) / 2
+        if curr_iv <= 0:
+            curr_iv = vol_hist.iloc[-1] if not vol_hist.empty else 20
+
+        min_iv = vol_hist.min()
+        max_iv = vol_hist.max()
+
+        iv_rank_raw = (curr_iv - min_iv) / (max_iv - min_iv) * 100 if max_iv > min_iv else 50
+        iv_rank = min(100.0, max(0.0, iv_rank_raw))
+        is_new_high = iv_rank_raw > 100
+
+        iv_pct = (vol_hist < curr_iv).sum() / len(vol_hist) * 100 if not vol_hist.empty else 50
+
+        return {'rank': round(iv_rank, 1), 'pct': round(iv_pct, 1),
+                'status': 'OK', 'new_high': is_new_high}
+    except Exception as e:
+        return {'rank': 0, 'pct': 0,
+                'status': f'오류: {str(e)}', 'new_high': False}
+
+
+# ── MODULE 1: 0DTE 전용 렌더링 블록 ──────────────────────
+
+def render_0dte_block(r: dict) -> dict | None:
+    """오늘 만기(0DTE) 데이터 + GEX 레짐 분석"""
+    try:
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        zdte = next(
+            (row for row in r['exp_rows']
+             if row['days'] == 0 or row['exp'] == today_str),
+            None
+        )
+        if not zdte:
+            return None
+
+        # [규칙 A-1] Gamma Flip 및 Net GEX 레짐 판단
+        if r['curr'] > r['gex']['gamma_flip']:
+            gex_dir = "딜러 롱감마 ✅ — 딜러가 하락시 매수·상승시 매도 → 시장 안정화"
+            flip_text = "▼ 현재가 아래 ✅ — 딜러 롱감마 구간, 안정화 작동 중"
+            bias = "Pos Pinning (딜러 롱감마, 안정화)"
+            regime_color = "#22c55e"
+        else:
+            gex_dir = "딜러 숏감마 ⚠ — 딜러가 하락을 따라 팜 → 변동성 증폭 위험"
+            flip_text = "▲ 현재가 위 ⚠ — 딜러 숏감마 구간, 변동 증폭 위험"
+            bias = "숏감마 구간 (딜러 변동성 증폭 가능)"
+            regime_color = "#f97316"
+
+        # [규칙 A-2] Call Wall 돌파 판단
+        cw = r['gex']['call_wall']
+        if r['curr'] > cw:
+            call_wall_text = f"돌파 완료 구간 / 하방 지지 전환 ({(cw/r['curr']-1)*100:.1f}%)"
+            call_wall_color = "#22c55e"
+        else:
+            call_wall_text = f"콜 감마 집중 저항 (+{(cw/r['curr']-1)*100:.1f}%)"
+            call_wall_color = "#ef4444"
+
+        # [규칙 A-3] Put Wall 텍스트 고정
+        pw = r['gex']['put_wall']
+        put_wall_text = f"풋 감마 집중 지지 ({(pw/r['curr']-1)*100:.1f}%)"
+        put_wall_color = "#3b82f6"
+
+        return {
+            'exp': zdte['exp'], 'iv': zdte['iv'],
+            'pc_vol': zdte['pc_vol'], 'pc_oi': zdte['pc_oi'],
+            'em_pct': zdte['straddle_em_pct'], 'em_val': zdte['straddle_em'],
+            'upper': zdte['upper_price'], 'lower': zdte['lower_price'],
+            'mp': zdte['max_pain'], 'mp_diff': zdte['mp_diff'],
+            'gex_dir': gex_dir, 'flip_text': flip_text,
+            'bias': bias, 'regime_color': regime_color,
+            'call_wall_text': call_wall_text, 'call_wall_color': call_wall_color,
+            'put_wall_text': put_wall_text, 'put_wall_color': put_wall_color
+        }
+    except Exception as e:
+        print(f"DEBUG: render_0dte_block error: {e}")
+        return None
+
+
+__all__ = ['render_iv_rank', 'render_0dte_block', 'YFINANCE_AVAILABLE']

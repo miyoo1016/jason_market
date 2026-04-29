@@ -1,0 +1,947 @@
+"""옵션 모니터 — HTML 대시보드 생성 모듈
+만기별 표 + GEX 차트 + 캘린더 + 0DTE 카드"""
+
+import json
+
+from jm_lib.options import calc_vanna_charm
+from options_monitor_base import (
+    pc_signal, pc_color,
+    weekday_ko, is_monthly, days_badge,
+)
+from options_monitor_render import render_iv_rank, render_0dte_block
+
+
+def _exp_comment(row: dict, curr: float) -> str:
+    """만기별 해설 텍스트 생성"""
+    days = row['days']
+    pc_oi = row['pc_oi']
+    iv = row['iv']
+    mp = row['max_pain']
+    c_oi = row['c_oi']
+    p_oi = row['p_oi']
+    ok = row.get('ok', True)
+
+    if not ok:
+        return '⚠ 데이터 수집 실패'
+
+    parts = []
+    is_mo = is_monthly(row['exp'])
+
+    if days <= 0:
+        parts.append('📌 오늘 만기 — 감마 위험 극대, 핀 리스크 주의')
+    elif days <= 3:
+        parts.append('⚡ 초단기 — 델타·감마 변동 매우 심함')
+    elif days <= 7:
+        parts.append('🔥 단기 주물 — 빠른 시간가치 소멸')
+    elif days <= 30:
+        if is_mo:
+            parts.append('📅 월물 만기 — 대형 포지션 정리·롤오버 집중')
+        else:
+            parts.append('📆 단기 주물')
+    elif days <= 90:
+        if is_mo:
+            parts.append('📅 월물 (중기) — 기관 헤지 주요 만기')
+        else:
+            parts.append('📆 중기 주물')
+    else:
+        parts.append('🏦 장기 LEAPS — 기관·대형 방향성 배팅')
+
+    if (c_oi + p_oi) > 0:
+        if pc_oi >= 2.0:
+            parts.append('🐻 극강 풋 우세 (강한 하락 헤지)')
+        elif pc_oi >= 1.3:
+            parts.append('🐻 풋 우세 (약세 배팅)')
+        elif pc_oi <= 0.5:
+            parts.append('🐂 극강 콜 우세 (강한 상승 배팅)')
+        elif pc_oi <= 0.8:
+            parts.append('🐂 콜 우세 (강세 배팅)')
+        else:
+            parts.append('⚖ 콜·풋 균형')
+
+    if iv >= 50:
+        parts.append(f'🌋 IV {iv:.0f}% 매우 높음 (이벤트/공포)')
+    elif iv >= 35:
+        parts.append(f'⚠ IV {iv:.0f}% 높음')
+    elif iv > 0:
+        parts.append(f'IV {iv:.0f}%')
+
+    if mp:
+        diff = (mp - curr) / curr * 100
+        if diff >= 5:
+            parts.append(f'Max Pain +{diff:.1f}% → 상방 당김 강함')
+        elif diff >= 2:
+            parts.append(f'Max Pain +{diff:.1f}% → 약한 상방 인력')
+        elif diff <= -5:
+            parts.append(f'Max Pain {diff:.1f}% → 하방 당김 강함')
+        elif diff <= -2:
+            parts.append(f'Max Pain {diff:.1f}% → 약한 하방 인력')
+
+    tot_oi = c_oi + p_oi
+    if tot_oi >= 1_000_000:
+        parts.append('💎 초대형 OI')
+    elif tot_oi >= 500_000:
+        parts.append('🔵 대형 OI')
+    elif tot_oi >= 100_000:
+        parts.append('중규모 OI')
+
+    return ' · '.join(parts) if parts else '–'
+
+
+def generate_html(results: list, timestamp: str) -> str:
+    """전체 옵션 모니터 대시보드 HTML"""
+    data_js = json.dumps(results, ensure_ascii=False)
+
+    cards = ''
+    for r in results:
+        if not r:
+            continue
+        sym = r['sym']
+        curr = r['curr']
+        mp = r['max_pain']
+        pc_oi = r['pc_oi']
+        sig, sig_color = pc_signal(pc_oi)
+        mp_diff = round((mp - curr) / curr * 100, 2) if mp else None
+        mp_str = f"${mp:,.2f} ({mp_diff:+.1f}%)" if mp and mp_diff is not None else 'N/A'
+
+        # Max Pain 긴급 지표 (7일 이내 만기)
+        mp_urgency = ''
+        if mp and mp_diff is not None:
+            near_exp = next((row for row in r['exp_rows']
+                             if row.get('max_pain') and row['days'] <= 7), None)
+            if near_exp and near_exp['max_pain']:
+                mp_near = near_exp['max_pain']
+                mp_near_diff = (mp_near - curr) / curr * 100
+                if abs(mp_near_diff) >= 2:
+                    direction = '하방' if mp_near_diff < 0 else '상방'
+                    mp_urgency = (f"⚡ 주의: 이번주 만기 Max Pain {mp_near_diff:+.1f}% "
+                                  f"({direction} 당김)")
+
+        # ── 만기별 상세 테이블 ──────────────────────────────
+        exp_rows_html = ''
+        for row in r['exp_rows']:
+            days = row['days']
+            c_vol = row['c_vol']
+            p_vol = row['p_vol']
+            tot_vol = c_vol + p_vol
+            pc_vol = row['pc_vol']
+            c_oi = row['c_oi']
+            p_oi = row['p_oi']
+            tot_oi = c_oi + p_oi
+            pc_oi_r = row['pc_oi']
+            iv = row['iv']
+            st_em = row['straddle_em']
+            st_em_pct = row['straddle_em_pct']
+            upper_p = row['upper_price']
+            lower_p = row['lower_price']
+            atm_s = row['atm_strike']
+            mp_r = row['max_pain']
+            mpd = row['mp_diff']
+
+            pc_vol_c = pc_color(pc_vol)
+            pc_oi_c = pc_color(pc_oi_r)
+            iv_cls = 'iv-hi' if iv >= 40 else ('iv-mid' if iv >= 25 else 'iv-lo')
+            mp_cell = f'${mp_r:,.2f}' if mp_r else '–'
+            mpd_cell = f'{mpd:+.1f}%' if mpd is not None else '–'
+            mpd_color = '#26a69a' if (mpd or 0) >= 0 else '#ef5350'
+
+            # 기대변동 셀
+            if st_em > 0:
+                em_cell = (f'<span class="em-val">±{st_em_pct:.1f}%</span>'
+                           f'<br><span class="em-sub">±${st_em:,.2f}</span>'
+                           f'<br><span class="em-range">'
+                           f'<span class="em-up">▲{upper_p:,.2f}</span>'
+                           f'<br><span class="em-dn">▼{lower_p:,.2f}</span>'
+                           f'</span>')
+            else:
+                em_cell = '–'
+
+            # Max Pain 합성 셀
+            if mp_r:
+                mp_combined = (f'<span class="mp-price">${mp_r:,.2f}</span>'
+                               f'<br><span class="mp-diff" style="color:{mpd_color}">{mpd_cell}</span>')
+            else:
+                mp_combined = '–'
+
+            # P/C 합성 셀
+            pc_tooltip = (f'콜Vol:{c_vol:,} / 풋Vol:{p_vol:,}&#10;'
+                          f'콜OI:{c_oi:,} / 풋OI:{p_oi:,}')
+            if tot_oi > 0:
+                call_w = round(c_oi / tot_oi * 100, 1)
+                put_w = 100 - call_w
+                pc_bar = (f'<div class="pc-bar-wrap" title="{pc_tooltip}">'
+                          f'<div class="pc-bar-c" style="width:{call_w}%"></div>'
+                          f'<div class="pc-bar-p" style="width:{put_w}%"></div>'
+                          f'</div>')
+            else:
+                pc_bar = ''
+
+            pc_cell = (f'<div class="pc-line"><span class="pc-lbl">Vol</span>'
+                       f'<span style="color:{pc_vol_c};font-weight:700">{pc_vol:.2f}</span></div>'
+                       f'<div class="pc-line"><span class="pc-lbl">OI&nbsp;</span>'
+                       f'<span style="color:{pc_oi_c};font-weight:700">{pc_oi_r:.2f}</span></div>'
+                       f'{pc_bar}')
+
+            row_cls = ' class="row-near"' if days <= 7 else (
+                ' class="row-mid"' if days <= 30 else '')
+            wd = weekday_ko(row['exp'])
+            comment = _exp_comment(row, curr)
+            ok = row.get('ok', True)
+            row_cls_extra = '' if ok else ' style="opacity:0.5"'
+
+            exp_rows_html += f"""
+<tr{row_cls}{row_cls_extra}>
+  <td class="exp-date">{row['exp']}<span class="wd">({wd})</span></td>
+  <td style="text-align:center">{days_badge(days)}</td>
+  <td class="pc-cell" title="{pc_tooltip}">{pc_cell}</td>
+  <td class="num {iv_cls}">{iv:.1f}%</td>
+  <td class="em-cell2">{em_cell}</td>
+  <td class="mp-cell">{mp_combined}</td>
+  <td class="comment-cell">{comment}</td>
+</tr>"""
+
+        # 합계행
+        tot_c_vol = sum(x['c_vol'] for x in r['exp_rows'])
+        tot_p_vol = sum(x['p_vol'] for x in r['exp_rows'])
+        tot_c_oi = sum(x['c_oi'] for x in r['exp_rows'])
+        tot_p_oi = sum(x['p_oi'] for x in r['exp_rows'])
+        tot_pc_vol = round(tot_p_vol / tot_c_vol if tot_c_vol else 0, 2)
+        tot_pc_oi = round(tot_p_oi / tot_c_oi if tot_c_oi else 0, 2)
+        exp_rows_html += f"""
+<tr class="row-total">
+  <td colspan="2"><strong>합계</strong></td>
+  <td class="pc-cell">
+    <div class="pc-line"><span class="pc-lbl">Vol</span><span style="color:{pc_color(tot_pc_vol)};font-weight:700">{tot_pc_vol:.2f}</span></div>
+    <div class="pc-line"><span class="pc-lbl">OI&nbsp;</span><span style="color:{pc_color(tot_pc_oi)};font-weight:700">{tot_pc_oi:.2f}</span></div>
+  </td>
+  <td></td><td></td><td></td><td></td>
+</tr>"""
+
+        # 상위 스트라이크 표
+        top_c_rows = ''.join(
+            f"<tr><td>${x['strike']:,.2f}</td><td>{int(x['oi']):,}</td></tr>"
+            for x in r['top_calls']
+        )
+        top_p_rows = ''.join(
+            f"<tr><td>${x['strike']:,.2f}</td><td>{int(x['oi']):,}</td></tr>"
+            for x in r['top_puts']
+        )
+
+        # ── GEX HTML 준비 ──────────────────────────────────
+        gex = r.get('gex', {})
+        ngb = gex.get('net_gex_b', 0) or 0
+        cwall = gex.get('call_wall')
+        pwall = gex.get('put_wall')
+        gflip = gex.get('gamma_flip')
+        ngb_cls = 'gex-pos' if ngb >= 0 else 'gex-neg'
+        ngb_str = f'{"+" if ngb >= 0 else ""}${ngb:.3f}B'
+
+        # GEX 레짐
+        if gflip:
+            if curr > gflip:
+                gex_regime = "딜러 롱감마 구간 ✅ — 시장 안정화 작동 중"
+                gflip_label = "▼ 현재가 아래 ✅ — 딜러 롱감마 (Gamma Flip 하회 전까지 안정)"
+                gflip_cls = "gex-pos"
+                regime_badge = "b-long-gamma"
+            else:
+                gex_regime = "딜러 숏감마 구간 ⚠ — 변동성 증폭 위험"
+                gflip_label = "▲ 현재가 위 ⚠ — 딜러 숏감마 (Gamma Flip 돌파 전까지 위험)"
+                gflip_cls = "gex-neg"
+                regime_badge = "b-short-gamma"
+        else:
+            gex_regime = "데이터 부족"
+            gflip_label = "감마 플립 데이터 없음"
+            gflip_cls = ""
+            regime_badge = "b-neutral"
+
+        # Call Wall 돌파 판단
+        cwall_str = f'${cwall:,.2f}' if cwall else 'N/A'
+        if cwall:
+            cwall_pct = (cwall / curr - 1) * 100
+            if curr > cwall:
+                cwall_label = f"돌파 완료 구간 / 하방 지지 전환 ({cwall_pct:.1f}%)"
+            else:
+                cwall_label = f"콜 감마 집중 저항 ({cwall_pct:.1f}%)"
+        else:
+            cwall_label = "N/A"
+
+        # Put Wall 고정
+        pwall_str = f'${pwall:,.2f}' if pwall else 'N/A'
+        pwall_pct = (pwall / curr - 1) * 100 if pwall else 0
+        pwall_label = f"풋 감마 집중 지지 ({pwall_pct:.1f}%)"
+
+        gflip_str = f'${gflip:,.2f}' if gflip else 'N/A'
+
+        # Expected Move 위치 표시
+        near_em_row = next((row for row in r['exp_rows']
+                            if row['straddle_em'] > 0 and row['days'] > 0), None)
+        if near_em_row:
+            em_upper = near_em_row['upper_price']
+            em_lower = near_em_row['lower_price']
+            em_pct = near_em_row['straddle_em_pct']
+            em_days = near_em_row['days']
+            em_range = em_upper - em_lower
+            if em_range > 0:
+                em_pos = max(0, min(100, (curr - em_lower) / em_range * 100))
+            else:
+                em_pos = 50
+            em_hint = '✅ 기대범위 안' if 20 < em_pos < 80 else '⚠ 기대범위 경계 근처'
+            em_html = f"""
+    <div class="em-section">
+      <div class="em-title">📐 기대변동 위치 — {em_days}일 후 만기 기준 (±{em_pct:.1f}%)</div>
+      <div class="em-track-wrap">
+        <span class="em-bound">▼${em_lower:,.0f}</span>
+        <div class="em-track">
+          <div class="em-zone"></div>
+          <div class="em-cursor" style="left:{em_pos:.1f}%"></div>
+        </div>
+        <span class="em-bound">▲${em_upper:,.0f}</span>
+      </div>
+      <div class="em-hint">{em_hint}</div>
+    </div>"""
+        else:
+            em_html = ''
+
+        # SPX-SPY 페어 비율 경고
+        pair_ratio_html = ''
+        if sym == 'SPX':
+            spy_p = next((x['curr'] for x in results if x and x['sym'] == 'SPY'), 0)
+            if spy_p > 0:
+                ratio = curr / spy_p
+                warning = ' <span style="color:#ef5350;font-weight:700">⚠ 괴리율 경고</span>' if ratio < 7.8 or ratio > 8.2 else ''
+                pair_ratio_html = f'<div class="meta-sub" id="SPX-pair-ratio" style="margin-top:4px;color:#333;font-weight:500">📎 페어 ETF: SPY | SPX ÷ SPY 비율: {ratio:.2f}x{warning}</div>'
+
+        # MODULE 2 & 3 데이터 계산
+        vc = calc_vanna_charm(r)
+        iv_rank_data = render_iv_rank(r)
+
+        vanna_cls = 'gex-pos' if vc['vanna'] >= 0 else 'gex-neg'
+        charm_cls = 'gex-pos' if vc['charm'] >= 0 else 'gex-neg'
+        rank_color = '#26a69a' if iv_rank_data['rank'] <= 30 else ('#ef5350' if iv_rank_data['rank'] >= 70 else '#ffb300')
+        rank_desc = 'IV 저렴 🟢' if iv_rank_data['rank'] <= 30 else ('IV 고가 🔴' if iv_rank_data['rank'] >= 70 else 'IV 보통 🟡')
+        if iv_rank_data.get('new_high'):
+            rank_desc += ' <span style="font-size:10px; color:#d32f2f">⚠ 1년 신고IV</span>'
+
+        # 0DTE 카드
+        zdte = render_0dte_block(r)
+        zdte_html = ''
+        if zdte:
+            is_long = '롱감마' in zdte['gex_dir']
+            zdte_cls = 'b-long-gamma' if is_long else 'b-short-gamma'
+            zdte_html = f"""
+<div class="card" style="background:#0f172a; border-left: 4px solid {'#16a34a' if is_long else '#dc2626'}; margin-bottom:15px; padding:16px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div style="font-size:16px; font-weight:800; color:#f8fafc;">🔥 0DTE 당일 결전 데이터</div>
+    <span class="badge {zdte_cls}">딜러 {'롱감마 ✅' if is_long else '숏감마 ⚠'}</span>
+  </div>
+  <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:1px; background:#334155; border-radius:6px; overflow:hidden;">
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">기대변동 (±%)</div>
+      <div class="sval" style="color:#f8fafc">±{zdte['em_pct']:.1f}%</div>
+      <div class="ssub">±${zdte['em_val']:,.2f}</div>
+    </div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">당일 편향</div>
+      <div class="sval" style="color:#f8fafc; font-size:12px;">{zdte['bias']}</div>
+      <div class="ssub">P/C Vol: {zdte['pc_vol']:.2f}</div>
+    </div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">기대 범위</div>
+      <div class="sval" style="color:#f8fafc; font-size:11px;">▲${zdte['upper']:,.1f} ~ ▼${zdte['lower']:,.1f}</div>
+    </div>
+    <div class="sbox" style="background:#1e293b; padding:12px;">
+      <div class="slbl">Max Pain</div>
+      <div class="sval" style="color:#f8fafc">${zdte['mp']:,.1f}</div>
+      <div class="ssub">{zdte['mp_diff']:+.1f}% 차이</div>
+    </div>
+  </div>
+</div>"""
+
+        cards += f"""
+<div class="card" id="{sym}-card">
+
+  <!-- 헤더 -->
+  <div class="card-header">
+    <div class="title-row">
+      <span class="sym">{sym}</span>
+      <span class="lbl">{r['label']}</span>
+      <span class="price">${curr:,.2f}</span>
+    </div>
+    <div class="meta-sub">전체 {r['exp_count']}개 만기일 &nbsp;|&nbsp; 날짜·OI·IV: CBOE = optioncharts.io &nbsp;|&nbsp; 기대변동: ATM 콜+풋 스트래들 미드가 = barchart expected-move 동일 방식</div>
+    {pair_ratio_html}
+  </div>
+
+  <!-- 요약 통계 -->
+  <div class="stats-grid">
+    <div class="sbox">
+      <div class="slbl">전체 P/C OI</div>
+      <div class="sval" style="color:{sig_color}">{pc_oi:.2f}</div>
+      <div class="ssub" style="color:{sig_color}">{sig}</div>
+      <div class="pc-note">※ P/C &gt; 1.3은 기관 헤지일 수 있어 단순 약세 신호가 아닐 수 있음</div>
+    </div>
+    <div class="sbox">
+      <div class="slbl">전체 P/C Volume</div>
+      <div class="sval">{r['pc_vol']:.2f}</div>
+      <div class="ssub">{pc_signal(r['pc_vol'])[0]}</div>
+    </div>
+    <div class="sbox" style="border-left: 3px solid {rank_color}">
+      <div class="slbl">IV RANK / PCT</div>
+      <div class="sval" style="color:{rank_color}">{iv_rank_data['rank']}% / {iv_rank_data['pct']}%</div>
+      <div class="ssub">{rank_desc}</div>
+    </div>
+    <div class="sbox">
+      <div class="slbl">1개월 Max Pain</div>
+      <div class="sval">{mp_str}</div>
+      <div class="ssub">옵션 매도자 유리 가격{f' &nbsp;<span style="color:#e65100;font-size:9px">{mp_urgency}</span>' if mp_urgency else ''}</div>
+    </div>
+  </div>
+
+  <div class="stats-grid" style="margin-top:10px; border-top:1px solid #eee; padding-top:10px;">
+    <div class="sbox" title="Vanna: IV 변화 시 델타 변화 (Black-Scholes 추정)">
+      <div class="slbl">⚡ Net VANNA</div>
+      <div class="sval {vanna_cls}">${vc['vanna']:.3f}B</div>
+      <div class="ssub" style="font-size:8px">{'VIX 하락시 매수' if vc['vanna']>=0 else 'VIX 하락시 매도'} <span style="opacity:0.5">⚠추정치</span></div>
+    </div>
+    <div class="sbox" title="Charm: 시간 경과 시 델타 변화 (Black-Scholes 추정)">
+      <div class="slbl">⏱ Net CHARM</div>
+      <div class="sval {charm_cls}">${vc['charm']:.3f}B</div>
+      <div class="ssub" style="font-size:8px">{'시간경과시 상방' if vc['charm']>=0 else '시간경과시 하방'} <span style="opacity:0.5">⚠추정치</span></div>
+    </div>
+    <div class="sbox">
+      <div class="slbl">콜 OI / 풋 OI</div>
+      <div class="sval"><span class="up">{r['tc_oi']:,}</span> / <span class="dn">{r['tp_oi']:,}</span></div>
+      <div class="ssub">전체 Open Interest</div>
+    </div>
+    <div class="sbox">
+      <div class="slbl">IV 콜/풋 평균</div>
+      <div class="sval">{r['iv_call']:.1f}% / {r['iv_put']:.1f}%</div>
+      <div class="ssub">1개월 이내 만기</div>
+    </div>
+  </div>
+
+  {em_html}
+
+  <!-- GEX 요약 -->
+  <div class="gex-grid">
+    <div class="gex-box">
+      <div class="gex-lbl">⚡ Net GEX (1개월이내)</div>
+      <div class="gex-val {ngb_cls}">{ngb_str}</div>
+      <div class="gex-sub">{gex_regime}</div>
+    </div>
+    <div class="gex-box">
+      <div class="gex-lbl">🔄 Gamma Flip</div>
+      <div class="gex-val {gflip_cls}">{gflip_str}</div>
+      <div class="gex-sub">{gflip_label}</div>
+    </div>
+    <div class="gex-box">
+      <div class="gex-lbl">🟢 Call Wall</div>
+      <div class="gex-val gex-pos">{cwall_str}</div>
+      <div class="gex-sub">{cwall_label}</div>
+    </div>
+    <div class="gex-box">
+      <div class="gex-lbl">🔴 Put Wall</div>
+      <div class="gex-val gex-neg">{pwall_str}</div>
+      <div class="gex-sub">{pwall_label}</div>
+    </div>
+  </div>
+
+  <div class="gex-note">
+    <span>GEX 해석:</span> &nbsp;
+    Gamma Flip 위 = 딜러가 가격 오를 때 팔고, 내릴 때 사줌 (안정) &nbsp;|&nbsp;
+    Gamma Flip 아래 = 딜러가 하락을 따라 팜 (증폭) &nbsp;|&nbsp;
+    Call Wall = 강한 저항선 &nbsp;|&nbsp; Put Wall = 강한 지지선 &nbsp;|&nbsp;
+    Black-Scholes 감마 × OI × 100 × 현재가 (CBOE IV 사용, = GexScreener 동일 방식)
+  </div>
+
+  {zdte_html}
+
+  <!-- GEX by Strike 차트 -->
+  <div class="section">
+    <div class="section-title">⚡ GEX (Gamma Exposure) by Strike — 현재가±18% · 1개월이내 &nbsp;
+      <span style="font-weight:400;font-size:10px;color:#aaa">🟢양수=안정 / 🔴음수=변동성증폭 &nbsp;|&nbsp; 단위: $M</span>
+    </div>
+    <div style="position:relative;height:220px;">
+      <canvas id="chart-{sym}-gex"></canvas>
+    </div>
+  </div>
+
+  <!-- 만기별 상세 표 -->
+  <div class="section">
+    <div class="section-title">📋 만기일별 옵션 배팅 상세</div>
+    <div class="table-wrap" id="tw-{sym}">
+      <table class="exp-table">
+        <colgroup>
+          <col class="c-date"><col class="c-days"><col class="c-pc">
+          <col class="c-iv"><col class="c-em"><col class="c-mp"><col class="c-cmt">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>만기일</th>
+            <th>잔존</th>
+            <th title="마우스 올리면 원본 수량 표시">P/C<br><span style="font-weight:400;font-size:9px;color:#aaa">Vol / OI</span></th>
+            <th>IV</th>
+            <th>기대변동<br><span style="font-weight:400;font-size:9px;color:#aaa">±% · ±$ · 범위</span></th>
+            <th>Max Pain<br><span style="font-weight:400;font-size:9px;color:#aaa">현재가대비</span></th>
+            <th>해설</th>
+          </tr>
+        </thead>
+        <tbody>{exp_rows_html}</tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 전체 캘린더 차트 -->
+  <div class="charts-row">
+    <div class="chart-box chart-box-full">
+      <div class="section-title">📅 전체 캘린더 — 만기일 OI (모든 날짜 · 만기일만 바 표시 · ★표시)</div>
+      <div class="tab-row">
+        <button class="tbtn active" onclick="switchCalTab('{sym}','oi',this)">OI</button>
+        <button class="tbtn" onclick="switchCalTab('{sym}','vol',this)">Volume</button>
+      </div>
+      <div class="cal-scroll-wrap">
+        <div class="cal-inner" id="cal-inner-{sym}-oi">
+          <canvas id="chart-{sym}-cal-oi" height="220"></canvas>
+        </div>
+        <div class="cal-inner" id="cal-inner-{sym}-vol" style="display:none">
+          <canvas id="chart-{sym}-cal-vol" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 스트라이크 차트 -->
+  <div class="charts-row">
+    <div class="chart-box" style="grid-column:1/-1;">
+      <div class="section-title">📊 스트라이크별 OI — 현재가±18% (1개월 이내)</div>
+      <div class="tab-row">
+        <button class="tbtn active" onclick="switchTab('{sym}','oi',this)">OI</button>
+        <button class="tbtn" onclick="switchTab('{sym}','vol',this)">Volume</button>
+      </div>
+      <div style="position:relative;height:240px;">
+        <canvas id="chart-{sym}-oi"></canvas>
+        <canvas id="chart-{sym}-vol" style="display:none"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 상위 스트라이크 -->
+  <div class="tables-row">
+    <div class="tbl-box">
+      <div class="tbl-title up">🟢 상위 콜 OI (강세 배팅) — 1개월 이내</div>
+      <table><thead><tr><th>스트라이크</th><th>OI</th></tr></thead>
+      <tbody>{top_c_rows}</tbody></table>
+    </div>
+    <div class="tbl-box">
+      <div class="tbl-title dn">🔴 상위 풋 OI (약세 배팅) — 1개월 이내</div>
+      <table><thead><tr><th>스트라이크</th><th>OI</th></tr></thead>
+      <tbody>{top_p_rows}</tbody></table>
+    </div>
+  </div>
+
+</div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jason Market — 옵션 모니터 (QQQ/SPY/GOOGL)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;}}
+a{{color:inherit;}}
+
+.top-header{{background:#1a237e;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;}}
+.top-header h1{{font-size:16px;font-weight:700;}}
+.top-header .meta{{font-size:11px;color:#aaa;}}
+
+
+.page{{max-width:1500px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:20px;}}
+
+.card{{background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}}
+.card-header{{padding:14px 20px;background:#fafafa;border-bottom:1px solid #eee;}}
+.title-row{{display:flex;align-items:baseline;gap:10px;}}
+.sym{{font-size:24px;font-weight:800;color:#1a1a2e;}}
+.lbl{{font-size:12px;color:#999;flex:1;}}
+.price{{font-size:22px;font-weight:700;color:#1a5fa8;}}
+.meta-sub{{font-size:11px;color:#bbb;margin-top:5px;}}
+
+.stats-grid{{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:#e8e8e8;}}
+.sbox{{padding:10px 14px;background:#fff;}}
+.slbl{{font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}}
+.sval{{font-size:15px;font-weight:700;color:#222;}}
+.ssub{{font-size:9px;color:#aaa;margin-top:2px;}}
+.pc-note{{font-size:9px;color:#bbb;margin-top:2px;line-height:1.4}}
+.em-section{{padding:10px 20px;background:#f8f9ff;border-top:1px solid #eee;border-bottom:1px solid #eee;}}
+.em-title{{font-size:11px;font-weight:700;color:#555;margin-bottom:6px}}
+.em-track-wrap{{display:flex;align-items:center;gap:8px}}
+.em-bound{{font-size:11px;font-family:monospace;color:#888;width:80px}}
+.em-bound:last-child{{text-align:left}}
+.em-track{{flex:1;height:14px;background:#e8eaf0;border-radius:7px;position:relative}}
+.em-zone{{position:absolute;left:20%;width:60%;height:100%;background:#e8f5e9;border-radius:7px}}
+.em-cursor{{position:absolute;top:-4px;width:6px;height:22px;background:#1565c0;border-radius:3px;transform:translateX(-50%);box-shadow:0 1px 4px rgba(0,0,0,.2)}}
+.em-hint{{font-size:11px;color:#888;margin-top:4px;text-align:center}}
+.up{{color:#1a8a7a;}}.dn{{color:#d32f2f;}}
+
+.section{{padding:14px 20px;border-top:1px solid #f0f0f0;}}
+.section-title{{font-size:12px;font-weight:700;color:#555;margin-bottom:10px;}}
+
+.table-wrap{{overflow:visible;}}
+.exp-table{{width:auto;min-width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}}
+.exp-table col.c-date{{width:105px;}}
+.exp-table col.c-days{{width:52px;}}
+.exp-table col.c-pc  {{width:88px;}}
+.exp-table col.c-iv  {{width:50px;}}
+.exp-table col.c-em  {{width:100px;}}
+.exp-table col.c-mp  {{width:86px;}}
+.exp-table col.c-cmt {{width:200px;}}
+
+.exp-table thead th{{background:#1a1a2e;color:#fff;padding:6px 8px;font-size:10px;
+                     text-align:center;position:sticky;top:0;z-index:2;
+                     border-right:1px solid #2d2d44;}}
+.exp-table thead th:first-child{{text-align:left;}}
+.exp-table thead th:last-child{{text-align:right;border-right:none;}}
+.exp-table tbody td{{padding:5px 7px;border-bottom:1px solid #f0f0f0;
+                     vertical-align:top;border-right:1px solid #f5f5f5;}}
+.exp-table tbody td:last-child{{border-right:none;}}
+.exp-table tbody td.exp-date{{font-weight:600;color:#333;font-family:monospace;font-size:11px;}}
+.exp-table tbody td.exp-date .wd{{display:block;font-family:sans-serif;font-size:9px;
+                                   color:#1a5fa8;font-weight:600;margin-top:1px;}}
+.exp-table tbody td.num{{text-align:right;font-variant-numeric:tabular-nums;}}
+.exp-table tbody tr:hover td{{background:#f5f8ff;}}
+.exp-table tbody tr.row-near{{background:#fff5f5;}}
+.exp-table tbody tr.row-near:hover td{{background:#ffe8e8;}}
+.exp-table tbody tr.row-mid{{background:#fffff5;}}
+.exp-table tbody tr.row-total{{background:#f0f4ff;font-size:11px;}}
+.exp-table tbody tr.row-total td{{padding:6px 7px;border-top:2px solid #dde;}}
+
+.iv-hi{{color:#ef5350;font-weight:700;}}
+.iv-mid{{color:#ff9800;font-weight:600;}}
+.iv-lo{{color:#26a69a;}}
+
+.pc-cell{{cursor:help;}}
+.pc-line{{display:flex;align-items:center;justify-content:space-between;
+          font-size:10.5px;line-height:1.6;}}
+.pc-lbl{{color:#aaa;font-size:9px;}}
+
+.em-cell2{{text-align:right;}}
+.em-val{{font-size:11.5px;font-weight:700;color:#1a1a2e;}}
+.em-sub{{font-size:9.5px;color:#888;}}
+.em-range{{font-size:9.5px;}}
+.em-up{{color:#1a8a7a;font-weight:600;}}
+.em-dn{{color:#d32f2f;font-weight:600;}}
+
+.mp-cell{{text-align:right;}}
+.mp-price{{font-size:11.5px;font-weight:700;color:#333;}}
+.mp-diff{{font-size:10px;font-weight:600;}}
+
+.comment-cell{{font-size:10px;color:#444;line-height:1.7;
+               text-align:right;white-space:normal;
+               word-break:keep-all;overflow-wrap:break-word;}}
+
+.badge{{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;}}
+.b-red{{background:#fdecea;color:#c62828;}}
+.b-orange{{background:#fff3e0;color:#e65100;}}
+.b-gray{{background:#f5f5f5;color:#555;}}
+.b-light{{background:#fafafa;color:#aaa;}}
+
+.pc-bar-wrap{{width:80px;height:8px;border-radius:4px;overflow:hidden;display:flex;}}
+.pc-bar-c{{background:#26a69a;height:100%;}}
+.pc-bar-p{{background:#ef5350;height:100%;}}
+
+.charts-row{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#eee;border-top:1px solid #eee;}}
+.chart-box{{padding:14px 18px;background:#fff;}}
+.chart-box-full{{grid-column:1/-1;}}
+.tab-row{{display:flex;gap:5px;margin-bottom:8px;}}
+.tbtn{{padding:3px 11px;border:1px solid #ccc;background:#f0f0f0;color:#666;border-radius:3px;cursor:pointer;font-size:11px;}}
+.tbtn.active{{background:#1a5fa8;border-color:#1a5fa8;color:#fff;}}
+
+.cal-scroll-wrap{{overflow-x:auto;overflow-y:hidden;border:1px solid #eee;border-radius:4px;}}
+.cal-inner{{height:260px;min-width:100%;}}
+
+.tables-row{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#eee;border-top:1px solid #eee;}}
+.tbl-box{{padding:12px 18px;background:#fff;}}
+
+.section-title{{font-size:14px;font-weight:700;color:#e2e8f0;margin-bottom:12px;}}
+.item-label{{font-size:12px;color:#94a3b8;}}
+.item-value{{font-size:13px;color:#f1f5f9;font-weight:500;}}
+
+.badge{{font-size:11px;padding:2px 8px;border-radius:4px;color:white;font-weight:600;display:inline-block;}}
+.b-long-gamma{{background-color:#16a34a;}}
+.b-short-gamma{{background-color:#dc2626;}}
+.b-warning{{background-color:#d97706;}}
+.b-neutral{{background-color:#6b7280;}}
+
+.gex-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:10px;}}
+.gex-box{{padding:14px;background:#1e293b;}}
+.gex-lbl{{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}}
+.gex-val{{font-size:16px;font-weight:700;color:#f8fafc;}}
+.gex-sub{{font-size:11px;color:#cbd5e1;margin-top:6px;line-height:1.4;}}
+.gex-pos{{color:#22c55e;}}
+.gex-neg{{color:#ef4444;}}
+.gex-neu{{color:#94a3b8;}}
+</style>
+</head>
+<body>
+<div class="top-header">
+  <h1>Jason Market — 옵션 모니터 (QQQ / SPY / GOOGL)</h1>
+  <div class="meta">업데이트: {timestamp} &nbsp;|&nbsp; 날짜·OI: CBOE = optioncharts.io &nbsp;|&nbsp; 기대변동: ATM스트래들 = barchart 방식</div>
+</div>
+<div class="page">{cards}</div>
+
+<script>
+const ALL = {data_js};
+
+function switchTab(sym, mode, el) {{
+  el.closest('.chart-box').querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('chart-'+sym+'-oi').style.display  = mode==='oi'  ? '' : 'none';
+  document.getElementById('chart-'+sym+'-vol').style.display = mode==='vol' ? '' : 'none';
+}}
+
+function switchCalTab(sym, mode, el) {{
+  el.closest('.chart-box').querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('cal-inner-'+sym+'-oi').style.display  = mode==='oi'  ? '' : 'none';
+  document.getElementById('cal-inner-'+sym+'-vol').style.display = mode==='vol' ? '' : 'none';
+}}
+
+function makeCalChart(canvasId, wrapperId, cal, mode) {{
+  const ctx     = document.getElementById(canvasId);
+  const wrapper = document.getElementById(wrapperId);
+  if (!ctx || !wrapper) return;
+
+  const dates   = cal.dates;
+  const callOI  = cal.call_oi;
+  const putOI   = cal.put_oi;
+  const callVol = cal.call_vol;
+  const putVol  = cal.put_vol;
+
+  const callData = mode === 'oi' ? callOI  : callVol;
+  const putData  = mode === 'oi' ? putOI   : putVol;
+  const isExp    = dates.map((_,i) => callOI[i] > 0 || putOI[i] > 0);
+  const totals   = callData.map((v,i) => v + putData[i]);
+  const maxTot   = Math.max(...totals, 1);
+
+  const W = Math.max(dates.length * 10, 900);
+  wrapper.style.width = W + 'px';
+  ctx.style.width = W + 'px';
+  ctx.width = W;
+
+  const wds = ['일','월','화','수','목','금','토'];
+  const labels = dates.map((d,i) => {{
+    if (!isExp[i]) return '';
+    const dt = new Date(d);
+    return d.slice(5) + '(' + wds[dt.getUTCDay()] + ')★';
+  }});
+
+  const cColors = callData.map((v,i) =>
+    isExp[i] ? `rgba(38,166,154,${{0.3 + 0.65*(totals[i]/maxTot)}})` : 'rgba(0,0,0,0)');
+  const pColors = putData.map((v,i) =>
+    isExp[i] ? `rgba(239,83,80,${{0.3 + 0.65*(totals[i]/maxTot)}})` : 'rgba(0,0,0,0)');
+
+  new Chart(ctx, {{
+    type: 'bar',
+    data: {{
+      labels: labels,
+      datasets: [
+        {{label:'콜', data:callData, backgroundColor:cColors, borderWidth:0, borderRadius:2, barPercentage:0.6}},
+        {{label:'풋', data:putData,  backgroundColor:pColors, borderWidth:0, borderRadius:2, barPercentage:0.6}},
+      ]
+    }},
+    options: {{
+      responsive: false,
+      maintainAspectRatio: false,
+      plugins: {{
+        legend: {{labels:{{color:'#555',font:{{size:11}}}}}},
+        tooltip: {{
+          filter: item => totals[item.dataIndex] > 0,
+          callbacks: {{
+            title: items => {{
+              const i  = items[0].dataIndex;
+              const d  = dates[i];
+              const dt = new Date(d);
+              const diff = Math.round((dt - new Date()) / 86400000);
+              return d + ' (' + wds[dt.getUTCDay()] + ')' +
+                (isExp[i] ? '  ★만기  D' + (diff >= 0 ? '-'+diff : '+'+Math.abs(diff)) : '');
+            }},
+            label: c => c.dataset.label + ': ' + c.raw.toLocaleString()
+          }}
+        }}
+      }},
+      scales: {{
+        x: {{
+          ticks: {{
+            color: '#1a5fa8',
+            font:  {{size:8, weight:'bold'}},
+            maxRotation: 90,
+            autoSkip: false,
+          }},
+          grid: {{color:'#f0f0f0'}}
+        }},
+        y: {{
+          ticks: {{
+            color: '#888', font: {{size:10}},
+            callback: v => v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':v
+          }},
+          grid: {{color:'#f0f0f0'}}
+        }}
+      }}
+    }}
+  }});
+}}
+
+function makeStrikeChart(canvasId, d, curr, maxPain) {{
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  const isVol    = canvasId.endsWith('-vol');
+  const callData = isVol ? d.call_vol : d.call_oi;
+  const putData  = isVol ? d.put_vol  : d.put_oi;
+
+  new Chart(ctx, {{
+    type: 'bar',
+    data: {{
+      labels: d.strikes.map(l=>'$'+l.toFixed(0)),
+      datasets: [
+        {{label:'콜', data:callData,           backgroundColor:'rgba(38,166,154,0.75)',borderWidth:0}},
+        {{label:'풋', data:putData.map(v=>-v), backgroundColor:'rgba(239,83,80,0.75)', borderWidth:0}},
+      ]
+    }},
+    options: {{
+      responsive: true, maintainAspectRatio: false,
+      plugins: {{
+        legend: {{labels:{{color:'#555',font:{{size:11}}}}}},
+        tooltip: {{
+          callbacks: {{
+            label: ctx => ctx.dataset.label+': '+Math.abs(ctx.raw).toLocaleString()
+          }}
+        }}
+      }},
+      scales: {{
+        x: {{ticks:{{color:'#888',font:{{size:9}},maxRotation:45}},grid:{{color:'#f5f5f5'}}}},
+        y: {{ticks:{{color:'#888',font:{{size:10}},
+               callback:v=>Math.abs(v)>=1e3?(Math.abs(v)/1e3).toFixed(0)+'K':Math.abs(v)}},
+             grid:{{color:'#f0f0f0'}}}}
+      }}
+    }}
+  }});
+}}
+
+function makeGexChart(canvasId, gex, curr) {{
+  const ctx = document.getElementById(canvasId);
+  if (!ctx || !gex || !gex.strikes || !gex.strikes.length) return;
+
+  const labels   = gex.strikes.map(s => '$' + s.toFixed(0));
+  const netData  = gex.net_gex;
+  const callData = gex.call_gex;
+  const putData  = gex.put_gex.map(v => -v);
+
+  const flip  = gex.gamma_flip;
+  const cwall = gex.call_wall;
+  const pwall = gex.put_wall;
+  const barColors = netData.map((v, i) => {{
+    const s = gex.strikes[i];
+    if (Math.abs(s - flip)  < 0.5) return 'rgba(255,165,0,0.95)';
+    if (Math.abs(s - cwall) < 0.5) return 'rgba(0,230,180,1.0)';
+    if (Math.abs(s - pwall) < 0.5) return 'rgba(255,80,80,1.0)';
+    return v >= 0 ? 'rgba(38,166,154,0.75)' : 'rgba(239,83,80,0.75)';
+  }});
+
+  const currIdx = gex.strikes.reduce((bi, s, i) =>
+    Math.abs(s - curr) < Math.abs(gex.strikes[bi] - curr) ? i : bi, 0);
+
+  new Chart(ctx, {{
+    type: 'bar',
+    data: {{
+      labels,
+      datasets: [
+        {{
+          label: 'Net GEX ($M)',
+          data: netData,
+          backgroundColor: barColors,
+          borderWidth: 0,
+          borderRadius: 2,
+        }},
+        {{
+          label: '콜 GEX ($M)',
+          data: callData,
+          backgroundColor: 'rgba(38,166,154,0.25)',
+          borderWidth: 0,
+          borderRadius: 1,
+          hidden: true,
+        }},
+        {{
+          label: '풋 GEX ($M)',
+          data: putData,
+          backgroundColor: 'rgba(239,83,80,0.25)',
+          borderWidth: 0,
+          borderRadius: 1,
+          hidden: true,
+        }},
+      ]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {{
+        legend: {{
+          labels: {{color:'#ccc', font:{{size:11}}}},
+        }},
+        tooltip: {{
+          callbacks: {{
+            title: items => {{
+              const s = gex.strikes[items[0].dataIndex];
+              const tag = Math.abs(s - flip)  < 0.5 ? ' 🔄 Gamma Flip' :
+                          Math.abs(s - cwall) < 0.5 ? ' 🟢 Call Wall'  :
+                          Math.abs(s - pwall) < 0.5 ? ' 🔴 Put Wall'   : '';
+              return '$' + s.toFixed(2) + tag;
+            }},
+            label: c => c.dataset.label + ': $' + Math.abs(c.raw).toFixed(1) + 'M'
+          }}
+        }}
+      }},
+      scales: {{
+        x: {{
+          ticks: {{
+            color: ctx2 => {{
+              const s = gex.strikes[ctx2.index];
+              return Math.abs(s - curr) < 0.5 ? '#e65100' : '#888';
+            }},
+            font: {{size:9}},
+            maxRotation: 45,
+          }},
+          grid: {{color:'#f0f0f0'}}
+        }},
+        y: {{
+          ticks: {{
+            color: '#888',
+            font: {{size:10}},
+            callback: v => (v >= 0 ? '+' : '') + v.toFixed(0) + 'M'
+          }},
+          grid: {{color:'#f0f0f0'}},
+          border: {{color:'#eee'}}
+        }}
+      }}
+    }}
+  }});
+}}
+
+ALL.forEach(r => {{
+  if (!r) return;
+  makeCalChart('chart-'+r.sym+'-cal-oi',  'cal-inner-'+r.sym+'-oi',  r.cal_chart, 'oi');
+  makeCalChart('chart-'+r.sym+'-cal-vol', 'cal-inner-'+r.sym+'-vol', r.cal_chart, 'vol');
+  makeStrikeChart('chart-'+r.sym+'-oi',  r.chart, r.curr, r.max_pain);
+  makeStrikeChart('chart-'+r.sym+'-vol', r.chart, r.curr, r.max_pain);
+  makeGexChart('chart-'+r.sym+'-gex', r.gex, r.curr);
+}});
+
+</script>
+<button id="copy-btn" onclick="copyReport()" style="position:fixed;bottom:22px;right:22px;z-index:9999;padding:10px 20px;background:#1a5fa8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;box-shadow:0 3px 12px rgba(0,0,0,.3)">📋 전체 복사</button>
+<script>
+function copyReport(){{var el=document.querySelector('.page,.main-content,main')||document.body;navigator.clipboard.writeText(el.innerText).then(function(){{var b=document.getElementById('copy-btn');b.textContent='✅ 복사 완료!';b.style.background='#2e7d32';setTimeout(function(){{b.textContent='📋 전체 복사';b.style.background='#1a5fa8';}},2500);}}).catch(function(){{var t=document.createElement('textarea');t.value=el.innerText;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);}});}}
+</script>
+</body>
+</html>"""
+
+
+__all__ = ['generate_html']
