@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """포트폴리오 리스크 분석 - Jason Market
 개별 자산 변동성/Beta/MaxDD 및 포트폴리오 VaR/Sharpe 분석
@@ -19,8 +21,6 @@ from xlsx_sync import load_portfolio
 
 load_dotenv()
 
-ALERT  = '\033[38;5;203m'
-RESET  = '\033[0m'
 EXTREME = ['극도공포', '극도탐욕', '강력매도', '강력매수', '매우높음', '즉시청산']
 
 def alert_line(text):

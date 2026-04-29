@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """공포탐욕지수 대시보드 - Jason Market
 CNN Fear & Greed Index 실제 수치 사용
@@ -6,9 +8,6 @@ CNN Fear & Greed Index 실제 수치 사용
 import subprocess, json, yfinance as yf
 from datetime import datetime
 
-ALERT = '\033[38;5;203m'
-GREEN = '\033[38;5;82m'
-RESET = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(text):

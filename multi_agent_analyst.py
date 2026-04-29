@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """
 Jason Market 멀티에이전트 투자 분석 시스템
@@ -24,9 +26,6 @@ try:
 except Exception as e:
     print(f"오류: Anthropic 초기화 실패 - {e}")
     sys.exit(1)
-
-ALERT = '\033[38;5;203m'  # 연한 빨간색 (극단 경고에만)
-RESET = '\033[0m'
 
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 

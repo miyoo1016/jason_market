@@ -9,9 +9,8 @@ from xlsx_sync import load_portfolio as _load_pf
 import os
 import json
 import webbrowser
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
 
-ALERT = '\033[38;5;203m'  # 연한 빨간색 (극단 경고에만)
-RESET = '\033[0m'
 
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 

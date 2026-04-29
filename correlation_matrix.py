@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """자산 상관관계 분석 - Jason Market
 - KRW 기준 수익률 일원화 (USD 자산 환율 수익률 합산) ← 유지
@@ -12,11 +14,6 @@ from datetime import datetime
 from xlsx_sync import load_portfolio as _load_pf
 import os
 import webbrowser
-
-ALERT = '\033[38;5;203m'
-WARN  = '\033[38;5;220m'   # 노란색 (경고)
-OK    = '\033[38;5;82m'    # 초록색 (검증 통과)
-RESET = '\033[0m'
 
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 

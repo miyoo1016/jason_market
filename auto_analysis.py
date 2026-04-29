@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """
 Jason Market — 종합 AI 분석 (11번)
@@ -15,12 +17,6 @@ from xlsx_sync import load_portfolio
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(_env_path, override=True)
 
-CYAN  = '\033[36m'
-AMBER = '\033[38;5;214m'
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
-
-# ── 포트폴리오 기반 ASSETS 동적 빌드 ─────────────────────────────
 PROXY_MAP = {
     'KODEX 나스닥100':  'QQQ',
     'KODEX S&P500':    'SPY',

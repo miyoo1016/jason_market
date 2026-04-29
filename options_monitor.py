@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """옵션 모니터 - Jason Market
 QQQ / GLD 전체 만기 옵션 배팅 현황
@@ -31,8 +33,6 @@ try:
 except ImportError:
     YFINANCE_AVAILABLE = False
 
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(text):

@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """섹터 흐름 분석 - Jason Market
 S&P500 11개 섹터 ETF 자금 흐름 분석"""
@@ -11,8 +13,6 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, date
 
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
 EXTREME = ['극도공포', '극도탐욕', '강력매도', '강력매수', '매우높음', '즉시청산']
 
 def alert_line(text):

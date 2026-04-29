@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """기술분석 + AI 해석 - Jason Market
 지표: RSI · MACD · 볼린저밴드 · 이동평균(5/20/60/120/200) · 스토캐스틱 · ATR · OBV · 피봇포인트 · 매물대"""
@@ -14,8 +16,6 @@ load_dotenv(_env_path, override=True)
 
 from xlsx_sync import load_portfolio as _load_pf
 
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(t):

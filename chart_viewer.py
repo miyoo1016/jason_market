@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """차트 대시보드 - Jason Market
 16개 종목 캔들차트 (5분봉/15분봉/1시간봉/일봉/주봉/월봉/연봉/최대) 브라우저에서 확인"""
@@ -6,8 +8,6 @@ import os, sys, json, webbrowser, threading
 import yfinance as yf
 from datetime import datetime
 
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(text):

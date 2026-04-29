@@ -6,9 +6,9 @@ import yfinance as yf
 import numpy as np
 from datetime import datetime
 from xlsx_sync import load_portfolio as _load_pf
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
 
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
+
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(text):

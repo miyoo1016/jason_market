@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """포트폴리오 손익 추적기 - Jason Market
 구글드라이브 자산계산기.xlsx → 실시간 손익 계산 + HTML 대시보드"""
@@ -11,8 +13,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 from xlsx_sync import load_portfolio, sync_to_json, update_xlsx_live_fx
 
-ALERT  = '\033[38;5;203m'
-RESET  = '\033[0m'
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
 
 def alert_line(text):

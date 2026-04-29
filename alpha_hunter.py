@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """Alpha Hunter — 증시 고수 글 자동 수집기 | Jason Market 17번
 소스: seed_list.json 개인 피드 + Reddit RSS
@@ -27,12 +29,6 @@ SEEN_FILE     = os.path.join(DIR, 'alpha_hunter_seen.json')
 SIGNALS_DIR   = os.path.join(DIR, 'signals')
 HTML_OUT      = os.path.join(DIR, 'alpha_hunter.html')
 
-CYAN  = '\033[36m'
-AMBER = '\033[38;5;214m'
-ALERT = '\033[38;5;203m'
-RESET = '\033[0m'
-
-# ── 필터 상수 ────────────────────────────────────────────────
 FRESHNESS_HOURS    = 72        # 이 시간 이내 글만 수집
 MIN_EXCERPT_CHARS  = 150       # 본문 최소 길이
 MAX_EXCERPT_MD     = 800       # MD 저장 시 최대 길이 (초과 시 말줄임)

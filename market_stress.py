@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """시장 스트레스 지표 - Jason Market
 최종 완결본: 스크린샷의 프리미엄 디자인 프레임 100% 유지 + Fix 1~4 내용만 이식"""
@@ -10,11 +12,6 @@ import numpy as np
 from datetime import datetime
 
 # 터미널 색상
-CYAN   = '\033[36m'
-AMBER  = '\033[38;5;214m'
-ALERT  = '\033[38;5;203m'
-RESET  = '\033[0m'
-
 TICKERS = ['^VIX9D', '^VIX', '^VIX3M', '^VIX6M', '^VVIX', '^IRX', '^TNX', '2YY=F', 'HYG', 'IEF']
 
 def fetch_all():

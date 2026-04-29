@@ -1,3 +1,5 @@
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
 #!/usr/bin/env python3
 """거시경제 지표 대시보드 - Jason Market
 금리, 달러, 환율, 유가 등 큰 그림 + HTML 차트 출력"""
@@ -5,12 +7,6 @@
 import os, json, webbrowser
 import yfinance as yf
 from datetime import datetime
-
-ALERT = '\033[38;5;203m'
-CYAN  = '\033[36m'
-AMBER = '\033[38;5;214m'
-RESET = '\033[0m'
-BOLD  = '\033[1m'
 
 DIR      = os.path.dirname(os.path.abspath(__file__))
 HTML_OUT = os.path.join(DIR, 'macro_dashboard.html')
