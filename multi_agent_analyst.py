@@ -1,4 +1,5 @@
 from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+from jm_lib.env import ANTHROPIC_API_KEY
 
 #!/usr/bin/env python3
 """
@@ -14,15 +15,13 @@ import os, sys, threading, webbrowser
 import html as html_lib
 import yfinance as yf
 from datetime import datetime
-from dotenv import load_dotenv
 from xlsx_sync import load_portfolio
 
 _env = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env, override=True)
 
 try:
     from anthropic import Anthropic
-    client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY', '').strip())
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
 except Exception as e:
     print(f"오류: Anthropic 초기화 실패 - {e}")
     sys.exit(1)

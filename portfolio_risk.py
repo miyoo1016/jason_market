@@ -16,10 +16,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from scipy.stats import norm
-from dotenv import load_dotenv
 from xlsx_sync import load_portfolio
 
-load_dotenv()
 
 EXTREME = ['극도공포', '극도탐욕', '강력매도', '강력매수', '매우높음', '즉시청산']
 

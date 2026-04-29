@@ -1,4 +1,5 @@
 from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+from jm_lib.env import ANTHROPIC_API_KEY
 
 #!/usr/bin/env python3
 """기술분석 + AI 해석 - Jason Market
@@ -9,10 +10,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from dotenv import load_dotenv
 
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env_path, override=True)
 
 from xlsx_sync import load_portfolio as _load_pf
 
@@ -312,7 +311,7 @@ def analyze_asset(name, ticker):
 # ── AI 분석 ─────────────────────────────────────────────────
 
 def ai_analysis(results):
-    api_key = os.getenv('ANTHROPIC_API_KEY')
+    api_key = ANTHROPIC_API_KEY
     if not api_key: return ""
     try:
         from anthropic import Anthropic

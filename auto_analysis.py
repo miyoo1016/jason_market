@@ -11,11 +11,9 @@ import os, requests, webbrowser, tempfile
 import yfinance as yf
 import numpy as np
 from datetime import datetime
-from dotenv import load_dotenv
 from xlsx_sync import load_portfolio
 
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env_path, override=True)
 
 PROXY_MAP = {
     'KODEX 나스닥100':  'QQQ',

@@ -1,13 +1,12 @@
 """설정 파일 - Jason Market"""
 
 import os
-from dotenv import load_dotenv
+from jm_lib.env import ANTHROPIC_API_KEY
 
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env_path, override=True)
 
 # API 키
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '').strip()
+ANTHROPIC_API_KEY = ANTHROPIC_API_KEY
 
 # 모니터링 자산 (main.py 자동화용)
 MONITORED_ASSETS = {

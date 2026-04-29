@@ -12,9 +12,7 @@ import os, json, re, webbrowser, warnings
 warnings.filterwarnings('ignore')
 
 # .env 파일에서 API 키 로드
-from dotenv import load_dotenv
 _env = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-load_dotenv(_env, override=True)
 
 import requests
 import numpy as np
