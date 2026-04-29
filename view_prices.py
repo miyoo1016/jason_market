@@ -64,56 +64,21 @@ def get_data(ticker, name=""):
     if ticker == 'GOLD_KRX':
         return get_gold_krx()
     try:
-        t  = yf.Ticker(ticker)
-        fi = t.fast_info
-        
-        # ── 기초 데이터 추출 ──────────────────────────
-        prev = getattr(fi, 'previous_close', None)
-        open_val = getattr(fi, 'open', None)
-        
-        # 2. 글로벌 자산 00:00 UTC 시가 찾기
+        # ── 자산 분류 (이 모듈 고유 기준) ──────────────────────────
+        # 글로벌 자산: 24H 거래 (00:00 UTC 시가 기준 등락률 계산)
         is_global = ticker in ('GC=F', 'CL=F', 'BZ=F', 'YM=F', 'ES=F', 'NQ=F', 'RTY=F',
                                 'USDKRW=X', 'BTC-USD', '^VIX', '^TNX')
-        if is_global:
-            try:
-                from datetime import timezone
-                h_int = t.history(period='2d', interval='1h')
-                if not h_int.empty:
-                    h_int.index = h_int.index.tz_convert('UTC')
-                    today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                    today_data = h_int.loc[h_int.index >= today_utc]
-                    if not today_data.empty:
-                        open_val = float(today_data['Open'].iloc[0])
-            except: pass
-
-        # fallback
-        if not prev:
-            hist = t.history(period='5d')
-            if len(hist) >= 2: prev = float(hist['Close'].iloc[-2])
-
-        # ── 현재가 추출 (프리/애프터마켓 포함) ─────────────────────
+        # 주식/ETF: 프리·애프터마켓 포함하여 현재가 조회
         is_equity = ticker in ('GOOGL',) or ticker.endswith('.KS') or (
             ticker in ('QQQM', 'SPY') and not name.startswith('US'))
-        curr = None
-        if is_equity:
-            try:
-                h1m = t.history(period='1d', interval='1m', prepost=True)
-                if not h1m.empty: curr = float(h1m['Close'].iloc[-1])
-            except: pass
-        
-        if not curr:
-            curr = getattr(fi, 'last_price', None)
 
-        if not curr or not prev: return None
-
-        if is_global and open_val:
-            pct = (curr - open_val) / open_val * 100
-        elif prev:
-            pct = (curr - prev) / prev * 100
-        else:
+        # ── 가격 데이터 통합 조회 (jm_lib.yf_helpers) ──────────────
+        from jm_lib.yf_helpers import get_price_data
+        data = get_price_data(ticker, is_equity=is_equity, is_global=is_global)
+        if not data:
             return None
 
-        return curr, pct
+        return data['curr'], data['pct']
     except Exception:
         return None
 
