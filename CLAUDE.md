@@ -34,20 +34,18 @@
 | 1 | 가격 조회 — 주요 자산 현재가 | view_prices.py | - |
 | 2 | 포트폴리오 손익 — 실시간 수익률 | portfolio_tracker.py | ✓ |
 | 3 | 공포탐욕지수 — 시장 심리 0~100 | fear_greed.py | - |
-| 4 | 거시경제 대시보드 — 금리·달러·유가·환율 | macro_dashboard.py | - |
-| 5 | 뉴스 AI 요약 — Claude 한국어 정리 [API 1회] | news_summary.py | - |
-| 6 | 가격 알리미 — 목표가 도달 알림 | price_alert.py | - |
-| 7 | 기술적 분석 — RSI·MACD·볼린저·스토캐스틱·ATR | technical_analysis_with_ai.py | ✓ |
-| 8 | 지지·저항선 — 주요 가격대 분석 | support_resistance.py | ✓ |
-| 9 | 수익률 비교 — 자산별 성과 비교 | returns_comparison.py | ✓ |
-| 10 | 상관관계 매트릭스 — 자산 간 연관성 | correlation_matrix.py | ✓ |
-| 11 | 자동 전체 분석 — 일괄 실행 [API 다수] | auto_analysis.py | ✓ |
-| 12 | 멀티 에이전트 AI — Claude 6개 토론 [API 6회] | multi_agent_analyst.py | ✓ |
-| 13 | 차트 대시보드 — 16종목 5분봉/일봉 | chart_viewer.py | ✓ |
-| 14 | 옵션 모니터 — QQQ/GLD 1개월 배팅 | options_monitor.py | ✓ |
-| 15 | 섹터 흐름 — S&P500 11개 섹터 자금흐름 | sector_flow.py | ✓ |
-| 16 | 포트폴리오 리스크 — VaR·Beta·변동성 | portfolio_risk.py | ✓ |
-| 17 | 시장 스트레스 — VIX구조·금리역전·신용스프레드 | market_stress.py | ✓ |
+| 4 | 거시경제 대시보드 — 금리·달러·유가·환율 | macro_dashboard.py | ✓ |
+| 5 | 기술적 분석 — RSI·MACD·볼린저·스토캐스틱·ATR | technical_analysis_with_ai.py | ✓ |
+| 6 | 지지·저항선 — 주요 가격대 분석 | support_resistance.py | ✓ |
+| 7 | 수익률 비교 — 자산별 성과 비교 | returns_comparison.py | ✓ |
+| 8 | 상관관계 매트릭스 — 자산 간 연관성 | correlation_matrix.py | ✓ |
+| 9 | 종합 AI 분석 — 기술+거시+리스크 멀티관점 [무료🆓] | auto_analysis.py | ✓ |
+| 10 | 차트 대시보드 — 16종목 5분봉/일봉 브라우저 | chart_viewer.py | ✓ |
+| 11 | 옵션 모니터 — QQQ/GLD 1개월 배팅 현황 | options_monitor.py | ✓ |
+| 12 | 섹터 흐름 — S&P500 11개 섹터 자금흐름 | sector_flow.py | ✓ |
+| 13 | 포트폴리오 리스크 — VaR·Beta·변동성 분석 | portfolio_risk.py | ✓ |
+| 14 | 시장 스트레스 — VIX구조·금리역전·신용스프레드 | market_stress.py | ✓ |
+| 15 | Alpha Hunter — 증시 고수 글 자동 수집 → AI분석용 MD | alpha_hunter.py | ✓ |
 
 ---
 
@@ -106,19 +104,17 @@ jason_market/
 ├── portfolio_tracker.py  ← 2번: 포트폴리오 손익
 ├── fear_greed.py         ← 3번: 공포탐욕
 ├── macro_dashboard.py    ← 4번: 거시경제
-├── news_summary.py       ← 5번: 뉴스 AI
-├── price_alert.py        ← 6번: 가격 알리미
-├── technical_analysis_with_ai.py ← 7번: 기술분석
-├── support_resistance.py ← 8번: 지지저항
-├── returns_comparison.py ← 9번: 수익률 비교
-├── correlation_matrix.py ← 10번: 상관관계
-├── auto_analysis.py      ← 11번: 자동 분석
-├── multi_agent_analyst.py← 12번: 멀티 에이전트
-├── chart_viewer.py       ← 13번: 차트
-├── options_monitor.py    ← 14번: 옵션
-├── sector_flow.py        ← 15번: 섹터 흐름
-├── portfolio_risk.py     ← 16번: 리스크
-├── market_stress.py      ← 17번: 시장 스트레스
+├── technical_analysis_with_ai.py ← 5번: 기술분석
+├── support_resistance.py ← 6번: 지지저항
+├── returns_comparison.py ← 7번: 수익률 비교
+├── correlation_matrix.py ← 8번: 상관관계
+├── auto_analysis.py      ← 9번: 자동 분석
+├── chart_viewer.py       ← 10번: 차트
+├── options_monitor.py    ← 11번: 옵션
+├── sector_flow.py        ← 12번: 섹터 흐름
+├── portfolio_risk.py     ← 13번: 리스크
+├── market_stress.py      ← 14번: 시장 스트레스
+├── alpha_hunter.py       ← 15번: Alpha Hunter
 └── xlsx_sync.py          ← s번: 구글드라이브 동기화
 ```
 
