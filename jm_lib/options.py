@@ -68,7 +68,7 @@ def bs_charm(S, K, T_days, r, sigma):
     return -norm.pdf(d1) * (2*r*T - d2*sigma_v*np.sqrt(T)) / (2*T*sigma_v*np.sqrt(T))
 
 
-def _bs_gamma(S, K, T, sigma, r=0.045):
+def bs_gamma(S, K, T, sigma, r=0.045):
     """Black-Scholes 감마 계산 (GEX 산출용)
 
     Args:
@@ -180,7 +180,7 @@ def calc_vanna_charm(r):
 __all__ = [
     'bs_vanna',
     'bs_charm',
-    '_bs_gamma',
+    'bs_gamma',
     'calc_max_pain',
     'calc_vanna_charm',
     'R_FREE',

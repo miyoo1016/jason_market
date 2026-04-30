@@ -12,6 +12,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
     usdkrw, prev_usdkrw = usdkrw_tuple
     valid = [h for h in holdings if h.get('ticker') and float(h.get('qty', 0)) > 0]
     price_cache = fetch_all_prices(valid, usdkrw)
+    
 
     tracker = load_cash_tracker()       # 기존 저장값
     new_tracker = {}                     # 이번 실행 후 저장할 값

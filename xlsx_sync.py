@@ -53,7 +53,7 @@ def _resolve_xlsx_path():
     return p1  # 경로 반환 (없으면 나중에 파일 없음 처리)
 
 XLSX_PATH = _resolve_xlsx_path()
-PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
+PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "portfolio.json")
 SHEET_NAME     = "📊 자산 계산기"
 SPREADSHEET_ID = "1VJ9e8ZM7wuKDGEyt4LoEGFfsTTztOlpI_tZXWLyag9A"
 

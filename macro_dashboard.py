@@ -1,4 +1,4 @@
-from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN, BOLD
 
 #!/usr/bin/env python3
 """거시경제 지표 대시보드 - Jason Market

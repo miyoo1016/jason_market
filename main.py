@@ -68,7 +68,7 @@ def job_daily_startup():
     logger.info("🌅 오늘의 자동화 시작")
     logger.info(f"📅 {datetime.now().strftime('%Y-%m-%d')}")
     try:
-        collector.load_calendar_from_file('calendar_today.json')
+        collector.load_calendar_from_file()  # state/calendar_today.json 자동 경로
         collector.collect_asset_prices()
         data     = collector.get_all_data()
         analysis = analyzer.analyze_market_snapshot(data)

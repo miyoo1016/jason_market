@@ -8,7 +8,7 @@ import webbrowser
 import tempfile
 from datetime import datetime
 
-from xlsx_sync import update_xlsx_live_fx
+from xlsx_sync import update_xlsx_live_fx, load_portfolio
 
 from portfolio_tracker_base import save_cash_tracker
 from portfolio_tracker_prices import get_usdkrw
@@ -17,23 +17,7 @@ from portfolio_tracker_terminal import print_terminal
 from portfolio_tracker_html import generate_html
 
 
-def _load_holdings():
-    """portfolio.json 직접 로드 (자동 sync 비활성화 — 덮어쓰기 방지)"""
-    portfolio_json_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'portfolio.json'
-    )
-    if not os.path.exists(portfolio_json_path):
-        return None
-
-    with open(portfolio_json_path, encoding='utf-8') as f:
-        portfolio_data = json.load(f)
-
-    holdings = []
-    for acc, items in portfolio_data.items():
-        for item in items:
-            item['account'] = acc
-            holdings.append(item)
-    return holdings
+# (기존 _load_holdings는 load_portfolio로 대체됨)
 
 
 def main():
@@ -43,9 +27,10 @@ def main():
     print(f"{'━'*90}")
     print("  xlsx 동기화 및 가격 조회 중...\n")
 
-    holdings = _load_holdings()
+    # 엑셀/구글시트 최신 데이터 동기화 (Plan A: 완전 자동화)
+    holdings = load_portfolio()
     if not holdings:
-        print("  보유 종목 없음. portfolio.json 파일을 확인하세요.")
+        print("  동기화 실패 혹은 보유 종목 없음. 엑셀 파일을 확인하세요.")
         return
 
     usdkrw_tuple = get_usdkrw()

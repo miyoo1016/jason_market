@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-from jm_lib.options import _bs_gamma, calc_max_pain
+from jm_lib.options import bs_gamma, calc_max_pain
 from options_monitor_base import CBOE_URL, HEADERS, parse_opt_sym
 
 
@@ -189,7 +189,7 @@ def process(sym: str, label: str) -> dict | None:
     def _calc_g(row):
         T = max((datetime.strptime(row['expiry'], '%Y-%m-%d').date() - today_date).days / 365.0,
                 1 / 365.0)
-        return _bs_gamma(curr, row['strike'], T, row['iv']) if row['iv'] > 0 else 0.0
+        return bs_gamma(curr, row['strike'], T, row['iv']) if row['iv'] > 0 else 0.0
     df['gamma'] = df.apply(_calc_g, axis=1)
 
     if not all_exps:

@@ -5,6 +5,7 @@ import os
 import json
 from datetime import datetime
 
+from jm_lib.html_styles import html_head
 from alpha_hunter_base import SIGNALS_DIR, SEED_LIST, HTML_OUT
 from alpha_hunter_md import excerpt_md, urlhost
 
@@ -218,23 +219,15 @@ def generate_html(posts: list, md_text: str, ts: str,
         f"자산+방향미충족 <b>{stats['filtered_no_signal']}</b>건 제거"
     )
 
-    return f'''<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Alpha Hunter — {today}</title>
-<style>
-  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-  body {{
+    _css = """
+  body {
     background: #f5f4ef;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif;
     color: #2c2a25;
     min-height: 100vh;
-  }}
+  }
 
-  .site-header {{
+  .site-header {
     background: #fff;
     border-bottom: 1px solid #e4e1d8;
     padding: 18px 24px;
@@ -247,26 +240,26 @@ def generate_html(posts: list, md_text: str, ts: str,
     top: 0;
     z-index: 100;
     box-shadow: 0 1px 6px rgba(0,0,0,.06);
-  }}
-  .site-title {{ font-size: 22px; font-weight: 700; color: #3b3529; }}
-  .site-subtitle {{ font-size: 13px; color: #7a7060; margin-top: 2px; }}
-  .header-right {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
+  }
+  .site-title { font-size: 22px; font-weight: 700; color: #3b3529; }
+  .site-subtitle { font-size: 13px; color: #7a7060; margin-top: 2px; }
+  .header-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
-  .btn {{
+  .btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 9px 18px; border-radius: 8px;
     font-size: 14px; font-weight: 600; cursor: pointer; border: none;
     transition: all .15s; text-decoration: none;
-  }}
-  .btn-primary  {{ background: #4a3f2f; color: #fff; }}
-  .btn-primary:hover  {{ background: #5c4f3a; transform: translateY(-1px); }}
-  .btn-secondary {{ background: #fff; color: #4a3f2f; border: 1.5px solid #c8c0ae; }}
-  .btn-secondary:hover {{ background: #f0ede5; transform: translateY(-1px); }}
-  .btn-success  {{ background: #1a5c3a; color: #fff; }}
-  .btn-success:hover  {{ background: #236946; transform: translateY(-1px); }}
-  .btn.copied   {{ background: #1a5c3a !important; }}
+  }
+  .btn-primary  { background: #4a3f2f; color: #fff; }
+  .btn-primary:hover  { background: #5c4f3a; transform: translateY(-1px); }
+  .btn-secondary { background: #fff; color: #4a3f2f; border: 1.5px solid #c8c0ae; }
+  .btn-secondary:hover { background: #f0ede5; transform: translateY(-1px); }
+  .btn-success  { background: #1a5c3a; color: #fff; }
+  .btn-success:hover  { background: #236946; transform: translateY(-1px); }
+  .btn.copied   { background: #1a5c3a !important; }
 
-  .stats-bar {{
+  .stats-bar {
     background: #fff;
     border-bottom: 1px solid #e4e1d8;
     padding: 10px 24px;
@@ -276,158 +269,158 @@ def generate_html(posts: list, md_text: str, ts: str,
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
-  }}
-  .stats-bar b {{ color: #3b3529; }}
+  }
+  .stats-bar b { color: #3b3529; }
 
-  .filter-summary {{
+  .filter-summary {
     background: #fdf9f1;
     border-bottom: 1px solid #e4e1d8;
     padding: 8px 24px;
     font-size: 12px;
     color: #8a7d6a;
-  }}
+  }
 
-  .cnt-badge {{
+  .cnt-badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 2px 10px; border-radius: 10px;
     font-size: 12px; font-weight: 700;
-  }}
-  .cnt-seed   {{ background:#edf7ee; color:#2e7d32; }}
-  .cnt-reddit {{ background:#fff1ee; color:#c94b2b; }}
+  }
+  .cnt-seed   { background:#edf7ee; color:#2e7d32; }
+  .cnt-reddit { background:#fff1ee; color:#c94b2b; }
 
-  .filter-bar {{ padding: 14px 24px 0; display: flex; gap: 8px; flex-wrap: wrap; }}
-  .filter-btn {{
+  .filter-bar { padding: 14px 24px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+  .filter-btn {
     padding: 6px 16px; border-radius: 20px;
     border: 1.5px solid #d4cfc5; background: #fff;
     font-size: 13px; font-weight: 500; cursor: pointer; color: #5a5040;
     transition: all .12s;
-  }}
-  .filter-btn:hover {{ background: #ebe8e0; }}
-  .filter-btn.active {{ background: #4a3f2f; color: #fff; border-color: #4a3f2f; }}
+  }
+  .filter-btn:hover { background: #ebe8e0; }
+  .filter-btn.active { background: #4a3f2f; color: #fff; border-color: #4a3f2f; }
 
-  .main {{ max-width: 900px; margin: 0 auto; padding: 20px 20px 60px; }}
-  .cards {{ display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }}
+  .main { max-width: 900px; margin: 0 auto; padding: 20px 20px 60px; }
+  .cards { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
 
-  .card {{
+  .card {
     background: #fff; border: 1px solid #e4e1d8;
     border-radius: 12px; padding: 18px 20px;
     transition: box-shadow .15s, transform .1s;
-  }}
-  .card:hover {{ box-shadow: 0 4px 18px rgba(0,0,0,.08); transform: translateY(-1px); }}
-  .card.seed-card {{ border-left: 3px solid #2e7d32; }}
-  .card.hidden {{ display: none; }}
+  }
+  .card:hover { box-shadow: 0 4px 18px rgba(0,0,0,.08); transform: translateY(-1px); }
+  .card.seed-card { border-left: 3px solid #2e7d32; }
+  .card.hidden { display: none; }
 
-  .card-header {{ display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }}
-  .badge {{
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .badge {
     display: inline-block; padding: 3px 10px; border-radius: 6px;
     font-size: 11px; font-weight: 700; border: 1px solid; letter-spacing: .3px;
-  }}
-  .card-label {{ font-size: 12px; color: #8a7d6a; flex: 1; }}
-  .card-date  {{ font-size: 12px; color: #aaa098; white-space: nowrap; }}
+  }
+  .card-label { font-size: 12px; color: #8a7d6a; flex: 1; }
+  .card-date  { font-size: 12px; color: #aaa098; white-space: nowrap; }
 
-  .card-title {{
+  .card-title {
     display: block; font-size: 16px; font-weight: 600; color: #2c2a25;
     line-height: 1.45; text-decoration: none; margin-bottom: 6px;
-  }}
-  .card-title:hover {{ color: #6b4f2a; text-decoration: underline; }}
-  .card-meta {{ font-size: 12px; color: #8a7d6a; margin-bottom: 10px; }}
+  }
+  .card-title:hover { color: #6b4f2a; text-decoration: underline; }
+  .card-meta { font-size: 12px; color: #8a7d6a; margin-bottom: 10px; }
 
-  .excerpt {{
+  .excerpt {
     font-size: 13.5px; color: #5a5040; line-height: 1.65;
     background: #f9f8f4; border-left: 3px solid #d4cfc5;
     padding: 10px 14px; border-radius: 0 6px 6px 0; margin-bottom: 12px;
-  }}
-  .card-footer {{ text-align: right; }}
-  .link-btn {{ font-size: 13px; color: #6b4f2a; text-decoration: none; font-weight: 500; }}
-  .link-btn:hover {{ text-decoration: underline; }}
+  }
+  .card-footer { text-align: right; }
+  .link-btn { font-size: 13px; color: #6b4f2a; text-decoration: none; font-weight: 500; }
+  .link-btn:hover { text-decoration: underline; }
 
-  .info-panel {{
+  .info-panel {
     background: #fff; border: 1px solid #e4e1d8; border-radius: 12px;
     padding: 16px 20px; margin-top: 28px; font-size: 13px; color: #6b6052; line-height: 1.9;
-  }}
-  .info-panel h3 {{ font-size: 14px; font-weight: 600; color: #3b3529; margin-bottom: 8px; }}
-  .info-panel code {{ background: #f0ede5; padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
+  }
+  .info-panel h3 { font-size: 14px; font-weight: 600; color: #3b3529; margin-bottom: 8px; }
+  .info-panel code { background: #f0ede5; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 
-  .empty {{ text-align: center; padding: 60px 20px; color: #8a7d6a; font-size: 16px; }}
+  .empty { text-align: center; padding: 60px 20px; color: #8a7d6a; font-size: 16px; }
 
   /* ── Macro Dashboard ── */
-  .macro-section {{
+  .macro-section {
     background: #fff;
     border-bottom: 1px solid #e4e1d8;
     padding: 20px 24px 22px;
-  }}
-  .macro-inner {{ max-width: 900px; margin: 0 auto; }}
-  .macro-title {{
+  }
+  .macro-inner { max-width: 900px; margin: 0 auto; }
+  .macro-title {
     font-size: 16px; font-weight: 700; color: #3b3529;
     margin-bottom: 14px; display: flex; align-items: center; gap: 6px;
-  }}
-  .mcd-grid {{
+  }
+  .mcd-grid {
     display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
-  }}
-  .mcd-card {{
+  }
+  .mcd-card {
     background: #fdf9f1; border: 1px solid #e4e1d8; border-radius: 10px;
     padding: 14px 18px; min-width: 170px; flex: 1;
-  }}
-  .mcd-card-wide {{ flex: 2 1 320px; }}
-  .mcd-card-title {{
+  }
+  .mcd-card-wide { flex: 2 1 320px; }
+  .mcd-card-title {
     font-size: 12px; font-weight: 600; color: #8a7d6a;
     text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px;
-  }}
-  .mcd-score {{
+  }
+  .mcd-score {
     font-size: 32px; font-weight: 800; line-height: 1.1; margin-bottom: 2px;
-  }}
-  .mcd-label {{ font-size: 14px; font-weight: 600; margin-bottom: 8px; }}
-  .mcd-sub   {{ font-size: 12px; color: #6b6052; margin-top: 4px; }}
-  .mcd-hint  {{ font-size: 11px; color: #aaa098; margin-top: 6px; line-height: 1.5; }}
-  .mcd-na    {{ font-size: 13px; color: #aaa098; padding: 10px 0; }}
-  .mcd-prev  {{ font-size: 12px; color: #8a7d6a; }}
-  .mcd-bar-wrap {{ margin-top: 8px; }}
-  .mcd-bar-bg {{
+  }
+  .mcd-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .mcd-sub   { font-size: 12px; color: #6b6052; margin-top: 4px; }
+  .mcd-hint  { font-size: 11px; color: #aaa098; margin-top: 6px; line-height: 1.5; }
+  .mcd-na    { font-size: 13px; color: #aaa098; padding: 10px 0; }
+  .mcd-prev  { font-size: 12px; color: #8a7d6a; }
+  .mcd-bar-wrap { margin-top: 8px; }
+  .mcd-bar-bg {
     height: 8px; background: #e4e1d8; border-radius: 4px; overflow: hidden;
     margin-bottom: 4px;
-  }}
-  .mcd-bar-fill {{ height: 100%; border-radius: 4px; transition: width .5s; }}
-  .mcd-bar-range {{
+  }
+  .mcd-bar-fill { height: 100%; border-radius: 4px; transition: width .5s; }
+  .mcd-bar-range {
     display: flex; justify-content: space-between;
     font-size: 10px; color: #aaa098; margin-bottom: 6px;
-  }}
-  .mcd-headlines {{
+  }
+  .mcd-headlines {
     background: #fdf9f1; border: 1px solid #e4e1d8; border-radius: 10px;
     padding: 14px 18px;
-  }}
-  .hl-list {{ list-style: none; padding: 0; margin: 8px 0 0; }}
-  .hl-list li {{
+  }
+  .hl-list { list-style: none; padding: 0; margin: 8px 0 0; }
+  .hl-list li {
     padding: 6px 0; border-bottom: 1px solid #eeebe3;
     font-size: 13.5px; line-height: 1.5;
     display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
-  }}
-  .hl-list li:last-child {{ border-bottom: none; }}
-  .hl-list a {{ color: #3b3529; text-decoration: none; flex: 1; }}
-  .hl-list a:hover {{ color: #6b4f2a; text-decoration: underline; }}
-  .hl-date {{ font-size: 11px; color: #aaa098; white-space: nowrap; }}
-  .hl-group-title {{
+  }
+  .hl-list li:last-child { border-bottom: none; }
+  .hl-list a { color: #3b3529; text-decoration: none; flex: 1; }
+  .hl-list a:hover { color: #6b4f2a; text-decoration: underline; }
+  .hl-date { font-size: 11px; color: #aaa098; white-space: nowrap; }
+  .hl-group-title {
     padding: 8px 0 3px; border-bottom: none;
     font-size: 11px; font-weight: 700; letter-spacing: .4px;
     text-transform: uppercase; pointer-events: none;
-  }}
-  #toast {{
+  }
+  #toast {
     position: fixed; bottom: 30px; left: 50%;
     transform: translateX(-50%) translateY(20px);
     background: #2c2a25; color: #fff;
     padding: 10px 22px; border-radius: 24px; font-size: 14px;
     opacity: 0; transition: all .3s; pointer-events: none; z-index: 9999;
-  }}
-  #toast.show {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  @media (max-width: 600px) {{
-    .site-header {{ padding: 14px 16px; }}
-    .main {{ padding: 14px 12px 50px; }}
-    .filter-bar {{ padding: 12px 12px 0; }}
-    .card {{ padding: 14px 16px; }}
-    .btn {{ padding: 8px 14px; font-size: 13px; }}
-  }}
-</style>
-</head>
+  @media (max-width: 600px) {
+    .site-header { padding: 14px 16px; }
+    .main { padding: 14px 12px 50px; }
+    .filter-bar { padding: 12px 12px 0; }
+    .card { padding: 14px 16px; }
+    .btn { padding: 8px 14px; font-size: 13px; }
+  }
+"""
+    return html_head(f'Alpha Hunter — {today}', css=_css) + f'''
 <body>
 
 <header class="site-header">

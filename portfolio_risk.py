@@ -11,10 +11,11 @@ import os
 import webbrowser
 import tempfile
 import threading
+import requests
 import yfinance as yf
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from scipy.stats import norm
 from xlsx_sync import load_portfolio
 
@@ -36,11 +37,63 @@ PROXY_MAP = {
 RISK_FREE_RATE = 0.044  # 4.4% 연간
 
 def get_usdkrw():
+    """환율 조회 - portfolio_tracker_prices와 동일 로직"""
     try:
-        h = yf.Ticker('USDKRW=X').history(period='2d')
+        tk = yf.Ticker('USDKRW=X')
+        # 1순위: fast_info (가장 빠름)
+        val = getattr(tk.fast_info, 'last_price', None) or getattr(tk.fast_info, 'lastPrice', None)
+        if val and val > 0:
+            return float(val)
+        # 2순위: .info (상세 정보)
+        val = tk.info.get('regularMarketPrice') or tk.info.get('previousClose')
+        if val and val > 0:
+            return float(val)
+        # 3순위: history (백업)
+        h = tk.history(period='2d')
         return float(h['Close'].iloc[-1]) if not h.empty else 1450.0
     except Exception:
         return 1450.0
+
+def _fetch_pyth_prices(tickers: list) -> dict:
+    """Pyth Network API를 사용하여 US 주식의 실시간 오버나이트(Blue Ocean) 시세 조회"""
+    results = {}
+    if not tickers:
+        return results
+    try:
+        for t in tickers:
+            try:
+                # Pyth Search API
+                search_url = f"https://hermes.pyth.network/v2/price_feeds?query={t}&asset_type=equity"
+                r = requests.get(search_url, timeout=5)
+                if r.status_code == 200:
+                    feeds = r.json()
+                    feed_id = None
+                    for f in feeds:
+                        attr = f.get('attributes', {})
+                        base = attr.get('base', '').upper()
+                        desc = attr.get('description', '').upper()
+                        if base == t.upper() and 'OVERNIGHT' in desc:
+                            feed_id = f.get('id')
+                            break
+                    if not feed_id:
+                        for f in feeds:
+                            if f.get('attributes', {}).get('base', '').upper() == t.upper():
+                                feed_id = f.get('id')
+                                break
+                    if feed_id:
+                        price_url = f"https://hermes.pyth.network/v2/updates/price/latest?ids[]={feed_id}"
+                        pr = requests.get(price_url, timeout=5)
+                        if pr.status_code == 200:
+                            parsed = pr.json().get('parsed', [None])[0]
+                            if parsed:
+                                p_data = parsed.get('price', {})
+                                price_raw = int(p_data.get('price', 0))
+                                expo = int(p_data.get('expo', 0))
+                                if price_raw > 0:
+                                    results[t] = price_raw * (10 ** expo)
+            except Exception: continue
+    except Exception: pass
+    return results
 
 # ── 포트폴리오 로드 + 종목 통합 ──────────────────────────────
 
@@ -129,7 +182,7 @@ def get_benchmark_returns():
     except Exception:
         return None, None
 
-def get_risk_metrics(holding, spy_krw_returns, usdkrw_daily, usdkrw):
+def get_risk_metrics(holding, spy_krw_returns, usdkrw_daily, usdkrw, pyth_prices=None):
     ticker   = holding['ticker']
     name     = holding['name']
     currency = holding['currency']
@@ -190,15 +243,20 @@ def get_risk_metrics(holding, spy_krw_returns, usdkrw_daily, usdkrw):
         close       = hist['Close'].dropna()
         fetch_price = float(close.iloc[-1])
 
-        # 미국/글로벌 티커: 1분봉 prepost로 실시간 현재가 갱신 (KRW 자산·GOLD_KRX 제외)
+        # 미국/글로벌 티커: 실시간 현재가 갱신 (Pyth 우선, yfinance 보완)
         _is_kr = fetch_ticker.endswith('.KS') or fetch_ticker in ('^KS11',)
         if not _is_kr and ticker not in ('XLSX_PRICE', 'GOLD_KRX'):
-            try:
-                h1m = yf.Ticker(fetch_ticker).history(period='1d', interval='1m', prepost=True)
-                if not h1m.empty:
-                    fetch_price = float(h1m['Close'].iloc[-1])
-            except Exception:
-                pass
+            # (1) Pyth Network 오버나이트 시세 반영
+            if pyth_prices and ticker in pyth_prices:
+                fetch_price = pyth_prices[ticker]
+            else:
+                # (2) Pyth 실패 시 yfinance prepost 1분봉 시도
+                try:
+                    h1m = yf.Ticker(fetch_ticker).history(period='1d', interval='1m', prepost=True)
+                    if not h1m.empty:
+                        fetch_price = float(h1m['Close'].iloc[-1])
+                except Exception:
+                    pass
 
         if ticker == 'XLSX_PRICE':
             result['current_price'] = float(holding['xlsx_price']) if holding.get('xlsx_price') else fetch_price
@@ -711,8 +769,16 @@ def main():
 
     results = [None] * len(holdings)
 
+    # 주간거래 시간대라면 Pyth Network에서 오버나이트 시세 우선 조회
+    kst_now = datetime.now(timezone(timedelta(hours=9)))
+    is_day_market = 9 <= kst_now.hour < 17
+    pyth_prices = {}
+    if is_day_market:
+        us_tickers = [h['ticker'] for h in holdings if not h.get('is_cash') and not h['ticker'].endswith('.KS')]
+        pyth_prices = _fetch_pyth_prices(us_tickers)
+
     def fetch(i, h):
-        results[i] = get_risk_metrics(h, spy_krw_rets, usdkrw_daily, usdkrw)
+        results[i] = get_risk_metrics(h, spy_krw_rets, usdkrw_daily, usdkrw, pyth_prices)
 
     threads = [threading.Thread(target=fetch, args=(i, h), daemon=True) for i, h in enumerate(holdings)]
     for t in threads: t.start()

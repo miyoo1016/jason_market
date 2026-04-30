@@ -3,6 +3,8 @@
 
 import json
 
+from jm_lib.html_styles import html_head
+
 
 def _pnl_color(val) -> str:
     """손익 색상 (CLAUDE.md 규칙: teal/red)"""
@@ -168,107 +170,100 @@ def generate_html(accounts_data: dict, usdkrw_tuple: tuple, timestamp: str) -> s
     gpc = _pnl_color(grand_profit)
     gdc = _pnl_color(grand_daily)
 
-    html = f"""<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Jason Market — 포트폴리오 손익</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6f8;color:#222;font-size:14px}}
-.header{{background:#1a1a2e;color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
-.header-text{{flex:1}}
-.header h1{{font-size:20px;font-weight:700}}
-.header .sub{{font-size:12px;color:#aaa;margin-top:3px}}
-.btn-heatmap{{padding:8px 18px;background:#00838f;color:#fff;border:none;border-radius:7px;
+    _css = """
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6f8;color:#222;font-size:14px}
+.header{background:#1a1a2e;color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.header-text{flex:1}
+.header h1{font-size:20px;font-weight:700}
+.header .sub{font-size:12px;color:#aaa;margin-top:3px}
+.btn-heatmap{padding:8px 18px;background:#00838f;color:#fff;border:none;border-radius:7px;
               cursor:pointer;font-size:13px;font-weight:700;letter-spacing:.3px;
-              box-shadow:0 2px 8px rgba(0,0,0,.25);transition:background .2s;white-space:nowrap}}
-.btn-heatmap:hover{{background:#00696f}}
-.btn-heatmap.active{{background:#e65100}}
-.btn-heatmap.active:hover{{background:#bf4000}}
-.container{{max-width:1400px;margin:0 auto;padding:20px 16px 60px}}
-.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-bottom:20px}}
-.sbox{{background:#fff;border-radius:10px;padding:16px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08)}}
-.sbox.grand{{background:#1a1a2e;color:#fff}}
-.sbox .sl{{font-size:11px;color:#999;margin-bottom:5px}}
-.sbox.grand .sl{{color:#aaa}}
-.sbox .sv{{font-size:22px;font-weight:800;line-height:1.1}}
-.sbox .sv2{{font-size:12px;color:#888;margin-top:4px}}
-.sbox.grand .sv2{{color:#aaa}}
-.acc-card{{background:#fff;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}}
-.acc-header{{display:flex;align-items:center;gap:12px;padding:14px 18px;background:#fafafa;border-bottom:1px solid #eee}}
-.acc-name{{font-size:14px;font-weight:700;flex:1}}
-.acc-val{{font-size:15px;font-weight:700}}
-.acc-pnl{{font-size:13px;font-weight:600}}
-table{{width:100%;border-collapse:collapse}}
-th{{background:#f5f5f5;padding:9px 12px;text-align:left;font-size:11px;font-weight:700;color:#888;white-space:nowrap;border-bottom:2px solid #eee}}
-td{{padding:10px 12px;border-bottom:1px solid #f5f5f5;font-size:13px}}
-tr:last-child td{{border-bottom:none}}
-tr:hover td{{background:#fafafa}}
-.cash-row td{{color:#888;background:#fafffe}}
-.num{{text-align:right;font-variant-numeric:tabular-nums}}
-.pct{{font-weight:600}}
-.center{{text-align:center}}
-.name-cell{{font-weight:600}}
-.fx-tag{{font-size:10px;padding:2px 4px;background:#f0f7ff;color:#0056b3;border-radius:3px;margin-left:4px}}
-.footer{{text-align:center;font-size:11px;color:#bbb;margin-top:30px}}
+              box-shadow:0 2px 8px rgba(0,0,0,.25);transition:background .2s;white-space:nowrap}
+.btn-heatmap:hover{background:#00696f}
+.btn-heatmap.active{background:#e65100}
+.btn-heatmap.active:hover{background:#bf4000}
+.container{max-width:1400px;margin:0 auto;padding:20px 16px 60px}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-bottom:20px}
+.sbox{background:#fff;border-radius:10px;padding:16px 18px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.sbox.grand{background:#1a1a2e;color:#fff}
+.sbox .sl{font-size:11px;color:#999;margin-bottom:5px}
+.sbox.grand .sl{color:#aaa}
+.sbox .sv{font-size:22px;font-weight:800;line-height:1.1}
+.sbox .sv2{font-size:12px;color:#888;margin-top:4px}
+.sbox.grand .sv2{color:#aaa}
+.acc-card{background:#fff;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}
+.acc-header{display:flex;align-items:center;gap:12px;padding:14px 18px;background:#fafafa;border-bottom:1px solid #eee}
+.acc-name{font-size:14px;font-weight:700;flex:1}
+.acc-val{font-size:15px;font-weight:700}
+.acc-pnl{font-size:13px;font-weight:600}
+table{width:100%;border-collapse:collapse}
+th{background:#f5f5f5;padding:9px 12px;text-align:left;font-size:11px;font-weight:700;color:#888;white-space:nowrap;border-bottom:2px solid #eee}
+td{padding:10px 12px;border-bottom:1px solid #f5f5f5;font-size:13px}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafafa}
+.cash-row td{color:#888;background:#fafffe}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.pct{font-weight:600}
+.center{text-align:center}
+.name-cell{font-weight:600}
+.fx-tag{font-size:10px;padding:2px 4px;background:#f0f7ff;color:#0056b3;border-radius:3px;margin-left:4px}
+.footer{text-align:center;font-size:11px;color:#bbb;margin-top:30px}
 
 /* ── 히트맵 ────────────────────────────────────────────── */
-#heatmap-view{{display:none;margin-bottom:20px}}
-#heatmap-view.show{{display:block}}
-.hm-wrap{{
+#heatmap-view{display:none;margin-bottom:20px}
+#heatmap-view.show{display:block}
+.hm-wrap{
   background:#fff;border-radius:12px;padding:16px 16px 12px;
   box-shadow:0 1px 6px rgba(0,0,0,.08);
-}}
-.hm-header{{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}}
-.hm-title{{font-size:12px;color:#666;font-weight:600;letter-spacing:.4px;flex:1}}
-.hm-tabs{{display:flex;gap:6px}}
-.hm-tab{{
+}
+.hm-header{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.hm-title{font-size:12px;color:#666;font-weight:600;letter-spacing:.4px;flex:1}
+.hm-tabs{display:flex;gap:6px}
+.hm-tab{
   padding:5px 14px;font-size:12px;font-weight:700;border:none;
   border-radius:5px;cursor:pointer;transition:background .15s,color .15s;
   background:#f0f2f5;color:#666;
-}}
-.hm-tab.active{{background:#00838f;color:#fff}}
-#hm-canvas{{
+}
+.hm-tab.active{background:#00838f;color:#fff}
+#hm-canvas{
   position:relative;width:100%;height:520px;overflow:hidden;border-radius:6px;
-}}
-.hm-tile{{position:absolute;box-sizing:border-box;padding:2px;cursor:default;}}
-.hm-inner{{
+}
+.hm-tile{position:absolute;box-sizing:border-box;padding:2px;cursor:default;}
+.hm-inner{
   width:100%;height:100%;border-radius:5px;
   display:flex;flex-direction:column;justify-content:center;align-items:center;
   overflow:hidden;transition:filter .15s,background .35s;
   gap:1px;
-}}
-.hm-tile:hover .hm-inner{{filter:brightness(1.18) saturate(1.1);}}
-.hm-name{{
+}
+.hm-tile:hover .hm-inner{filter:brightness(1.18) saturate(1.1);}
+.hm-name{
   font-size:11px;font-weight:600;color:rgba(255,255,255,.82);
   text-shadow:0 1px 4px rgba(0,0,0,.7);letter-spacing:.5px;
   text-align:center;line-height:1.2;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:92%;
   text-transform:uppercase;
-}}
-.hm-pct{{
+}
+.hm-pct{
   font-size:18px;font-weight:900;color:#fff;
   text-shadow:0 2px 8px rgba(0,0,0,.55),0 1px 2px rgba(0,0,0,.4);
   margin-top:2px;line-height:1;letter-spacing:-.3px;
-}}
-.hm-val{{
+}
+.hm-val{
   font-size:11px;font-weight:600;color:rgba(255,255,255,.78);
   text-shadow:0 1px 4px rgba(0,0,0,.6);margin-top:3px;
-}}
-.hm-amount{{
+}
+.hm-amount{
   font-size:10px;font-weight:500;color:rgba(255,255,255,.65);
   text-shadow:0 1px 3px rgba(0,0,0,.5);margin-top:1px;
-}}
-.hm-legend{{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#888}}
-.hm-legend-bar{{
+}
+.hm-legend{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:#888}
+.hm-legend-bar{
   flex:1;height:8px;border-radius:4px;
   background:linear-gradient(to right,
     #ff3c3c,#c62828,#5a1a1a,#1a2a1a,#1a6e3a,#00dc5a);
-}}
-</style>
-</head>
+}
+"""
+    html = html_head('Jason Market — 포트폴리오 손익', css=_css) + f"""
 <body>
 <div class="header">
   <div class="header-text">

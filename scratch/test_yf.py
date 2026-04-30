@@ -1,22 +1,12 @@
 import yfinance as yf
-import pandas as pd
-
-tickers = ["QQQM", "GOOGL"]
-print(f"Testing yf.download for {tickers} with 1m interval...")
-try:
-    data = yf.download(tickers, period='1d', interval='1m', prepost=True)
-    print("Columns:", data.columns)
-    if not data.empty:
-        print("Tail of Close:\n", data['Close'].tail())
-    else:
-        print("Data is empty!")
-except Exception as e:
-    print(f"Error in yf.download: {e}")
-
-print("\nTesting yf.Ticker(...).history for QQQM...")
-try:
-    q = yf.Ticker("QQQM")
-    h = q.history(period='2d')
-    print("QQQM History:\n", h.tail())
-except Exception as e:
-    print(f"Error in yf.Ticker.history: {e}")
+tk = yf.Ticker("QQQ")
+print("Fast info last_price:", tk.fast_info.last_price)
+print("Fast info pre_market_price:", getattr(tk.fast_info, "pre_market_price", None), getattr(tk.fast_info, "preMarketPrice", None))
+print("Fast info post_market_price:", getattr(tk.fast_info, "post_market_price", None), getattr(tk.fast_info, "postMarketPrice", None))
+print("Market state:", getattr(tk.fast_info, "market_state", None))
+h = tk.history(period='1d', interval='1m', prepost=True)
+print("History 1m prepost:")
+if not h.empty:
+    print(h.tail(2))
+else:
+    print("Empty history")

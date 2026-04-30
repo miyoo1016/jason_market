@@ -11,7 +11,7 @@ from html import unescape
 
 from jm_lib.colors import ALERT, CYAN, RESET
 from alpha_hunter_base import (
-    HEADERS, MIN_EXCERPT_CHARS,
+    HEADERS, MIN_EXCERPT_CHARS, url_hash, FRESHNESS_HOURS
 )
 from alpha_hunter_md import (
     is_fresh, is_bot_or_noise, check_reddit_pass,
@@ -155,7 +155,7 @@ def collect_reddit(seeds: dict, stats: dict) -> list:
         if n_bot:
             detail.append(f'봇·공지 {n_bot}')
         if n_stale:
-            detail.append(f'72h초과 {n_stale}')
+            detail.append(f'{FRESHNESS_HOURS}h초과 {n_stale}')
         if n_short:
             detail.append(f'단문 {n_short}')
         if n_nosig:

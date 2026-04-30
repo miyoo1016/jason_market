@@ -340,7 +340,7 @@ def main():
         print(line)
 
     # ── 예금계좌 현금 (cash_tracker.json 기준) ──────────────
-    _ct_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cash_tracker.json')
+    _ct_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state', 'cash_tracker.json')
     try:
         with open(_ct_path, encoding='utf-8') as _f:
             _ct = json.load(_f)

@@ -1,5 +1,6 @@
 """데이터 수집 모듈 - Jason Market"""
 
+import os
 import json
 import logging
 import yfinance as yf
@@ -94,13 +95,17 @@ class DataCollector:
         self.last_update = datetime.now()
         return self.assets_data
 
-    def load_calendar_from_file(self, filepath='calendar_today.json'):
+    def load_calendar_from_file(self, filepath=None):
+        if filepath is None:
+            filepath = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), 'state', 'calendar_today.json'
+            )
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 self.calendar_events = json.load(f)
             logger.info(f"📅 캘린더 로드: {len(self.calendar_events)}개 이벤트")
         except FileNotFoundError:
-            logger.warning("⚠ calendar_today.json 없음")
+            logger.warning("⚠ state/calendar_today.json 없음")
             self.calendar_events = []
         except json.JSONDecodeError as e:
             logger.warning(f"⚠ 캘린더 JSON 오류: {e}")

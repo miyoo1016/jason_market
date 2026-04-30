@@ -9,13 +9,13 @@ from datetime import datetime, timezone, timedelta
 # ═══ 파일 경로 설정 ═══
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-SEEDS_FILE = os.path.join(DIR, 'alpha_hunter_seeds.json')
-SEED_LIST = os.path.join(DIR, 'seed_list.json')
+SEEDS_FILE = os.path.join(DIR, 'state', 'alpha_hunter_seeds.json')
+SEED_LIST = os.path.join(DIR, 'state', 'seed_list.json')
 SEEN_FILE = os.path.join(DIR, 'alpha_hunter_seen.json')
 SIGNALS_DIR = os.path.join(DIR, 'signals')
 HTML_OUT = os.path.join(DIR, 'alpha_hunter.html')
 
-FRESHNESS_HOURS = 72
+FRESHNESS_HOURS = 18
 MIN_EXCERPT_CHARS = 150
 MAX_EXCERPT_MD = 800
 
@@ -96,13 +96,17 @@ def load_seeds() -> dict:
 
 
 def load_seed_list() -> list:
-    """seed_list.json 로드 (Reddit 서브레딧)"""
+    """seed_list.json 로드 (개인 피드 목록)"""
     if not os.path.exists(SEED_LIST):
         return []
     try:
         with open(SEED_LIST, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data if isinstance(data, list) else []
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return data.get('feeds', [])
+            return []
     except Exception:
         return []
 

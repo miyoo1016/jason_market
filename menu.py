@@ -13,7 +13,6 @@ _W = '\033[96m[HTML🌐]\033[0m'   # HTML 출력 항목 표시 (밝은 파랑)
 
 MENU = [
     # (번호, 표시명, 파일명, 인수, HTML출력여부)
-    ('s',  'xlsx 동기화       — 구글드라이브 자산계산기 연동', 'xlsx_sync.py',                [], False),
     ('1',  '가격 조회          — 주요 자산 현재가',          'view_prices.py',              [], False),
     ('2',  '포트폴리오 손익    — 내 계좌 실시간 수익률',     'portfolio_tracker.py',        [], True),
     ('3',  '공포탐욕지수       — 시장 심리 0~100',           'fear_greed.py',               [], False),
@@ -41,12 +40,7 @@ def print_menu():
     print(f"{'━'*68}")
     for num, desc, _, _, is_html in MENU:
         tag = f'  {_W}' if is_html else ''
-        if num == 's':
-            print(f"  {'─'*66}")
-            print(f"   s. {desc}")
-            print(f"  {'─'*66}")
-        else:
-            print(f"  {num:>2}. {desc}{tag}")
+        print(f"  {num:>2}. {desc}{tag}")
     print(f"{'─'*68}")
     print(f"   0. 종료")
     print(f"{'━'*68}")

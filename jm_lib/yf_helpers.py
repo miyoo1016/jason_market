@@ -11,8 +11,11 @@ CLAUDE.md 가격 데이터 로직 준수:
 - 모듈별 커스터마이징 가능 (override 인자)
 """
 
+import logging
 import yfinance as yf
 from datetime import datetime, timezone
+
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 
 # ═══ 티커 분류 ═══
@@ -67,17 +70,30 @@ def get_current_price(ticker: str, is_equity: bool = None) -> float:
     """
     try:
         t = yf.Ticker(ticker)
-        fi = t.fast_info
 
         # 자동 판정
         if is_equity is None:
             cls = classify_ticker(ticker)
-            # 한국 ETF는 정규장만이지만 fast_info가 더 정확
-            # 미국 주식/ETF는 프리·애프터 포함을 위해 history 사용
             is_equity = cls['is_equity']
 
-        # 미국 주식/ETF: 프리·애프터 포함 (1분봉)
+        # 미국 주식/ETF: 프리·애프터 포함 (info 조회 우선)
         if is_equity:
+            try:
+                info = t.info
+                pre = info.get('preMarketPrice')
+                post = info.get('postMarketPrice')
+                reg = info.get('regularMarketPrice')
+                
+                if pre is not None:
+                    return float(pre)
+                elif post is not None:
+                    return float(post)
+                elif reg is not None:
+                    return float(reg)
+            except Exception:
+                pass
+
+            # info 실패 시 1분봉 prepost 보완
             try:
                 h1m = t.history(period='1d', interval='1m', prepost=True)
                 if not h1m.empty:
@@ -86,6 +102,7 @@ def get_current_price(ticker: str, is_equity: bool = None) -> float:
                 pass
 
         # Fallback: fast_info.last_price (한국 정규장, 선물/FX/지수/크립토 24H)
+        fi = t.fast_info
         return float(getattr(fi, 'last_price', None) or 0) or None
     except Exception:
         return None

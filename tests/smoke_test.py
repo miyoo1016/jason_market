@@ -19,8 +19,10 @@ AMBER = '\033[38;5;214m'  # WARNING
 RED = '\033[38;5;203m'    # ALERT
 RESET = '\033[0m'
 
-# 17개 분석 모듈 목록 (menu.py 제외, config/xlsx_sync 제외)
+# 38개 분석 모듈 목록 (menu.py 제외, config/xlsx_sync 제외)
+# 구성: 메인 15개 + 지원 23개
 ANALYSIS_MODULES = [
+    # ─── 메인 분석 모듈 (15개) ────────────────────────────────
     'view_prices',
     'portfolio_tracker',
     'fear_greed',
@@ -36,8 +38,41 @@ ANALYSIS_MODULES = [
     'portfolio_risk',
     'market_stress',
     'alpha_hunter',
+
+    # ─── 데이터 수집 & 분석 지원 (3개) ──────────────────────────
     'analyzer',
     'data_collector',
+    'multi_agent_analyst',
+
+    # ─── Portfolio Tracker 패밀리 (5개) ──────────────────────────
+    'portfolio_tracker_base',
+    'portfolio_tracker_calc',
+    'portfolio_tracker_html',
+    'portfolio_tracker_prices',
+    'portfolio_tracker_terminal',
+
+    # ─── Options Monitor 패밀리 (4개) ──────────────────────────
+    'options_monitor_base',
+    'options_monitor_data',
+    'options_monitor_html',
+    'options_monitor_render',
+
+    # ─── Alpha Hunter 패밀리 (5개) ──────────────────────────
+    'alpha_hunter_base',
+    'alpha_hunter_collector',
+    'alpha_hunter_html',
+    'alpha_hunter_macro',
+    'alpha_hunter_md',
+
+    # ─── Technical Analysis 패밀리 (2개) ────────────────────────
+    'technical_analysis_html',
+    'technical_analysis_indicators',
+
+    # ─── jm_lib 라이브러리 (4개) ───────────────────────────────
+    'jm_lib.colors',
+    'jm_lib.env',
+    'jm_lib.options',
+    'jm_lib.yf_helpers',
 ]
 
 CORE_MODULES = [
@@ -59,8 +94,8 @@ class SmokeTest:
         print(f"  🔍 스모크 테스트: 모듈 Import 검증")
         print(f"{'='*80}\n")
 
-        # Test analysis modules
-        print(f"📦 분석 모듈 ({len(ANALYSIS_MODULES)}개):")
+        # Test analysis modules (메인 15개 + 지원 23개 = 38개)
+        print(f"📦 분석 모듈 ({len(ANALYSIS_MODULES)}개, 세부: 메인15 + 지원23):")
         print(f"{'-'*80}")
 
         for module_name in ANALYSIS_MODULES:
@@ -188,25 +223,27 @@ class SmokeTest:
                 self.errors.append((f'pkg:{pkg_name}', 'Not installed'))
 
     def test_portfolio_json(self):
-        """Test portfolio.json existence"""
+        """Test state/portfolio.json existence"""
         print(f"\n{'='*80}")
         print(f"  💼 데이터 파일 검증")
         print(f"{'='*80}\n")
 
+        ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        portfolio_path = os.path.join(ROOT, 'state', 'portfolio.json')
         try:
-            if os.path.exists('portfolio.json'):
+            if os.path.exists(portfolio_path):
                 import json
-                with open('portfolio.json', 'r', encoding='utf-8') as f:
+                with open(portfolio_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                print(f"  {GREEN}✓{RESET} portfolio.json: 존재 ({len(data)} 자산)")
+                print(f"  {GREEN}✓{RESET} state/portfolio.json: 존재 ({len(data)} 자산)")
                 self.passed += 1
             else:
-                print(f"  {AMBER}⚠{RESET}  portfolio.json: 미존재 (초기화 필요)")
+                print(f"  {AMBER}⚠{RESET}  state/portfolio.json: 미존재 (초기화 필요)")
                 self.passed += 1  # Not critical on first run
         except Exception as e:
-            print(f"  {RED}✗{RESET} portfolio.json 검증 실패: {str(e)}")
+            print(f"  {RED}✗{RESET} state/portfolio.json 검증 실패: {str(e)}")
             self.failed += 1
-            self.errors.append(('portfolio.json', str(e)))
+            self.errors.append(('state/portfolio.json', str(e)))
 
     def run(self):
         """Run all tests"""

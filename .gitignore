@@ -27,11 +27,16 @@ dashboard_*.html
 multiagent_*.txt
 reports/
 
-# 사용자 개인 데이터 (Google Drive 자동 동기화로 생성)
+# 사용자 개인 데이터 (state/ 폴더로 통합 관리)
+state/
+
+# 루트 잔존 파일 (이전 버전 호환)
 portfolio.json
 price_alerts.json
 calendar_today.json
 cash_tracker.json
+alpha_hunter_seeds.json
+seed_list.json
 
 # Alpha Hunter 자동 생성 데이터
 alpha_hunter_seen.json

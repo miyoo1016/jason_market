@@ -17,7 +17,7 @@ from datetime import datetime
 
 from jm_lib.colors import CYAN, AMBER, RESET
 
-from alpha_hunter_base import load_seeds, load_seed_list
+from alpha_hunter_base import load_seeds, load_seed_list, FRESHNESS_HOURS
 from alpha_hunter_collector import collect_seed_list, collect_reddit, aggregate
 from alpha_hunter_macro import build_macro_dashboard
 from alpha_hunter_md import generate_markdown, save_markdown
@@ -27,7 +27,7 @@ from alpha_hunter_html import generate_html
 def main():
     print(f"\n{'━'*62}")
     print(f"  🎯 Alpha Hunter V1.3 — 증시 고수 글 수집 + Macro Dashboard")
-    print(f"  필터: 72h이내 | 본문150자+ | 봇·공지 | 자산AND방향 키워드")
+    print(f"  필터: {FRESHNESS_HOURS}h이내 | 본문150자+ | 봇·공지 | 자산AND방향 키워드")
     print(f"{'━'*62}\n")
 
     seeds  = load_seeds()
@@ -75,7 +75,7 @@ def main():
     print(f"     시드 피드:  {sum(1 for p in posts if p['source']=='seed')}건")
     print(f"     Reddit:     {sum(1 for p in posts if p['source']=='reddit')}건")
     print(f"  🚫 필터 제거: 봇·공지 {stats['filtered_bot']}건 | "
-          f"72h초과 {stats['filtered_stale']}건 | "
+          f"{FRESHNESS_HOURS}h초과 {stats['filtered_stale']}건 | "
           f"단문 {stats['filtered_short']}건 | "
           f"자산+방향미충족 {stats['filtered_no_signal']}건")
     print(f"\n  💡 AI 분석: HTML에서 '전체 복사' → AI에 붙여넣기")

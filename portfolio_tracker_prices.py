@@ -4,8 +4,70 @@ yfinance 병렬 조회, KRX 금현물, USDKRW 환율"""
 import threading
 import subprocess
 import json
+import logging
+import warnings
+import requests
 import yfinance as yf
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# yfinance "possibly delisted" 경고 억제 (실제 상장폐지 아님, crumb 재시도로 처리)
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+warnings.filterwarnings('ignore', category=UserWarning, module='yfinance')
+
+
+def _fetch_pyth_prices(tickers: list) -> dict:
+    """Pyth Network API를 사용하여 US 주식의 실시간 오버나이트(Blue Ocean) 시세 조회"""
+    results = {}
+    if not tickers:
+        return results
+    
+    try:
+        # 1. 각 티커의 Overnight 피드 ID 찾기
+        for t in tickers:
+            try:
+                # Pyth Search API (asset_type은 소문자 'equity'여야 함)
+                search_url = f"https://hermes.pyth.network/v2/price_feeds?query={t}&asset_type=equity"
+                r = requests.get(search_url, timeout=5)
+                if r.status_code == 200:
+                    feeds = r.json()
+                    feed_id = None
+                    
+                    # 1순위: "OVERNIGHT"이 포함된 피드 찾기
+                    for f in feeds:
+                        attr = f.get('attributes', {})
+                        base = attr.get('base', '').upper()
+                        desc = attr.get('description', '').upper()
+                        if base == t.upper() and 'OVERNIGHT' in desc:
+                            feed_id = f.get('id')
+                            break
+                    
+                    # 2순위: "OVERNIGHT"이 없으면 티커가 정확히 일치하는 첫 번째 피드 사용
+                    if not feed_id:
+                        for f in feeds:
+                            attr = f.get('attributes', {})
+                            base = attr.get('base', '').upper()
+                            if base == t.upper():
+                                feed_id = f.get('id')
+                                break
+                    
+                    if feed_id:
+                        # 2. 실시간 가격 조회
+                        price_url = f"https://hermes.pyth.network/v2/updates/price/latest?ids[]={feed_id}"
+                        pr = requests.get(price_url, timeout=5)
+                        if pr.status_code == 200:
+                            parsed = pr.json().get('parsed', [None])[0]
+                            if parsed:
+                                price_data = parsed.get('price', {})
+                                price_raw = int(price_data.get('price', 0))
+                                expo = int(price_data.get('expo', 0))
+                                if price_raw > 0:
+                                    price = price_raw * (10 ** expo)
+                                    results[t] = price
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return results
 
 
 def _fetch_gold_krx(usdkrw: float) -> dict:
@@ -68,7 +130,19 @@ def get_usdkrw() -> tuple:
 
 
 def _reset_yf_cookie():
-    """yfinance 쿠키 캐시 초기화 — s키 동기화 후 Invalid Crumb 방지"""
+    """yfinance cookies.db 삭제 → Invalid Crumb 방지 (macOS: ~/Library/Caches/py-yfinance)"""
+    import os, shutil
+    candidates = [
+        os.path.join(os.path.expanduser('~/Library/Caches'), 'py-yfinance', 'cookies.db'),
+        os.path.join(os.path.expanduser('~/.cache'), 'py-yfinance', 'cookies.db'),
+    ]
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    # yfinance 내부 캐시 API (버전별 시도)
     try:
         from yfinance.cache import get_cookie_cache
         get_cookie_cache().store('curlCffi', None)
@@ -79,6 +153,11 @@ def _reset_yf_cookie():
 def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
     """병렬로 모든 종목 현재가+전일종가 조회 (1일 손익용)"""
     _reset_yf_cookie()
+    try:
+        _ = yf.Ticker("SPY").info  # 동기적으로 쿠키/크럼브 1회 생성 (멀티스레딩 충돌 방지)
+    except Exception:
+        pass
+
     tickers = set()
     for h in holdings:
         t = h.get('ticker', '')
@@ -101,67 +180,73 @@ def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
             if prev:
                 cache[t]['prev'] = prev
 
-    def _fetch_us():
-        if not us_tickers:
-            return
+    # 1. 미국 종목 조회 (순차적으로 진행하여 크럼브 충돌 방지 및 상세 정보 확보)
+    if us_tickers:
+        # (C) 주간거래(Day Market) 시간대라면 Pyth Network에서 오버나이트 시세 우선 조회
+        # 한국 시간 09:00 ~ 17:00 사이인 경우
+        kst_now = datetime.now(timezone(timedelta(hours=9)))
+        is_day_market = 9 <= kst_now.hour < 17
+        pyth_prices = {}
+        if is_day_market:
+            pyth_prices = _fetch_pyth_prices(us_tickers)
 
-        # 1. 분봉 데이터 수집 (현재 세션 최우선)
-        try:
-            data = yf.download(us_tickers, period='1d', interval='1m',
-                               prepost=True, auto_adjust=True, progress=False, threads=True)
-            closes = data['Close'] if 'Close' in data else data
-            for t in us_tickers:
-                try:
-                    col = closes[t] if hasattr(closes, 'columns') and t in closes.columns else closes
-                    valid = col.dropna()
-                    if not valid.empty:
-                        _update_cache(t, float(valid.iloc[-1]))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # 2. 개별 Ticker 속성으로 보강 (프리/애프터마켓 가격 직접 확인)
-        def _fetch_single_info(t):
+        for t in us_tickers:
             try:
                 tk = yf.Ticker(t)
-                info = tk.info
-                live_price = (
-                    info.get('preMarketPrice') or
-                    info.get('regularMarketPrice') or
-                    info.get('postMarketPrice')
-                )
-                prev = info.get('regularMarketPreviousClose') or info.get('previousClose')
+                curr, prev = None, None
 
-                # 인베스팅닷컴 동기화 보정: 글로벌 자산은 00:00 UTC 기준 % 계산
-                is_global = t in ('GC=F', 'CL=F', 'BZ=F', 'USDKRW=X', 'BTC-USD',
-                                  'DIA', 'SPY', 'QQQM', 'IWM', '^VIX', '^TNX')
-                if is_global:
+                # (A) .info 에서 데이터 추출 (가장 상세함)
+                try:
+                    info = tk.info
+                    prev = info.get('previousClose')
+                    pre = info.get('preMarketPrice')
+                    post = info.get('postMarketPrice')
+                    reg = info.get('regularMarketPrice')
+                    
+                    # 현재 세션에 맞는 가격 선택 (포스트마켓 우선)
+                    if post and post > 0:
+                        curr = float(post)
+                    elif pre and pre > 0:
+                        curr = float(pre)
+                    elif reg and reg > 0:
+                        curr = float(reg)
+                    
+                    # 만약 .info의 가격이 regularMarketPrice와 같다면, 
+                    # 혹시 모를 24시간 장(Overnight) 시세가 history에 있는지 확인
+                    if curr == reg or not curr:
+                        h1d = tk.history(period='1d', prepost=True)
+                        if not h1d.empty:
+                            hist_curr = float(h1d['Close'].iloc[-1])
+                            if hist_curr and hist_curr != curr:
+                                curr = hist_curr
+                except Exception:
+                    pass
+
+                # (B) .info 실패 시 fast_info 및 history 보완
+                if not curr:
                     try:
-                        h_int = tk.history(period='2d', interval='1h')
-                        if not h_int.empty:
-                            h_int.index = h_int.index.tz_convert('UTC')
-                            today_utc = datetime.now(timezone.utc).replace(
-                                hour=0, minute=0, second=0, microsecond=0)
-                            today_data = h_int.loc[h_int.index >= today_utc]
-                            if not today_data.empty:
-                                prev = float(today_data['Open'].iloc[0])
+                        fi = tk.fast_info
+                        curr = getattr(fi, 'last_price', None) or getattr(fi, 'lastPrice', None)
+                        if not prev:
+                            prev = getattr(fi, 'previous_close', None) or getattr(fi, 'previousClose', None)
+                        
+                        # 데이장 시세 확인을 위해 1d history 재확인
+                        h1d = tk.history(period='1d', prepost=True)
+                        if not h1d.empty:
+                            curr = float(h1d['Close'].iloc[-1])
                     except Exception:
                         pass
 
-                if live_price:
-                    _update_cache(t, float(live_price), float(prev) if prev else None)
+                # (D) Pyth Network 오버나이트 시세가 있다면 최우선 적용 (주간거래 시간대 한정)
+                if t in pyth_prices:
+                    curr = pyth_prices[t]
+
+                if curr:
+                    _update_cache(t, float(curr), float(prev) if prev else None)
             except Exception:
                 pass
 
-        # 병렬로 상세 정보 조회
-        info_threads = [threading.Thread(target=_fetch_single_info, args=(t,), daemon=True)
-                        for t in us_tickers]
-        for th in info_threads:
-            th.start()
-        for th in info_threads:
-            th.join(timeout=5)
-
+    # 2. 한국 종목 및 금현물 조회 (병렬 가능)
     def _fetch_kr():
         if not kr_tickers:
             return
@@ -172,55 +257,57 @@ def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
             for t in kr_tickers:
                 try:
                     col = closes[t] if hasattr(closes, 'columns') and t in closes.columns else closes
-                    valid = col.dropna()
-                    if len(valid) >= 2:
-                        _update_cache(t, float(valid.iloc[-1]), float(valid.iloc[-2]))
-                    elif not valid.empty:
-                        _update_cache(t, float(valid.iloc[-1]))
+                    valid_series = col.dropna()
+                    if len(valid_series) >= 2:
+                        _update_cache(t, float(valid_series.iloc[-1]), float(valid_series.iloc[-2]))
+                    elif not valid_series.empty:
+                        _update_cache(t, float(valid_series.iloc[-1]))
                 except Exception:
                     pass
         except Exception:
             pass
 
-    # GOLD_KRX 병렬 조회
     gold_result = {'curr': None, 'prev': None}
-
     def _gold():
         res = _fetch_gold_krx(usdkrw)
         gold_result.update(res)
 
-    t_us = threading.Thread(target=_fetch_us, daemon=True)
     t_kr = threading.Thread(target=_fetch_kr, daemon=True)
     gt = threading.Thread(target=_gold, daemon=True)
-    t_us.start()
     t_kr.start()
     gt.start()
-    t_us.join(timeout=30)
-    t_kr.join(timeout=30)
-    gt.join(timeout=30)
+    t_kr.join(timeout=20)
+    gt.join(timeout=20)
 
-    # 누락건 개별 재조회
+    # 누락건 개별 재조회 (fast_info 우선, history 최소화)
     for t in tickers:
         if t not in cache or cache[t].get('prev') is None:
             try:
                 tk = yf.Ticker(t)
                 fi = tk.fast_info
-                curr = getattr(fi, 'last_price', None)
-                if not curr and hasattr(fi, 'get'):
-                    curr = fi.get('lastPrice') or fi.get('last_price')
+                fb_curr = getattr(fi, 'last_price', None) or getattr(fi, 'lastPrice', None)
+                fb_prev = getattr(fi, 'previous_close', None) or getattr(fi, 'previousClose', None)
 
-                prev = getattr(fi, 'previous_close', None)
-                if not prev and hasattr(fi, 'get'):
-                    prev = fi.get('previousClose') or fi.get('previous_close')
+                # 기존 cache에 curr이 있으면 보존 (데이장 시세 덮어쓰기 방지)
+                existing_curr = cache.get(t, {}).get('curr')
+                curr = existing_curr if existing_curr else fb_curr
+                prev = cache.get(t, {}).get('prev') or fb_prev
 
-                if not prev:
-                    h = tk.history(period='5d')
-                    if len(h) >= 2:
-                        prev = float(h['Close'].iloc[-2])
-                        if not curr:
-                            curr = float(h['Close'].iloc[-1])
-                _update_cache(t, float(curr) if curr else None,
-                              float(prev) if prev else None)
+                # fast_info 에서도 못 얻으면 2일 일봉 (가장 짧은 기간)
+                if not prev or not curr:
+                    try:
+                        h = tk.history(period='2d')
+                        if not h.empty:
+                            if len(h) >= 2:
+                                prev = prev or float(h['Close'].iloc[-2])
+                                curr = curr or float(h['Close'].iloc[-1])
+                            else:
+                                curr = curr or float(h['Close'].iloc[-1])
+                    except Exception:
+                        pass
+
+                if curr:
+                    _update_cache(t, float(curr), float(prev) if prev else None)
             except Exception:
                 pass
 

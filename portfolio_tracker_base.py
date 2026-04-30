@@ -38,7 +38,7 @@ def fmt_pct(val) -> str:
 # ═══ 현금 추적 (일일·총손익 기준값 저장) ═══
 
 _CASH_TRACKER_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), 'cash_tracker.json'
+    os.path.dirname(os.path.abspath(__file__)), 'state', 'cash_tracker.json'
 )
 
 

@@ -11,8 +11,9 @@ from .yf_helpers import (
     get_open_today_utc, get_price_data,
 )
 from .options import (
-    bs_vanna, bs_charm, _bs_gamma, calc_max_pain, calc_vanna_charm, R_FREE
+    bs_vanna, bs_charm, bs_gamma, calc_max_pain, calc_vanna_charm, R_FREE
 )
+from .html_styles import html_head, BASE_RESET, CHARTJS_CDN, HTML2CANVAS_CDN
 
 __all__ = [
     # Colors
@@ -24,7 +25,9 @@ __all__ = [
     'classify_ticker', 'get_current_price', 'get_prev_close',
     'get_open_today_utc', 'get_price_data',
     # Options Greeks
-    'bs_vanna', 'bs_charm', '_bs_gamma', 'calc_max_pain', 'calc_vanna_charm', 'R_FREE',
+    'bs_vanna', 'bs_charm', 'bs_gamma', 'calc_max_pain', 'calc_vanna_charm', 'R_FREE',
+    # HTML utilities
+    'html_head', 'BASE_RESET', 'CHARTJS_CDN', 'HTML2CANVAS_CDN',
 ]
 
 __version__ = '1.0.0'

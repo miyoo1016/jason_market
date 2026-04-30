@@ -6,6 +6,8 @@ import tempfile
 import webbrowser
 from datetime import datetime
 
+from jm_lib.html_styles import html_head
+
 
 def generate_html(results, ai_text=""):
     """기술분석 결과를 HTML 대시보드로 생성 및 브라우저 표시
@@ -290,78 +292,70 @@ def generate_html(results, ai_text=""):
 
     # ═══ HTML 생성 ═══
 
-    html = f"""<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<title>기술분석 — Jason Market</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#f5f6f8;color:#222;font-family:'Segoe UI',Arial,sans-serif;padding:20px}}
-h1{{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}}
-.ts{{font-size:12px;color:#888;margin-bottom:10px}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}}
-.card{{background:#fff;border-radius:10px;padding:18px;border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06)}}
-.card-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
-.aname{{font-size:15px;font-weight:700;color:#1a237e}}
-.tbadge{{font-size:11px;background:#eef1f8;color:#555;padding:2px 8px;border-radius:4px}}
-.price-row{{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}}
-.price{{font-size:22px;font-weight:700;color:#111}}
-.chart-wrap{{margin-bottom:4px}}
-.ma-legend{{display:flex;gap:10px;font-size:10px;margin-bottom:6px;flex-wrap:wrap}}
-.section-title{{font-size:11px;color:#999;margin:10px 0 5px;text-transform:uppercase;letter-spacing:.5px}}
-.ma-row{{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}}
-.badge{{font-size:11px;color:#fff;padding:2px 7px;border-radius:4px}}
-.ind-label{{font-size:12px;color:#555;margin:10px 0 4px}}
-.track{{position:relative;height:11px;background:#e8eaf0;border-radius:6px;margin-bottom:14px}}
-.zone{{position:absolute;height:100%;opacity:.25;border-radius:6px}}
-.z-buy{{background:#00838f}}
-.z-sell{{background:#c62828}}
-.needle{{position:absolute;top:-3px;width:4px;height:17px;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 4px rgba(0,0,0,.2)}}
-.needle2{{position:absolute;top:0;width:2px;height:100%;background:#e67e22;opacity:.8;transform:translateX(-50%)}}
-.tick{{position:absolute;top:13px;font-size:10px;color:#aaa;transform:translateX(-50%)}}
-.bb-track{{height:9px;background:#e8eaf0;border-radius:5px;overflow:hidden;margin-bottom:2px}}
-.bb-fill{{height:100%;border-radius:5px}}
-.bb-lbl{{display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-bottom:6px}}
-.macd-bar{{height:8px;background:#e8eaf0;border-radius:4px;overflow:hidden;margin-top:5px;margin-bottom:10px}}
-.row2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}}
-.row3{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:8px 0}}
-.score-section{{margin:8px 0}}
-.score-label{{font-size:12px;color:#555;margin-bottom:4px}}
-.score-bar-wrap{{height:8px;background:#e8eaf0;border-radius:5px;overflow:hidden;margin-bottom:4px}}
-.score-bar-fill{{height:100%;border-radius:5px;transition:width 0.3s}}
-.score-details{{display:flex;gap:10px;font-size:11px;color:#888}}
-.mini-box{{background:#f0f2f8;border-radius:7px;padding:8px 10px}}
-.mini-title{{font-size:10px;color:#999;margin-bottom:3px}}
-.mini-val{{font-size:14px;font-weight:600;color:#333}}
-.vp-container{{margin-bottom:6px}}
-.vp-row{{display:flex;align-items:center;gap:6px;margin-bottom:2px}}
-.vp-price{{font-size:10px;color:#aaa;width:58px;text-align:right;flex-shrink:0}}
-.vp-bar-wrap{{flex:1;height:8px;background:#e8eaf0;border-radius:3px;overflow:hidden}}
-.vp-bar{{height:100%;border-radius:3px;opacity:.85}}
-.pivot-row{{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}}
-.pvt{{font-size:11px;border:1px solid;border-radius:5px;padding:3px 8px;text-align:center;line-height:1.5}}
-.pvt small{{font-size:10px;display:block}}
-.copy-bar{{display:flex;align-items:center;gap:10px;margin-bottom:18px;padding:12px 16px;background:#fff;border-radius:8px;border:1px solid #dde3f0;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.06)}}
-.copy-btn{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;white-space:nowrap}}
-.btn-copy{{background:#3498db;color:#fff}}
-.btn-copy:hover{{background:#2980b9}}
-.btn-copy.done{{background:#27ae60}}
-.btn-img{{background:#8e44ad;color:#fff}}
-.btn-img:hover{{background:#7d3c98}}
-.btn-img.working{{background:#e67e22}}
-.btn-html{{background:#27ae60;color:#fff}}
-.btn-html:hover{{background:#229954}}
-.btn-txt{{background:#e8eaf0;color:#555}}
-.btn-txt:hover{{background:#dde3f0}}
-.copy-hint{{font-size:11px;color:#aaa;margin-left:4px}}
-.ai-box{{background:#f9f5ff;border-left:4px solid #8e44ad;border-radius:8px;padding:16px;margin-top:20px;font-size:13px;line-height:1.6;color:#333}}
-.ai-title{{font-weight:700;color:#6c3a8e;margin-bottom:10px}}
-.ai-body{{color:#555}}
-</style>
-</head>
+    _css = """
+body{background:#f5f6f8;color:#222;font-family:'Segoe UI',Arial,sans-serif;padding:20px}
+h1{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}
+.ts{font-size:12px;color:#888;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+.card{background:#fff;border-radius:10px;padding:18px;border:1px solid #dde3f0;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.aname{font-size:15px;font-weight:700;color:#1a237e}
+.tbadge{font-size:11px;background:#eef1f8;color:#555;padding:2px 8px;border-radius:4px}
+.price-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+.price{font-size:22px;font-weight:700;color:#111}
+.chart-wrap{margin-bottom:4px}
+.ma-legend{display:flex;gap:10px;font-size:10px;margin-bottom:6px;flex-wrap:wrap}
+.section-title{font-size:11px;color:#999;margin:10px 0 5px;text-transform:uppercase;letter-spacing:.5px}
+.ma-row{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
+.badge{font-size:11px;color:#fff;padding:2px 7px;border-radius:4px}
+.ind-label{font-size:12px;color:#555;margin:10px 0 4px}
+.track{position:relative;height:11px;background:#e8eaf0;border-radius:6px;margin-bottom:14px}
+.zone{position:absolute;height:100%;opacity:.25;border-radius:6px}
+.z-buy{background:#00838f}
+.z-sell{background:#c62828}
+.needle{position:absolute;top:-3px;width:4px;height:17px;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 4px rgba(0,0,0,.2)}
+.needle2{position:absolute;top:0;width:2px;height:100%;background:#e67e22;opacity:.8;transform:translateX(-50%)}
+.tick{position:absolute;top:13px;font-size:10px;color:#aaa;transform:translateX(-50%)}
+.bb-track{height:9px;background:#e8eaf0;border-radius:5px;overflow:hidden;margin-bottom:2px}
+.bb-fill{height:100%;border-radius:5px}
+.bb-lbl{display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-bottom:6px}
+.macd-bar{height:8px;background:#e8eaf0;border-radius:4px;overflow:hidden;margin-top:5px;margin-bottom:10px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:8px 0}
+.score-section{margin:8px 0}
+.score-label{font-size:12px;color:#555;margin-bottom:4px}
+.score-bar-wrap{height:8px;background:#e8eaf0;border-radius:5px;overflow:hidden;margin-bottom:4px}
+.score-bar-fill{height:100%;border-radius:5px;transition:width 0.3s}
+.score-details{display:flex;gap:10px;font-size:11px;color:#888}
+.mini-box{background:#f0f2f8;border-radius:7px;padding:8px 10px}
+.mini-title{font-size:10px;color:#999;margin-bottom:3px}
+.mini-val{font-size:14px;font-weight:600;color:#333}
+.vp-container{margin-bottom:6px}
+.vp-row{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.vp-price{font-size:10px;color:#aaa;width:58px;text-align:right;flex-shrink:0}
+.vp-bar-wrap{flex:1;height:8px;background:#e8eaf0;border-radius:3px;overflow:hidden}
+.vp-bar{height:100%;border-radius:3px;opacity:.85}
+.pivot-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.pvt{font-size:11px;border:1px solid;border-radius:5px;padding:3px 8px;text-align:center;line-height:1.5}
+.pvt small{font-size:10px;display:block}
+.copy-bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;padding:12px 16px;background:#fff;border-radius:8px;border:1px solid #dde3f0;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.copy-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;white-space:nowrap}
+.btn-copy{background:#3498db;color:#fff}
+.btn-copy:hover{background:#2980b9}
+.btn-copy.done{background:#27ae60}
+.btn-img{background:#8e44ad;color:#fff}
+.btn-img:hover{background:#7d3c98}
+.btn-img.working{background:#e67e22}
+.btn-html{background:#27ae60;color:#fff}
+.btn-html:hover{background:#229954}
+.btn-txt{background:#e8eaf0;color:#555}
+.btn-txt:hover{background:#dde3f0}
+.copy-hint{font-size:11px;color:#aaa;margin-left:4px}
+.ai-box{background:#f9f5ff;border-left:4px solid #8e44ad;border-radius:8px;padding:16px;margin-top:20px;font-size:13px;line-height:1.6;color:#333}
+.ai-title{font-weight:700;color:#6c3a8e;margin-bottom:10px}
+.ai-body{color:#555}
+"""
+    html = html_head('기술분석 — Jason Market', css=_css, chartjs=True, html2canvas=True) + f"""
 <body>
 <h1>📊 기술분석 대시보드 — Jason Market</h1>
 <div class="ts">{ts} &nbsp;|&nbsp; 이동평균 5·20·60·120·200일 &nbsp;|&nbsp; 매물대 &nbsp;|&nbsp; 스토캐스틱 &nbsp;|&nbsp; ATR &nbsp;|&nbsp; OBV &nbsp;|&nbsp; 피봇포인트</div>
