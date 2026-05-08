@@ -184,13 +184,11 @@ def main():
     print(f"  브라우저에서 오픈 중...")
     webbrowser.open(f'file://{html_path}')
     print(f"  완료!\n")
-    print("  보는 법:")
-    print("  - P/C 비율 > 1.0 : 풋 많음 (헤지/약세)  < 0.7 : 콜 많음 (강세)")
-    print("  - Max Pain : 옵션 매도자 입장에서 가장 유리한 만기 가격")
-    print("  - 기대변동폭 : ATM 스트래들 미드가 (= barchart expected-move)")
-    print("  - GEX 양수 : 딜러 롱감마 → 가격 안정 / GEX 음수 : 딜러 숏감마 → 변동성 증폭")
-    print("  - Gamma Flip : 이 가격 아래로 내려가면 딜러가 하락을 오히려 증폭시킴")
-    print("  - Call Wall : 강한 저항 / Put Wall : 강한 지지\n")
+    print("  💡 가이드:")
+    print("  - P/C: >1.0 풋(헤지) | <0.7 콜(강세)")
+    print("  - Max Pain: 매도자 유리 가격")
+    print("  - GEX: 양수(안정) | 음수(변동)")
+    print("  - Wall: Call(저항) | Put(지지)\n")
 
 
 if __name__ == '__main__':

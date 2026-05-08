@@ -367,7 +367,7 @@ def generate_html(results: list, timestamp: str) -> str:
       <span class="lbl">{r['label']}</span>
       <span class="price">${curr:,.2f}</span>
     </div>
-    <div class="meta-sub">전체 {r['exp_count']}개 만기일 &nbsp;|&nbsp; 날짜·OI·IV: CBOE = optioncharts.io &nbsp;|&nbsp; 기대변동: ATM 콜+풋 스트래들 미드가 = barchart expected-move 동일 방식</div>
+    <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
     {pair_ratio_html}
   </div>
 
@@ -377,7 +377,7 @@ def generate_html(results: list, timestamp: str) -> str:
       <div class="slbl">전체 P/C OI</div>
       <div class="sval" style="color:{sig_color}">{pc_oi:.2f}</div>
       <div class="ssub" style="color:{sig_color}">{sig}</div>
-      <div class="pc-note">※ P/C &gt; 1.3은 기관 헤지일 수 있어 단순 약세 신호가 아닐 수 있음</div>
+      <div class="pc-note">※ P/C > 1.3: 기관 헤지/중립 가능성</div>
     </div>
     <div class="sbox">
       <div class="slbl">전체 P/C Volume</div>
@@ -446,11 +446,7 @@ def generate_html(results: list, timestamp: str) -> str:
   </div>
 
   <div class="gex-note">
-    <span>GEX 해석:</span> &nbsp;
-    Gamma Flip 위 = 딜러가 가격 오를 때 팔고, 내릴 때 사줌 (안정) &nbsp;|&nbsp;
-    Gamma Flip 아래 = 딜러가 하락을 따라 팜 (증폭) &nbsp;|&nbsp;
-    Call Wall = 강한 저항선 &nbsp;|&nbsp; Put Wall = 강한 지지선 &nbsp;|&nbsp;
-    Black-Scholes 감마 × OI × 100 × 현재가 (CBOE IV 사용, = GexScreener 동일 방식)
+    GEX: G-Flip 위(안정)/아래(증폭) | Call Wall(저항) | Put Wall(지지) | BS기반 추정
   </div>
 
   {zdte_html}
@@ -512,15 +508,18 @@ def generate_html(results: list, timestamp: str) -> str:
   <!-- 스트라이크 차트 -->
   <div class="charts-row">
     <div class="chart-box" style="grid-column:1/-1;">
-      <div class="section-title">📊 스트라이크별 OI — 현재가±18% (1개월 이내)</div>
+      <div class="section-title">📊 스트라이크별 OI / Volume / V·C — 현재가±18% (1개월 이내)</div>
       <div class="tab-row">
         <button class="tbtn active" onclick="switchTab('{sym}','oi',this)">OI</button>
         <button class="tbtn" onclick="switchTab('{sym}','vol',this)">Volume</button>
+        <button class="tbtn" onclick="switchTab('{sym}','vc',this)">V/C Ratio 🔴UOA</button>
       </div>
       <div style="position:relative;height:240px;">
         <canvas id="chart-{sym}-oi"></canvas>
         <canvas id="chart-{sym}-vol" style="display:none"></canvas>
+        <canvas id="chart-{sym}-vc"  style="display:none"></canvas>
       </div>
+      <div id="uoa-{sym}" class="uoa-wrap" style="display:none"></div>
     </div>
   </div>
 
@@ -541,7 +540,7 @@ def generate_html(results: list, timestamp: str) -> str:
 </div>"""
 
     _css = """
-body{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;}
+body{background:#f0f2f5;color:#222;font-family:'Segoe UI',system-ui,sans-serif;font-size:12px;}
 a{color:inherit;}
 
 .top-header{background:#1a237e;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;}
@@ -556,14 +555,14 @@ a{color:inherit;}
 .sym{font-size:24px;font-weight:800;color:#1a1a2e;}
 .lbl{font-size:12px;color:#999;flex:1;}
 .price{font-size:22px;font-weight:700;color:#1a5fa8;}
-.meta-sub{font-size:11px;color:#bbb;margin-top:5px;}
+.meta-sub{font-size:9.5px;color:#ccc;margin-top:4px;}
 
 .stats-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:#e8e8e8;}
 .sbox{padding:10px 14px;background:#fff;}
 .slbl{font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
 .sval{font-size:15px;font-weight:700;color:#222;}
-.ssub{font-size:9px;color:#aaa;margin-top:2px;}
-.pc-note{font-size:9px;color:#bbb;margin-top:2px;line-height:1.4}
+.ssub{font-size:8.5px;color:#bbb;margin-top:2px;}
+.pc-note{font-size:8.5px;color:#ccc;margin-top:2px;line-height:1.3}
 .em-section{padding:10px 20px;background:#f8f9ff;border-top:1px solid #eee;border-bottom:1px solid #eee;}
 .em-title{font-size:11px;font-weight:700;color:#555;margin-bottom:6px}
 .em-track-wrap{display:flex;align-items:center;gap:8px}
@@ -627,7 +626,7 @@ a{color:inherit;}
 .mp-price{font-size:11.5px;font-weight:700;color:#333;}
 .mp-diff{font-size:10px;font-weight:600;}
 
-.comment-cell{font-size:10px;color:#444;line-height:1.7;
+.comment-cell{font-size:9px;color:#666;line-height:1.5;
                text-align:right;white-space:normal;
                word-break:keep-all;overflow-wrap:break-word;}
 
@@ -672,6 +671,16 @@ a{color:inherit;}
 .gex-pos{color:#22c55e;}
 .gex-neg{color:#ef4444;}
 .gex-neu{color:#94a3b8;}
+
+.uoa-wrap{padding:10px 4px 4px;display:flex;flex-wrap:wrap;gap:6px;}
+.uoa-chip{display:inline-flex;flex-direction:column;align-items:center;
+           padding:5px 10px;border-radius:5px;font-size:11px;font-weight:700;min-width:70px;}
+.uoa-chip .uoa-strike{font-size:10px;font-weight:400;opacity:.8;margin-bottom:1px;}
+.uoa-chip .uoa-vc{font-size:13px;font-weight:800;}
+.uoa-chip .uoa-type{font-size:9px;opacity:.7;margin-top:1px;}
+.uoa-red   {background:#fdecea;color:#c62828;}
+.uoa-orange{background:#fff3e0;color:#e65100;}
+.uoa-teal  {background:#e0f2f1;color:#00695c;}
 """
     return html_head('Jason Market — 옵션 모니터 (QQQ/SPY/GOOGL)', css=_css, chartjs=True) + f"""
 <body>
@@ -689,6 +698,9 @@ function switchTab(sym, mode, el) {{
   el.classList.add('active');
   document.getElementById('chart-'+sym+'-oi').style.display  = mode==='oi'  ? '' : 'none';
   document.getElementById('chart-'+sym+'-vol').style.display = mode==='vol' ? '' : 'none';
+  document.getElementById('chart-'+sym+'-vc').style.display  = mode==='vc'  ? '' : 'none';
+  const uoaEl = document.getElementById('uoa-'+sym);
+  if (uoaEl) uoaEl.style.display = mode==='vc' ? 'flex' : 'none';
 }}
 
 function switchCalTab(sym, mode, el) {{
@@ -918,6 +930,83 @@ function makeGexChart(canvasId, gex, curr) {{
   }});
 }}
 
+function makeVCChart(canvasId, sym, d) {{
+  const ctx = document.getElementById(canvasId);
+  if (!ctx || !d.strikes || !d.strikes.length) return;
+
+  const callVC = d.call_vc || d.strikes.map(()=>0);
+  const putVC  = d.put_vc  || d.strikes.map(()=>0);
+
+  // 색상: V/C ≥1.0=빨강(UOA), 0.5~1.0=주황(관찰), <0.5=teal(정상)
+  function vcColor(v, alpha) {{
+    if (v >= 1.0) return `rgba(198,40,40,${{alpha}})`;
+    if (v >= 0.5) return `rgba(230,81,0,${{alpha}})`;
+    return `rgba(0,131,143,${{alpha}})`;
+  }}
+  const callColors = callVC.map(v => vcColor(v, 0.85));
+  const putColors  = putVC.map(v  => vcColor(v, 0.85));
+
+  new Chart(ctx, {{
+    type: 'bar',
+    data: {{
+      labels: d.strikes.map(s=>'$'+s.toFixed(0)),
+      datasets: [
+        {{label:'콜 V/C', data:callVC,           backgroundColor:callColors, borderWidth:0, borderRadius:2}},
+        {{label:'풋 V/C', data:putVC.map(v=>-v), backgroundColor:putColors,  borderWidth:0, borderRadius:2}},
+      ]
+    }},
+    options: {{
+      responsive:true, maintainAspectRatio:false,
+      plugins: {{
+        legend: {{labels:{{color:'#555',font:{{size:11}}}}}},
+        tooltip: {{
+          callbacks: {{
+            label: c => {{
+              const v = Math.abs(c.raw);
+              const tag = v>=1.0?' 🔴UOA': v>=0.5?' 🟠관찰':' 🟢정상';
+              return c.dataset.label+': '+v.toFixed(2)+tag;
+            }}
+          }}
+        }}
+      }},
+      scales: {{
+        x: {{ticks:{{color:'#888',font:{{size:9}},maxRotation:45}},grid:{{color:'#f5f5f5'}}}},
+        y: {{
+          ticks:{{color:'#888',font:{{size:10}},
+                  callback:v=>Math.abs(v).toFixed(2)}},
+          grid:{{color:'#f0f0f0'}},
+          title:{{display:true,text:'V/C Ratio (Volume÷OI)',color:'#aaa',font:{{size:10}}}}
+        }}
+      }}
+    }}
+  }});
+
+  // UOA 요약 칩 생성
+  const uoaEl = document.getElementById('uoa-'+sym);
+  if (!uoaEl) return;
+  const items = [];
+  d.strikes.forEach((s,i) => {{
+    if (callVC[i] >= 0.5) items.push({{strike:s, vc:callVC[i], type:'콜'}});
+    if (putVC[i]  >= 0.5) items.push({{strike:s, vc:putVC[i],  type:'풋'}});
+  }});
+  items.sort((a,b)=>b.vc-a.vc);
+  const top = items.slice(0,12);
+  if (top.length === 0) {{
+    uoaEl.innerHTML = '<span style="color:#aaa;font-size:11px;padding:4px">V/C ≥ 0.5 스트라이크 없음</span>';
+    return;
+  }}
+  uoaEl.innerHTML = '<span style="font-size:10px;color:#aaa;margin-right:6px;align-self:center">🔍 UOA 상위:</span>' +
+    top.map(item => {{
+      const cls = item.vc>=1.0?'uoa-red':item.vc>=0.5?'uoa-orange':'uoa-teal';
+      const mark = item.vc>=1.0?'🔴':item.vc>=0.5?'🟠':'🟢';
+      return `<span class="uoa-chip ${{cls}}">
+        <span class="uoa-strike">${{mark}} ${{item.strike.toFixed(0)}}</span>
+        <span class="uoa-vc">${{item.vc.toFixed(2)}}</span>
+        <span class="uoa-type">${{item.type}}</span>
+      </span>`;
+    }}).join('');
+}}
+
 ALL.forEach(r => {{
   if (!r) return;
   makeCalChart('chart-'+r.sym+'-cal-oi',  'cal-inner-'+r.sym+'-oi',  r.cal_chart, 'oi');
@@ -925,6 +1014,7 @@ ALL.forEach(r => {{
   makeStrikeChart('chart-'+r.sym+'-oi',  r.chart, r.curr, r.max_pain);
   makeStrikeChart('chart-'+r.sym+'-vol', r.chart, r.curr, r.max_pain);
   makeGexChart('chart-'+r.sym+'-gex', r.gex, r.curr);
+  makeVCChart('chart-'+r.sym+'-vc', r.sym, r.chart);
 }});
 
 </script>
