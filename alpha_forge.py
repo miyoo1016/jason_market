@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-\"\"\"AlphaForge — Market Intelligence & Signal Collector
+"""Alpha Hunter — Market Intelligence & Signal Collector
 Jason Market의 차세대 메인 분석 엔진.
 거시 국면 자동 감지 + Alpha Hunter 집계 + AI 브리핑 준비
-\"\"\"
+"""
 
 import sys
 import os
@@ -25,7 +25,7 @@ def main():
     regime_key, status = print_regime_header()
     
     if regime_key == 'weak':
-        print(f"\n  {RED}🚫 오늘 AlphaForge 진입 신호 없음{RESET}")
+        print(f"\n  {RED}🚫 오늘 Alpha Hunter 진입 신호 없음{RESET}")
         print(f"     이유: 코스피 약세({status['kospi_chg']:+.2f}%) + VIX({status['vix'] or 0:.2f}) 불안")
         print(f"     → 오늘은 관망하며 관심 종목의 지지력을 확인하세요.")
         # 약세장일 때는 관심 목록 수집은 하되, 상단에 경고 표시 예정

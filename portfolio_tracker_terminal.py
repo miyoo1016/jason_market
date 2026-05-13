@@ -22,9 +22,9 @@ def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str) -> tuple:
             if r['is_cash']:
                 line = (f"  │ {r['name']:<16} {'현금':>8} {r['avg']:>12} {r['price']:>12} "
                         f"{fmt_krw(r['val_krw']):>16} "
-                        f"{fmt_krw(r['profit_krw']):>14} "
-                        f"{fmt_krw(r['daily_profit_krw']):>12} "
-                        f"{fmt_pct(r['pct']):>8}")
+                        f"{'-':>14} "
+                        f"{'-':>12} "
+                        f"{'-':>8}")
             else:
                 line = (f"  │ {r['name']:<16} {r['qty']:>8} "
                         f"{r['avg']:>12} {r['price']:>12} "
@@ -35,11 +35,15 @@ def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str) -> tuple:
             print(alert_line(line))
 
         print(f"  │ {'─'*105}")
+        has_profit_basis = d.get('profit_basis', d['cost']) > 0
+        profit_s = fmt_krw(d['profit']) if has_profit_basis else '-'
+        daily_s = fmt_krw(d['daily_profit']) if has_profit_basis else '-'
+        pct_s = fmt_pct(d['pct']) if has_profit_basis else '-'
         summary = (f"  │ {'[계좌합계]':<16} {'':>8} {'':>12} {'':>12} "
                    f"{fmt_krw(d['curr']):>16} "
-                   f"{fmt_krw(d['profit']):>14} "
-                   f"{fmt_krw(d['daily_profit']):>12} "
-                   f"{fmt_pct(d['pct']):>8}")
+                   f"{profit_s:>14} "
+                   f"{daily_s:>12} "
+                   f"{pct_s:>8}")
         print(alert_line(summary))
         print(f"  └{'─'*106}\n")
 
@@ -47,8 +51,9 @@ def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str) -> tuple:
         grand_curr += d['curr']
         grand_daily += d['daily_profit']
 
-    grand_profit = grand_curr - grand_cost
-    grand_pct = grand_profit / grand_cost * 100 if grand_cost > 0 else 0
+    grand_profit = sum(d['profit'] for d in accounts_data.values())
+    grand_basis = sum(d.get('profit_basis', d['cost']) for d in accounts_data.values())
+    grand_pct = grand_profit / grand_basis * 100 if grand_basis > 0 else 0
     grand_usd = grand_curr / usdkrw
 
     print(f"  {'━'*105}")

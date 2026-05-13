@@ -37,22 +37,40 @@ PROXY_MAP = {
 RISK_FREE_RATE = 0.044  # 4.4% 연간
 
 def get_usdkrw():
-    """환율 조회 - portfolio_tracker_prices와 동일 로직"""
+    """환율 조회 - Yahoo Finance v8 curl (yfinance 우회)"""
     try:
-        tk = yf.Ticker('USDKRW=X')
-        # 1순위: fast_info (가장 빠름)
-        val = getattr(tk.fast_info, 'last_price', None) or getattr(tk.fast_info, 'lastPrice', None)
-        if val and val > 0:
-            return float(val)
-        # 2순위: .info (상세 정보)
-        val = tk.info.get('regularMarketPrice') or tk.info.get('previousClose')
-        if val and val > 0:
-            return float(val)
-        # 3순위: history (백업)
-        h = tk.history(period='2d')
-        return float(h['Close'].iloc[-1]) if not h.empty else 1450.0
+        from jm_lib.yf_helpers import get_price_data
+        d = get_price_data('USDKRW=X', is_global=False)
+        if d and d.get('curr'):
+            return float(d['curr'])
     except Exception:
-        return 1450.0
+        pass
+    return 1450.0
+
+
+def _curl_history(ticker: str, range_: str = '1y') -> pd.Series:
+    """Yahoo Finance v8 curl로 일봉 종가 Series 반환 (yfinance 대체)"""
+    import subprocess as _sp, json as _json
+    _UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    try:
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}'
+        r = _sp.run(['curl', '-s', '-A', _UA, url], capture_output=True, timeout=15)
+        d = _json.loads(r.stdout.decode('utf-8', errors='replace'))
+        result = d.get('chart', {}).get('result', [])
+        if not result:
+            return pd.Series(dtype=float)
+        ts     = result[0].get('timestamp', [])
+        closes = result[0].get('indicators', {}).get('adjclose', [{}])[0].get('adjclose', [])
+        if not closes:
+            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+        pairs = [(t, c) for t, c in zip(ts, closes) if c is not None]
+        if not pairs:
+            return pd.Series(dtype=float)
+        idx    = pd.to_datetime([p[0] for p in pairs], unit='s', utc=True).tz_localize(None)
+        values = [p[1] for p in pairs]
+        return pd.Series(values, index=idx, dtype=float)
+    except Exception:
+        return pd.Series(dtype=float)
 
 def _fetch_pyth_prices(tickers: list) -> dict:
     """Pyth Network API를 사용하여 US 주식의 실시간 오버나이트(Blue Ocean) 시세 조회"""
@@ -165,12 +183,12 @@ def load_holdings():
 def get_benchmark_returns():
     """S&P500 KRW기준 수익률 + USDKRW 일간 수익률 반환 (Beta/VaR 정확도 향상)"""
     try:
-        spy_hist = yf.Ticker('^GSPC').history(period='1y')
-        fx_hist  = yf.Ticker('USDKRW=X').history(period='1y')
+        spy_hist = _curl_history('^GSPC', '1y')
+        fx_hist  = _curl_history('USDKRW=X', '1y')
         if spy_hist.empty or fx_hist.empty:
             return None, None
-        spy_ret = spy_hist['Close'].pct_change().dropna()
-        fx_ret  = fx_hist['Close'].pct_change().dropna()
+        spy_ret = spy_hist.pct_change().dropna()
+        fx_ret  = fx_hist.pct_change().dropna()
         # 인덱스 정규화 (날짜만, tz-naive)
         spy_ret.index = pd.to_datetime(spy_ret.index).normalize().tz_localize(None) \
                         if spy_ret.index.tzinfo else pd.to_datetime(spy_ret.index).normalize()
@@ -236,27 +254,23 @@ def get_risk_metrics(holding, spy_krw_returns, usdkrw_daily, usdkrw, pyth_prices
             pass
 
     try:
-        hist = yf.Ticker(fetch_ticker).history(period='1y')
-        if hist is None or hist.empty or len(hist) < 20:
+        close = _curl_history(fetch_ticker, '1y')
+        if close.empty or len(close) < 20:
             return result
 
-        close       = hist['Close'].dropna()
         fetch_price = float(close.iloc[-1])
 
-        # 미국/글로벌 티커: 실시간 현재가 갱신 (Pyth 우선, yfinance 보완)
-        _is_kr = fetch_ticker.endswith('.KS') or fetch_ticker in ('^KS11',)
-        if not _is_kr and ticker not in ('XLSX_PRICE', 'GOLD_KRX'):
-            # (1) Pyth Network 오버나이트 시세 반영
-            if pyth_prices and ticker in pyth_prices:
-                fetch_price = pyth_prices[ticker]
-            else:
-                # (2) Pyth 실패 시 yfinance prepost 1분봉 시도
-                try:
-                    h1m = yf.Ticker(fetch_ticker).history(period='1d', interval='1m', prepost=True)
-                    if not h1m.empty:
-                        fetch_price = float(h1m['Close'].iloc[-1])
-                except Exception:
-                    pass
+        # 현재가: 2번 포트폴리오와 동일하게 Yahoo Finance v8 curl 사용
+        try:
+            from jm_lib.yf_helpers import get_price_data
+            _is_kr  = fetch_ticker.endswith('.KS') or fetch_ticker in ('^KS11',)
+            _is_glo = (fetch_ticker.endswith('=F') or fetch_ticker.endswith('=X')
+                       or fetch_ticker.startswith('^') or fetch_ticker == 'BTC-USD')
+            pd_ = get_price_data(fetch_ticker, is_equity=not (_is_kr or _is_glo), is_global=_is_glo)
+            if pd_ and pd_.get('curr'):
+                fetch_price = float(pd_['curr'])
+        except Exception:
+            pass
 
         if ticker == 'XLSX_PRICE':
             result['current_price'] = float(holding['xlsx_price']) if holding.get('xlsx_price') else fetch_price

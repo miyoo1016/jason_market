@@ -2,6 +2,8 @@
 만기별 표 + GEX 차트 + 캘린더 + 0DTE 카드"""
 
 import json
+import os
+from datetime import datetime, timezone, timedelta
 
 from jm_lib.html_styles import html_head
 from jm_lib.options import calc_vanna_charm
@@ -10,6 +12,8 @@ from options_monitor_base import (
     weekday_ko, is_monthly, days_badge,
 )
 from options_monitor_render import render_iv_rank, render_0dte_block
+
+_SNAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'options_gex_snapshot.json')
 
 
 def _exp_comment(row: dict, curr: float) -> str:
@@ -90,6 +94,42 @@ def _exp_comment(row: dict, curr: float) -> str:
 
 def generate_html(results: list, timestamp: str) -> str:
     """전체 옵션 모니터 대시보드 HTML"""
+
+    # ─── ① Δ GEX: 이전 스냅샷 로드 ─────────────────────────────
+    try:
+        with open(_SNAP_FILE) as _f:
+            _prev_snap = json.load(_f)
+    except Exception:
+        _prev_snap = {}
+    _curr_snap = {}
+
+    # ─── ④ OCC 시점 경고 (NYSE 개장 1시간 이내) ─────────────────
+    _KST = timezone(timedelta(hours=9))
+    _now_h = datetime.now(_KST).hour + datetime.now(_KST).minute / 60
+    # NYSE: 09:30 EDT = 22:30 KST / 09:30 EST = 23:30 KST
+    # 22:00~01:00 KST 구간에 경고 표시
+    _occ_warn = _now_h >= 22.0 or _now_h < 1.0
+    _occ_banner_html = ''
+    if _occ_warn:
+        _occ_banner_html = (
+            '<div style="margin-top:6px;padding:4px 8px;background:#fff3e0;'
+            'border-left:3px solid #f97316;border-radius:3px;font-size:9px;color:#7c4100;">'
+            '⚠ <strong>OCC 데이터 시점 주의</strong>: OI는 전일 종가 기준 · Volume은 당일 실시간 '
+            '· NYSE 개장 초 1시간은 GEX 신뢰도 제한됨'
+            '</div>'
+        )
+
+    # ─── ② Prediction Cone 데이터 사전 계산 ──────────────────────
+    for _r in results:
+        if not _r:
+            continue
+        _r['cone_data'] = [
+            {'days': row['days'], 'upper': row['upper_price'],
+             'lower': row['lower_price'], 'exp': row['exp']}
+            for row in _r.get('exp_rows', [])
+            if row.get('straddle_em', 0) > 0 and row.get('days', 0) > 0
+        ]
+
     data_js = json.dumps(results, ensure_ascii=False)
 
     cards = ''
@@ -272,6 +312,66 @@ def generate_html(results: list, timestamp: str) -> str:
 
         gflip_str = f'${gflip:,.2f}' if gflip else 'N/A'
 
+        # ─── ① Δ GEX 계산 ───────────────────────────────────────
+        _prev_ngb = _prev_snap.get(sym, {}).get('net_gex_b')
+        _curr_snap[sym] = {'net_gex_b': ngb}
+        if _prev_ngb is not None:
+            _gex_delta = ngb - _prev_ngb
+            if _gex_delta > 0:
+                _delta_str = f'▲ Δ +{_gex_delta:.3f}B'
+                _delta_color = '#22c55e'
+            elif _gex_delta < 0:
+                _delta_str = f'▼ Δ {_gex_delta:.3f}B'
+                _delta_color = '#ef4444'
+            else:
+                _delta_str = 'Δ 변화없음'
+                _delta_color = '#94a3b8'
+        else:
+            _delta_str = 'Δ 최초 기록 중'
+            _delta_color = '#64748b'
+
+        # ─── ③ Gamma Flip 거리 경보 ─────────────────────────────
+        if gflip and curr:
+            _gdist_pt = curr - gflip
+            _gdist_pct = _gdist_pt / curr * 100
+            _gdist_abs = abs(_gdist_pct)
+            if _gdist_abs < 0.5:
+                _gdist_color = '#ef4444'
+                _gdist_tag = '🔴 임박'
+            elif _gdist_abs < 2.0:
+                _gdist_color = '#f97316'
+                _gdist_tag = '🟠 근접'
+            else:
+                _gdist_color = '#22c55e'
+                _gdist_tag = '🟢 여유'
+            _gflip_dist_html = (
+                f'<div class="gex-dist" style="color:{_gdist_color};margin-top:4px;">'
+                f'{_gdist_pt:+.2f}pt&nbsp;({_gdist_pct:+.2f}%)&nbsp;{_gdist_tag}</div>'
+            )
+        else:
+            _gflip_dist_html = ''
+
+        # ─── ⑦ 박스 폭 자동 계산 ────────────────────────────────
+        if cwall and pwall:
+            _box_pt = cwall - pwall
+            _box_pct = _box_pt / curr * 100
+            _box_lbl = '좁음 ⚠' if _box_pct < 1 else ('넓음 ✅' if _box_pct > 3 else '보통')
+            _box_clr = '#ef4444' if _box_pct < 1 else ('#22c55e' if _box_pct > 3 else '#f97316')
+            _box_strip_html = (
+                f'<div class="box-strip">'
+                f'<span class="box-lbl">📏 박스 폭</span>'
+                f'<span class="box-val" style="color:{_box_clr}">'
+                f'${_box_pt:,.2f}&nbsp;({_box_pct:.1f}%)</span>'
+                f'<span class="box-tag" style="color:{_box_clr}">{_box_lbl}</span>'
+                f'<span class="box-hint">Call Wall – Put Wall / 현재가</span>'
+                f'</div>'
+            )
+        else:
+            _box_strip_html = ''
+
+        # gex-grid 하단 border-radius: box-strip 있을 때는 직각, 없을 때는 둥글게
+        _gex_grid_style = '' if not _box_strip_html else ' style="border-radius:8px 8px 0 0;"'
+
         # Expected Move 위치 표시
         near_em_row = next((row for row in r['exp_rows']
                             if row['straddle_em'] > 0 and row['days'] > 0), None)
@@ -301,6 +401,19 @@ def generate_html(results: list, timestamp: str) -> str:
     </div>"""
         else:
             em_html = ''
+
+        # ─── ② Prediction Cone HTML ──────────────────────────────
+        _cone_rows = r.get('cone_data', [])
+        if len(_cone_rows) >= 2:
+            cone_html = f"""
+    <div class="section">
+      <div class="section-title" style="font-size:12px;font-weight:700;color:#555;margin-bottom:8px;">🔮 Prediction Cone — 만기별 기대변동 범위 <span style="font-weight:400;font-size:10px;color:#aaa">· ATM 스트래들 기준</span></div>
+      <div style="position:relative;height:140px;">
+        <canvas id="chart-{sym}-cone"></canvas>
+      </div>
+    </div>"""
+        else:
+            cone_html = ''
 
         # SPX-SPY 페어 비율 경고
         pair_ratio_html = ''
@@ -369,6 +482,7 @@ def generate_html(results: list, timestamp: str) -> str:
     </div>
     <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
     {pair_ratio_html}
+    {_occ_banner_html}
   </div>
 
   <!-- 요약 통계 -->
@@ -419,19 +533,21 @@ def generate_html(results: list, timestamp: str) -> str:
     </div>
   </div>
 
-  {em_html}
+  {em_html}{cone_html}
 
   <!-- GEX 요약 -->
-  <div class="gex-grid">
+  <div class="gex-grid"{_gex_grid_style}>
     <div class="gex-box">
       <div class="gex-lbl">⚡ Net GEX (1개월이내)</div>
       <div class="gex-val {ngb_cls}">{ngb_str}</div>
       <div class="gex-sub">{gex_regime}</div>
+      <div class="gex-delta" style="color:{_delta_color};margin-top:5px;font-size:10px;font-weight:600">{_delta_str}</div>
     </div>
     <div class="gex-box">
       <div class="gex-lbl">🔄 Gamma Flip</div>
       <div class="gex-val {gflip_cls}">{gflip_str}</div>
       <div class="gex-sub">{gflip_label}</div>
+      {_gflip_dist_html}
     </div>
     <div class="gex-box">
       <div class="gex-lbl">🟢 Call Wall</div>
@@ -444,7 +560,7 @@ def generate_html(results: list, timestamp: str) -> str:
       <div class="gex-sub">{pwall_label}</div>
     </div>
   </div>
-
+  {_box_strip_html}
   <div class="gex-note">
     GEX: G-Flip 위(안정)/아래(증폭) | Call Wall(저항) | Put Wall(지지) | BS기반 추정
   </div>
@@ -663,7 +779,7 @@ a{color:inherit;}
 .b-warning{background-color:#d97706;}
 .b-neutral{background-color:#6b7280;}
 
-.gex-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:10px;}
+.gex-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#334155;border-radius:8px;overflow:hidden;margin-bottom:0;}
 .gex-box{padding:14px;background:#1e293b;}
 .gex-lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
 .gex-val{font-size:16px;font-weight:700;color:#f8fafc;}
@@ -681,7 +797,28 @@ a{color:inherit;}
 .uoa-red   {background:#fdecea;color:#c62828;}
 .uoa-orange{background:#fff3e0;color:#e65100;}
 .uoa-teal  {background:#e0f2f1;color:#00695c;}
+
+.gex-note{font-size:9px;color:#aaa;padding:4px 14px 10px;margin-top:4px;}
+/* ③ Gamma Flip 거리 */
+.gex-dist{font-size:10.5px;font-weight:600;margin-top:4px;}
+/* ① Δ GEX */
+.gex-delta{font-size:10px;font-weight:600;margin-top:5px;letter-spacing:.02em;}
+/* ⑦ 박스 폭 */
+.box-strip{display:flex;align-items:center;gap:8px;padding:7px 14px;
+           background:#1a2535;border-top:1px solid #334155;border-radius:0 0 8px 8px;
+           font-size:11px;margin-bottom:10px;}
+.box-lbl{font-size:9px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;}
+.box-val{font-size:13px;font-weight:700;}
+.box-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;background:rgba(255,255,255,.08);}
+.box-hint{font-size:8.5px;color:#64748b;margin-left:auto;}
 """
+    # ─── ① Δ GEX 스냅샷 저장 ────────────────────────────────────
+    try:
+        with open(_SNAP_FILE, 'w') as _sf:
+            json.dump(_curr_snap, _sf)
+    except Exception:
+        pass
+
     return html_head('Jason Market — 옵션 모니터 (QQQ/SPY/GOOGL)', css=_css, chartjs=True) + f"""
 <body>
 <div class="top-header">
@@ -1007,6 +1144,86 @@ function makeVCChart(canvasId, sym, d) {{
     }}).join('');
 }}
 
+function makePredictionCone(canvasId, curr, coneData) {{
+  const ctx = document.getElementById(canvasId);
+  if (!ctx || !coneData || coneData.length < 2) return;
+
+  // Sort by DTE ascending
+  const pts = [...coneData].sort((a, b) => a.days - b.days);
+  // Add current price as day=0 anchor
+  const labels = [0, ...pts.map(p => p.days)];
+  const uppers = [curr, ...pts.map(p => p.upper)];
+  const lowers = [curr, ...pts.map(p => p.lower)];
+  const currLine = labels.map(() => curr);
+
+  new Chart(ctx, {{
+    type: 'line',
+    data: {{
+      labels: labels.map(d => d === 0 ? '현재' : d + 'D'),
+      datasets: [
+        {{
+          label: '상단 (기대 상방)',
+          data: uppers,
+          borderColor: 'rgba(38,166,154,0.9)',
+          backgroundColor: 'rgba(38,166,154,0.12)',
+          fill: '+1',
+          tension: 0.35,
+          pointRadius: 3,
+          borderWidth: 1.5,
+        }},
+        {{
+          label: '하단 (기대 하방)',
+          data: lowers,
+          borderColor: 'rgba(239,83,80,0.9)',
+          backgroundColor: 'rgba(239,83,80,0.05)',
+          fill: false,
+          tension: 0.35,
+          pointRadius: 3,
+          borderWidth: 1.5,
+        }},
+        {{
+          label: '현재가',
+          data: currLine,
+          borderColor: '#f97316',
+          borderDash: [4, 3],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+        }},
+      ]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {{
+        legend: {{
+          labels: {{color: '#888', font: {{size: 10}}}},
+          position: 'right',
+        }},
+        tooltip: {{
+          callbacks: {{
+            label: c => c.dataset.label + ': $' + c.raw.toFixed(2)
+          }}
+        }}
+      }},
+      scales: {{
+        x: {{
+          ticks: {{color: '#888', font: {{size: 10}}}},
+          grid: {{color: '#f5f5f5'}},
+        }},
+        y: {{
+          ticks: {{
+            color: '#888',
+            font: {{size: 10}},
+            callback: v => '$' + v.toFixed(0)
+          }},
+          grid: {{color: '#f0f0f0'}},
+        }}
+      }}
+    }}
+  }});
+}}
+
 ALL.forEach(r => {{
   if (!r) return;
   makeCalChart('chart-'+r.sym+'-cal-oi',  'cal-inner-'+r.sym+'-oi',  r.cal_chart, 'oi');
@@ -1015,6 +1232,9 @@ ALL.forEach(r => {{
   makeStrikeChart('chart-'+r.sym+'-vol', r.chart, r.curr, r.max_pain);
   makeGexChart('chart-'+r.sym+'-gex', r.gex, r.curr);
   makeVCChart('chart-'+r.sym+'-vc', r.sym, r.chart);
+  if (r.cone_data && r.cone_data.length >= 2) {{
+    makePredictionCone('chart-'+r.sym+'-cone', r.curr, r.cone_data);
+  }}
 }});
 
 </script>

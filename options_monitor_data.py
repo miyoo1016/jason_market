@@ -36,7 +36,9 @@ def _spx_fallback(label: str) -> dict:
                   'call_oi': [10000, 20000, 50000, 30000, 10000],
                   'put_oi': [50000, 40000, 20000, 10000, 5000],
                   'call_vol': [1000, 2000, 5000, 3000, 1000],
-                  'put_vol': [5000, 4000, 2000, 1000, 500]},
+                  'put_vol': [5000, 4000, 2000, 1000, 500],
+                  'call_vc': [0.1, 0.1, 0.1, 0.1, 0.1],
+                  'put_vc':  [0.1, 0.1, 0.1, 0.1, 0.1]},
         'top_calls': [{'strike': 5800.0, 'oi': 150000},
                       {'strike': 5900.0, 'oi': 120000}],
         'top_puts': [{'strike': 5500.0, 'oi': 250000},
@@ -81,7 +83,9 @@ def _ndx_fallback(label: str) -> dict:
                   'call_oi': [1000, 2000, 5000, 3000, 1000],
                   'put_oi': [5000, 4000, 2000, 1000, 500],
                   'call_vol': [100, 200, 500, 300, 100],
-                  'put_vol': [500, 400, 200, 100, 50]},
+                  'put_vol': [500, 400, 200, 100, 50],
+                  'call_vc': [0.1, 0.1, 0.1, 0.1, 0.1],
+                  'put_vc':  [0.1, 0.1, 0.1, 0.1, 0.1]},
         'top_calls': [{'strike': 27500.0, 'oi': 85620},
                       {'strike': 28000.0, 'oi': 76560}],
         'top_puts': [{'strike': 26000.0, 'oi': 109644},
@@ -112,7 +116,7 @@ def _ndx_empty_fallback(label: str) -> dict:
         'max_pain': 26500.00, 'iv_call': 0, 'iv_put': 0,
         'near_oi': 0, 'far_oi': 0,
         'chart': {'strikes': [], 'call_oi': [], 'put_oi': [],
-                  'call_vol': [], 'put_vol': []},
+                  'call_vol': [], 'put_vol': [], 'call_vc': [], 'put_vc': []},
         'top_calls': [], 'top_puts': [],
         'cal_chart': {'dates': [], 'call_oi': [], 'put_oi': [],
                       'call_vol': [], 'put_vol': []},
@@ -348,6 +352,12 @@ def process(sym: str, label: str) -> dict | None:
         cal_chart = {'dates': [], 'call_oi': [], 'put_oi': [],
                      'call_vol': [], 'put_vol': []}
 
+    # V/C Ratio (스트라이크별 Volume ÷ OI) — UOA 스마트머니 감지용
+    _call_vol_s = vol_df.reindex(oi_df.index)['call_vol'].fillna(0)
+    _put_vol_s  = vol_df.reindex(oi_df.index)['put_vol'].fillna(0)
+    _call_vc = (_call_vol_s / oi_df['call_oi'].replace(0, np.nan)).fillna(0).round(3)
+    _put_vc  = (_put_vol_s  / oi_df['put_oi'].replace(0, np.nan)).fillna(0).round(3)
+
     print(f"  {sym} 완료  (만기 {len(all_exps)}개 · 계약 {len(options_raw):,}건 · CBOE)")
     return {
         'sym': sym, 'label': label, 'curr': curr,
@@ -360,11 +370,13 @@ def process(sym: str, label: str) -> dict | None:
         'iv_call': iv_call, 'iv_put': iv_put,
         'near_oi': near_oi, 'far_oi': far_oi,
         'chart': {
-            'strikes': oi_df.index.tolist(),
-            'call_oi': oi_df['call_oi'].astype(int).tolist(),
-            'put_oi': oi_df['put_oi'].astype(int).tolist(),
-            'call_vol': vol_df.reindex(oi_df.index)['call_vol'].fillna(0).astype(int).tolist(),
-            'put_vol': vol_df.reindex(oi_df.index)['put_vol'].fillna(0).astype(int).tolist(),
+            'strikes':  oi_df.index.tolist(),
+            'call_oi':  oi_df['call_oi'].astype(int).tolist(),
+            'put_oi':   oi_df['put_oi'].astype(int).tolist(),
+            'call_vol': _call_vol_s.astype(int).tolist(),
+            'put_vol':  _put_vol_s.astype(int).tolist(),
+            'call_vc':  _call_vc.tolist(),
+            'put_vc':   _put_vc.tolist(),
         },
         'top_calls': top_c.to_dict('records'),
         'top_puts': top_p.to_dict('records'),

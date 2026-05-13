@@ -28,8 +28,6 @@ def _build_account_sections(accounts_data: dict) -> str:
         rows_html = ''
         for r in d['rows']:
             if r['is_cash']:
-                pc = _pnl_color(r['profit_krw'])
-                pdc = _pnl_color(r['daily_profit_krw'])
                 rows_html += f"""
       <tr class="cash-row">
         <td class="name-cell">{r['name']}<span class="fx-tag" style="background:#e8f5e9;color:#2e7d32;margin-left:4px">예금</span></td>
@@ -37,9 +35,9 @@ def _build_account_sections(accounts_data: dict) -> str:
         <td class="num" style="color:#888">{r['avg']}</td>
         <td class="num" style="color:#888">{r['price']}</td>
         <td class="num">₩{r['val_krw']:,.0f}</td>
-        <td class="num" style="color:{pc}">{_sign(r['profit_krw'])}₩{r['profit_krw']:,.0f}</td>
-        <td class="num" style="color:{pdc}">{_sign(r['daily_profit_krw'])}₩{r['daily_profit_krw']:,.0f}</td>
-        <td class="num pct" style="color:{pc}">{_sign(r['pct'])}{r['pct']:.2f}%</td>
+        <td class="num" style="color:#888">-</td>
+        <td class="num" style="color:#888">-</td>
+        <td class="num pct" style="color:#888">-</td>
       </tr>"""
             else:
                 pc = _pnl_color(r['profit_krw'])
@@ -67,16 +65,43 @@ def _build_account_sections(accounts_data: dict) -> str:
         <td class="num pct" style="color:{pc}">{_sign(r['pct'])}{r['pct']:.2f}%</td>
       </tr>"""
 
+        has_profit_basis = d.get('profit_basis', d['cost']) > 0
         acc_col = _pnl_color(d['profit'])
         acc_dcol = _pnl_color(d['daily_profit'])
         acc_bg = _pnl_bg(d['profit'])
+        acc_profit_html = (
+            f'<span class="acc-pnl" style="color:{acc_col}">총 {_sign(d["profit"])}₩{d["profit"]:,.0f} '
+            f'({_sign(d["pct"])}{d["pct"]:.2f}%)</span>'
+            if has_profit_basis else
+            '<span class="acc-pnl" style="color:#888">총 -</span>'
+        )
+        acc_daily_html = (
+            f'<span class="acc-pnl" style="color:{acc_dcol};margin-left:15px">1일 {_sign(d["daily_profit"])}₩{d["daily_profit"]:,.0f}</span>'
+            if has_profit_basis else
+            '<span class="acc-pnl" style="color:#888;margin-left:15px">1일 -</span>'
+        )
+        acc_profit_cell = (
+            f'<td class="num" style="color:{acc_col};font-weight:700">{_sign(d["profit"])}₩{d["profit"]:,.0f}</td>'
+            if has_profit_basis else
+            '<td class="num" style="color:#888;font-weight:700">-</td>'
+        )
+        acc_daily_cell = (
+            f'<td class="num" style="color:{acc_dcol};font-weight:700">{_sign(d["daily_profit"])}₩{d["daily_profit"]:,.0f}</td>'
+            if has_profit_basis else
+            '<td class="num" style="color:#888;font-weight:700">-</td>'
+        )
+        acc_pct_cell = (
+            f'<td class="num pct" style="color:{acc_col};font-weight:700">{_sign(d["pct"])}{d["pct"]:.2f}%</td>'
+            if has_profit_basis else
+            '<td class="num pct" style="color:#888;font-weight:700">-</td>'
+        )
         sections += f"""
   <div class="acc-card">
     <div class="acc-header">
       <span class="acc-name">{acc}</span>
       <span class="acc-val">₩{d['curr']:,.0f}</span>
-      <span class="acc-pnl" style="color:{acc_col}">총 {_sign(d['profit'])}₩{d['profit']:,.0f} ({_sign(d['pct'])}{d['pct']:.2f}%)</span>
-      <span class="acc-pnl" style="color:{acc_dcol};margin-left:15px">1일 {_sign(d['daily_profit'])}₩{d['daily_profit']:,.0f}</span>
+      {acc_profit_html}
+      {acc_daily_html}
     </div>
     <table>
       <thead>
@@ -90,9 +115,9 @@ def _build_account_sections(accounts_data: dict) -> str:
         <tr style="background:{acc_bg}">
           <td colspan="4" style="font-weight:700;padding:10px 12px">계좌 합계</td>
           <td class="num" style="font-weight:700">₩{d['curr']:,.0f}</td>
-          <td class="num" style="color:{acc_col};font-weight:700">{_sign(d['profit'])}₩{d['profit']:,.0f}</td>
-          <td class="num" style="color:{acc_dcol};font-weight:700">{_sign(d['daily_profit'])}₩{d['daily_profit']:,.0f}</td>
-          <td class="num pct" style="color:{acc_col};font-weight:700">{_sign(d['pct'])}{d['pct']:.2f}%</td>
+          {acc_profit_cell}
+          {acc_daily_cell}
+          {acc_pct_cell}
         </tr>
       </tfoot>
     </table>
@@ -157,11 +182,11 @@ def _build_heatmap_data(accounts_data: dict) -> str:
 def generate_html(accounts_data: dict, usdkrw_tuple: tuple, timestamp: str) -> str:
     """전체 포트폴리오 대시보드 HTML 생성"""
     usdkrw, prev_usdkrw = usdkrw_tuple
-    grand_cost = sum(d['cost'] for d in accounts_data.values())
     grand_curr = sum(d['curr'] for d in accounts_data.values())
     grand_daily = sum(d['daily_profit'] for d in accounts_data.values())
-    grand_profit = grand_curr - grand_cost
-    grand_pct = grand_profit / grand_cost * 100 if grand_cost > 0 else 0
+    grand_profit = sum(d['profit'] for d in accounts_data.values())
+    grand_basis = sum(d.get('profit_basis', d['cost']) for d in accounts_data.values())
+    grand_pct = grand_profit / grand_basis * 100 if grand_basis > 0 else 0
     grand_usd = grand_curr / usdkrw
 
     account_sections = _build_account_sections(accounts_data)

@@ -27,7 +27,7 @@ MENU = [
     ('12', '섹터 흐름        — S&P500 11개 섹터 자금흐름', 'sector_flow.py',              [], True),
     ('13', '포트폴리오 리스크 — VaR·Beta·변동성 분석',     'portfolio_risk.py',           [], True),
     ('14', '시장 스트레스    — VIX구조·금리역전·신용스프레드', 'market_stress.py',           [], True),
-    ('15', 'AlphaForge      — 국면 자동감지 + 증시 고수 글 수집 [NEW🔥]', 'alpha_forge.py',          [], True),
+    ('15', 'Alpha Hunter      — 국면 자동감지 + 증시 고수 글 수집 [NEW🔥]', 'alpha_forge.py',          [], True),
 ]
 
 SEPARATOR = '─' * 58

@@ -28,6 +28,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
     for acc, items in accounts.items():
         rows = []
         acc_cost = acc_curr = acc_daily_profit = 0
+        acc_profit_basis = 0
         acc_list = tracker.get(acc, [])  # 기존 tracker의 이 계좌 데이터
 
         for h in items:
@@ -62,9 +63,6 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                 else:
                     daily_profit_krw = cash_krw - prev_balance
 
-                profit_krw = cash_krw - cost_basis
-                pct = profit_krw / cost_basis * 100 if cost_basis > 0 else 0
-
                 # new_tracker에 기록 (cost_basis 보존, prev_balance 갱신)
                 new_entry = {
                     'cost_basis': cost_basis,
@@ -75,16 +73,15 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                     new_tracker[acc] = []
                 new_tracker[acc].append(new_entry)
 
-                acc_cost += cost_basis
+                acc_cost += cash_krw
                 acc_curr += cash_krw
-                acc_daily_profit += daily_profit_krw
 
                 rows.append({
                     'name': h['name'], 'qty': '현금', 'is_cash': True,
-                    'avg': f'₩{cost_basis:,.0f}', 'price': f'₩{cash_krw:,.0f}', 'cur': cur,
-                    'val_krw': cash_krw, 'profit_krw': profit_krw,
-                    'daily_profit_krw': daily_profit_krw, 'pct': pct,
-                    'fx_pnl': 0, 'price_pnl': profit_krw, 'base_fx': 0,
+                    'avg': '-', 'price': f'₩{cash_krw:,.0f}', 'cur': cur,
+                    'val_krw': cash_krw, 'profit_krw': 0,
+                    'daily_profit_krw': 0, 'pct': 0,
+                    'fx_pnl': 0, 'price_pnl': 0, 'base_fx': 0,
                     'is_precision': False,
                 })
                 continue
@@ -131,6 +128,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
             acc_cost += cost_krw
             acc_curr += current_krw
             acc_daily_profit += daily_profit_krw
+            acc_profit_basis += cost_krw
 
             rows.append({
                 'name': h['name'], 'qty': f"{qty:,.0f}", 'is_cash': False,
@@ -141,11 +139,12 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                 'is_precision': (p_cost is not None)
             })
 
-        acc_profit = acc_curr - acc_cost
-        acc_pct = acc_profit / acc_cost * 100 if acc_cost > 0 else 0
+        acc_profit = sum(r['profit_krw'] for r in rows if not r['is_cash'])
+        acc_pct = acc_profit / acc_profit_basis * 100 if acc_profit_basis > 0 else 0
         accounts_data[acc] = {
             'rows': rows, 'cost': acc_cost, 'curr': acc_curr,
             'profit': acc_profit, 'daily_profit': acc_daily_profit, 'pct': acc_pct,
+            'profit_basis': acc_profit_basis,
         }
 
     return accounts_data, new_tracker
