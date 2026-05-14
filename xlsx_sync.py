@@ -11,25 +11,50 @@
   3. portfolio.json 캐시
 """
 
-import os, json, re, warnings, threading, platform
+import os, json, re, unicodedata, warnings, threading, platform, glob
 warnings.filterwarnings('ignore')
+
+# .env 로드 (GOOGLE_DRIVE_XLSX_PATH 등 환경변수 지원)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+except Exception:
+    pass
 
 _sys = platform.system()
 
 def _resolve_xlsx_path():
-    """macOS: 구글드라이브 가상파일 → Downloads 최신 파일 → (원본) 순서로 탐색"""
+    """macOS: 구글드라이브 가상파일 → Downloads 최신 파일 → (원본) 순서로 탐색
+    환경변수 GOOGLE_DRIVE_XLSX_PATH가 있으면 최우선 사용."""
+    # 0순위: 환경변수 직접 지정
+    env_path = os.environ.get("GOOGLE_DRIVE_XLSX_PATH", "").strip()
+    if env_path:
+        return os.path.expanduser(env_path)
+
     if _sys == "Windows":
         return r"G:\내 드라이브\PF\자산 계산기(클로드).xlsx"
     if _sys != "Darwin":
         return ""
 
-    gdrive_base = os.path.expanduser(
-        "~/Library/CloudStorage/GoogleDrive-miyoo1016@gmail.com/내 드라이브/PF"
+    # macOS: 어떤 Google 계정이든 자동 탐지 (miyoo1016 하드코딩 제거)
+    gdrive_base = ""
+    pf_candidates = glob.glob(
+        os.path.expanduser("~/Library/CloudStorage/GoogleDrive-*/내 드라이브/PF")
     )
+    if not pf_candidates:
+        pf_candidates = glob.glob(
+            os.path.expanduser("~/Library/CloudStorage/GoogleDrive-*/My Drive/PF")
+        )
+    if pf_candidates:
+        gdrive_base = pf_candidates[0]
+    else:
+        gdrive_base = ""  # Google Drive 미연결 → Downloads 또는 빈 경로로 처리
+
     # 1순위: 구글드라이브 동기화 파일 (스트리밍 모드에서 항상 있는 건 아님)
-    p1 = os.path.join(gdrive_base, "자산계산기(클로드).xlsx")
-    if os.path.exists(p1):
-        return p1
+    if gdrive_base:
+        p1 = os.path.join(gdrive_base, "자산계산기(클로드).xlsx")
+        if os.path.exists(p1):
+            return p1
 
     # 2순위: Downloads 폴더 — '자산' 포함 .xlsx 중 유효한(5KB↑) 가장 최신 파일
     dl = os.path.expanduser("~/Downloads")
@@ -46,16 +71,62 @@ def _resolve_xlsx_path():
         return sorted(candidates, reverse=True)[0][1]  # 가장 최신 유효 파일
 
     # 3순위: (원본) 백업 파일
-    p3 = os.path.join(gdrive_base, "(원본) 자산 계산기(클로드).xlsx")
-    if os.path.exists(p3):
-        return p3
+    if gdrive_base:
+        p3 = os.path.join(gdrive_base, "(원본) 자산 계산기(클로드).xlsx")
+        if os.path.exists(p3):
+            return p3
+        return p1  # 경로 반환 (없으면 나중에 파일 없음 처리)
 
-    return p1  # 경로 반환 (없으면 나중에 파일 없음 처리)
+    return ""  # Google Drive 미연결 + Downloads에도 없음
+
+def _find_gsheet_id():
+    """Google Drive PF 폴더에서 .gsheet 바로가기 파일을 찾아 doc_id 반환.
+    macOS 파일시스템은 NFD이므로 NFC 정규화 후 비교."""
+    sheet_name = os.environ.get("GOOGLE_SHEET_NAME", "자산계산기(클로드)")
+    target_nfc = unicodedata.normalize("NFC", sheet_name)
+    patterns = [
+        "~/Library/CloudStorage/GoogleDrive-*/내 드라이브/PF/*.gsheet",
+        "~/Library/CloudStorage/GoogleDrive-*/My Drive/PF/*.gsheet",
+    ]
+    for pat in patterns:
+        for path in glob.glob(os.path.expanduser(pat)):
+            basename_nfc = unicodedata.normalize(
+                "NFC", os.path.splitext(os.path.basename(path))[0])
+            if basename_nfc == target_nfc:
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    doc_id = data.get("doc_id", "").strip()
+                    if doc_id:
+                        return doc_id
+                except Exception:
+                    pass
+    return ""
+
+
+def _resolve_spreadsheet_id():
+    """SPREADSHEET_ID 우선순위:
+      1. GOOGLE_SHEET_ID 환경변수 (.env)
+      2. .gsheet 바로가기 파일 자동 추출
+      3. 하드코딩 fallback (기존 값 유지)"""
+    env_id = os.environ.get("GOOGLE_SHEET_ID", "").strip()
+    if env_id:
+        return env_id
+    doc_id = _find_gsheet_id()
+    if doc_id:
+        return doc_id
+    return "1VJ9e8ZM7wuKDGEyt4LoEGFfsTTztOlpI_tZXWLyag9A"  # 기존 하드코딩 fallback
+
 
 XLSX_PATH = _resolve_xlsx_path()
 PORTFOLIO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "portfolio.json")
-SHEET_NAME     = "📊 자산 계산기"
-SPREADSHEET_ID = "1VJ9e8ZM7wuKDGEyt4LoEGFfsTTztOlpI_tZXWLyag9A"
+SHEET_NAME        = "📊 자산 계산기"
+SPREADSHEET_ID    = _resolve_spreadsheet_id()
+GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME", "자산계산기(클로드)")
+
+# load_portfolio() 호출 후 데이터 출처를 외부에서 확인하기 위한 변수
+# 값: "gsheet" | "xlsx" | "cache" | ""
+PORTFOLIO_SOURCE = ""
 
 # 종목명 → Yahoo Finance 티커 매핑
 # GOLD_KRX  : 네이버 금융 KRX 금현물 시세 직접 조회 (GC=F 계산 아님)
@@ -113,20 +184,43 @@ KS_TICKER_MAP = {
 }
 
 
+def _check_xlsx_path(path: str) -> str:
+    """openpyxl 호출 전 경로 검증. 문제 없으면 "" 반환, 있으면 오류 메시지 반환."""
+    if not path:
+        gdrive = glob.glob(os.path.expanduser(
+            "~/Library/CloudStorage/GoogleDrive-*/내 드라이브/PF/자산계산기(클로드).xlsx"))
+        hint = f"\n    후보: {gdrive[0]}" if gdrive else ""
+        return f"xlsx 경로 미설정{hint}\n    → .env 에 GOOGLE_DRIVE_XLSX_PATH= 직접 지정 가능"
+    if not os.path.exists(path):
+        if "CloudStorage" in path:
+            return (f"xlsx 파일 없음: {path}\n"
+                    "    → Google Drive 앱 로그인 후 파일이 동기화됐는지 확인하세요")
+        return f"xlsx 파일 없음: {path}"
+    if os.path.isdir(path):
+        return f"경로가 파일이 아닌 폴더입니다: {path}"
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".gsheet":
+        return (f"Google Sheets 바로가기 파일 (.gsheet) — openpyxl로 열 수 없습니다\n"
+                "    → Google Drive 앱이 스트리밍 모드이면 실제 .xlsx가 다운로드되지 않음\n"
+                "    → Drive 설정에서 '오프라인 사용 가능' 또는 파일 우클릭 → 다운로드 후 재시도")
+    if ext not in (".xlsx", ".xlsm"):
+        return f"지원하지 않는 확장자 '{ext}': {path}"
+    if os.path.getsize(path) < 1000:
+        return f"파일 크기가 너무 작음 (손상 의심): {path}"
+    return ""
+
+
 def read_xlsx():
     """xlsx에서 보유 종목 + 현금 데이터 추출"""
-    if not XLSX_PATH:  # Android/Termux
+    err = _check_xlsx_path(XLSX_PATH)
+    if err:
+        print(f"  ⚠ xlsx 읽기 건너뜀: {err}")
         return None
 
     try:
         import pandas as pd
     except ImportError:
         print("  pandas 필요: pip3 install pandas openpyxl")
-        return None
-
-    if not os.path.exists(XLSX_PATH):
-        print(f"  파일 없음: {XLSX_PATH}")
-        print("  구글드라이브가 연결되어 있는지 확인하세요.")
         return None
 
     try:
@@ -328,7 +422,13 @@ def safe_save_xlsx(wb, path):
 
 
 def update_xlsx_live_fx(usdkrw):
-    """엑셀 O14 셀에 실시간 환율을 자동으로 기입"""
+    """엑셀 O14 셀에 실시간 환율을 자동으로 기입 (xlsx 모드일 때만 작동)"""
+    err = _check_xlsx_path(XLSX_PATH)
+    if err:
+        if PORTFOLIO_SOURCE == "gsheet":
+            return  # gspread 모드 — xlsx 없음은 정상, 조용히 건너뜀
+        print(f"  ⚠ 엑셀 환율 업데이트 건너뜀: {err}")
+        return
     try:
         import openpyxl
         wb = openpyxl.load_workbook(XLSX_PATH)
@@ -361,11 +461,34 @@ def _num(val):
 def _get_gspread_ws():
     """OAuth 캐시 토큰으로 구글시트 워크시트 반환. 실패 시 None."""
     import gspread
-    _auth_json = os.path.expanduser("~/.config/gspread/authorized_user.json")
+    _cred_json  = os.path.expanduser("~/.config/gspread/credentials.json")
+    _auth_json  = os.path.expanduser("~/.config/gspread/authorized_user.json")
+
+    # credentials.json 없으면 바로 안내 후 종료 (gspread 시도 자체를 막음)
+    if not os.path.exists(_cred_json):
+        print("  ⚠ 구글시트 연결 불가 — credentials.json 없음")
+        print(f"    필요 경로: {_cred_json}")
+        print()
+        print("  ▶ 기존 Mac → 새 Mac 복사 순서:")
+        print("    mkdir -p ~/.config/gspread")
+        print("    # 기존 Mac 터미널에서:")
+        print("    scp ~/.config/gspread/credentials.json     새Mac:~/.config/gspread/")
+        print("    scp ~/.config/gspread/authorized_user.json 새Mac:~/.config/gspread/  (있으면)")
+        print("    scp ~/.config/gspread/token.json           새Mac:~/.config/gspread/  (있으면)")
+        print("    scp ~/.config/gspread/token.pickle         새Mac:~/.config/gspread/  (있으면)")
+        print()
+        print("    복사 후: python3 xlsx_sync.py  (브라우저 인증 1회)")
+        print()
+        print("  ⚠ 실시간 구글드라이브 데이터 아님 — 캐시(portfolio.json) 사용 중")
+        return None
 
     def _try_connect():
         gc = gspread.oauth()
-        sh = gc.open_by_key(SPREADSHEET_ID)
+        try:
+            sh = gc.open_by_key(SPREADSHEET_ID)
+        except Exception:
+            # ID로 실패 시 이름으로 fallback
+            sh = gc.open(GOOGLE_SHEET_NAME)
         return sh.worksheet(SHEET_NAME)
 
     try:
@@ -530,22 +653,27 @@ def load_portfolio():
     1순위: gspread (구글시트 직접)  ← 구글시트 수정하면 바로 반영
     2순위: xlsx 로컬 파일
     3순위: portfolio.json 캐시
+    호출 후 xlsx_sync.PORTFOLIO_SOURCE 로 출처 확인 가능.
     """
+    global PORTFOLIO_SOURCE
+
     # 1순위: gspread
     holdings = read_gsheet()
     if holdings:
         sync_to_json(holdings)
+        PORTFOLIO_SOURCE = "gsheet"
         return holdings
 
     # 2순위: xlsx
     holdings = read_xlsx()
     if holdings:
         sync_to_json(holdings)
+        PORTFOLIO_SOURCE = "xlsx"
         return holdings
 
     # 3순위: portfolio.json 캐시
     if os.path.exists(PORTFOLIO_JSON):
-        print("  ⚠ 캐시(portfolio.json) 사용 중 — 구글시트 연결을 확인하세요")
+        print("  ⚠ 캐시(portfolio.json) 사용 중 — 구글시트/xlsx 연결을 확인하세요")
         with open(PORTFOLIO_JSON, encoding="utf-8") as f:
             data = json.load(f)
         flat = []
@@ -553,8 +681,10 @@ def load_portfolio():
             for item in items:
                 item["account"] = acc
                 flat.append(item)
+        PORTFOLIO_SOURCE = "cache"
         return flat
 
+    PORTFOLIO_SOURCE = ""
     return []
 
 
@@ -615,7 +745,7 @@ def fetch_and_write_prices():
         return False
 
     if not os.path.exists(XLSX_PATH):
-        print("  ⚠ 파일 없음 — 구글드라이브 연결 확인")
+        print("  ℹ xlsx 파일 없음 — Google Sheet 모드. gspread 경로로 시세 업데이트 진행")
         return False
 
     # ── 1. 환율 조회 ────────────────────────────────────────────
@@ -820,7 +950,39 @@ def main():
     print("\n" + "━"*56)
     print("  📡  실시간 시세 업데이트")
     print("━"*56)
-    fetch_and_write_prices()   # xlsx O열 업데이트 (있을 때만 작동)
+    if use_gsheet and not os.path.exists(XLSX_PATH):
+        # xlsx 없음 → gspread 직접 시세 업데이트
+        try:
+            import yfinance as yf
+            print("  환율·시세 조회 중...", end=" ", flush=True)
+            try:
+                _fx = yf.Ticker("USDKRW=X")
+                _usdkrw = (_fx.fast_info.get('last_price') or
+                           float(_fx.history(period="2d")["Close"].iloc[-1]))
+            except Exception:
+                _usdkrw = 1450.0
+            print(f"USDKRW={_usdkrw:,.1f}")
+            _tickers = list({
+                h['ticker'] for h in holdings
+                if not h.get('is_cash')
+                and h['ticker'] not in ('', 'CASH', 'GOLD_KRX', 'XLSX_PRICE')
+            })
+            _price_map = {}
+            if _tickers:
+                _data = yf.download(
+                    _tickers, period="2d", auto_adjust=True, progress=False)
+                _closes = _data["Close"] if "Close" in _data else _data
+                for _tk in _tickers:
+                    try:
+                        _col = _closes[_tk] if _tk in _closes.columns else _closes
+                        _price_map[_tk] = float(_col.dropna().iloc[-1])
+                    except Exception:
+                        pass
+            update_gsheet_prices(_price_map, _usdkrw)
+        except Exception as _e:
+            print(f"  ⚠ gsheet 시세 업데이트 실패: {_e}")
+    else:
+        fetch_and_write_prices()   # xlsx O열 업데이트 (있을 때만 작동)
     print()
 
     # yfinance 쿠키 캐시 초기화 — 이후 다른 스크립트에서 Invalid Crumb 방지

@@ -3,7 +3,7 @@
 from portfolio_tracker_base import alert_line, fmt_krw, fmt_pct
 
 
-def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str) -> tuple:
+def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str, data_source: str = "") -> tuple:
     """계좌별 손익 + 합계 터미널 출력"""
     print(f"\n{'━'*105}")
     print(f"  Jason & 와이프 포트폴리오 손익   {timestamp}")
@@ -61,7 +61,14 @@ def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str) -> tuple:
     print(alert_line(f"    총 손익      : {fmt_krw(grand_profit)}  ({grand_pct:+.2f}%)"))
     print(alert_line(f"    총 1일 손익  : {fmt_krw(grand_daily)} (주가+환율 변동 합산)"))
     print(f"  {'━'*105}")
-    print(f"\n  ※ 데이터 출처: 구글드라이브 자산계산기.xlsx\n")
+    if data_source == "gsheet":
+        print(f"\n  ※ 데이터 출처: Google Sheets 자산계산기(클로드) 실시간\n")
+    elif data_source == "xlsx":
+        print(f"\n  ※ 데이터 출처: 로컬 xlsx 파일\n")
+    elif data_source == "cache":
+        print(f"\n  ⚠ 데이터 출처: 캐시(portfolio.json)\n")
+    else:
+        print(f"\n  ※ 데이터 출처: 포트폴리오 데이터\n")
 
     return grand_cost, grand_curr, grand_profit, grand_pct, grand_usd, grand_daily
 
