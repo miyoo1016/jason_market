@@ -623,14 +623,12 @@ def update_gsheet_prices(price_map, usdkrw):
             if price and price > 0:
                 row_num = 5 + i          # 실제 시트 행 번호
                 col_o   = "O"
+                # 한국 ETF/주식(.KS)·금현물 → 원화 정수, 미국 종목(QQQM·GOOGL 등) → 달러 소수 2자리
+                _is_krw = ticker.endswith('.KS') or ticker == 'GOLD_KRX'
+                _val    = int(round(price)) if _is_krw else round(price, 2)
                 updates.append({
                     "range": f"{col_o}{row_num}",
-                    "values": [[int(round(price)) if CURRENCY_MAP.get(
-                        [k for k, v in TICKER_MAP.items() if v == ticker or
-                         KS_TICKER_MAP.get(k) == ticker][:1][0] if [
-                         k for k, v in TICKER_MAP.items() if v == ticker or
-                         KS_TICKER_MAP.get(k) == ticker] else "", "KRW"
-                    ) == "KRW" else round(price, 4)]]
+                    "values": [[_val]]
                 })
 
         # O14 환율
@@ -950,8 +948,10 @@ def main():
     print("\n" + "━"*56)
     print("  📡  실시간 시세 업데이트")
     print("━"*56)
-    if use_gsheet and not os.path.exists(XLSX_PATH):
-        # xlsx 없음 → gspread 직접 시세 업데이트
+    if use_gsheet:
+        # gsheet 모드: xlsx 존재 여부 무관하게 항상 구글시트 N5:O12 업데이트
+        # (이전 버그: os.path.exists(XLSX_PATH)=True 이면 이 블록이 건너뛰어져
+        #  O5~O12가 Python에 의해 갱신되지 않는 문제 수정)
         try:
             import yfinance as yf
             print("  환율·시세 조회 중...", end=" ", flush=True)
@@ -962,17 +962,18 @@ def main():
             except Exception:
                 _usdkrw = 1450.0
             print(f"USDKRW={_usdkrw:,.1f}")
-            _tickers = list({
+            # CASH·GOLD_KRX 제외 모든 티커 (US + KS) 수집 → gsheet N5:O12 전체 갱신
+            _all_tickers = list({
                 h['ticker'] for h in holdings
                 if not h.get('is_cash')
                 and h['ticker'] not in ('', 'CASH', 'GOLD_KRX', 'XLSX_PRICE')
             })
             _price_map = {}
-            if _tickers:
+            if _all_tickers:
                 _data = yf.download(
-                    _tickers, period="2d", auto_adjust=True, progress=False)
+                    _all_tickers, period="2d", auto_adjust=True, progress=False)
                 _closes = _data["Close"] if "Close" in _data else _data
-                for _tk in _tickers:
+                for _tk in _all_tickers:
                     try:
                         _col = _closes[_tk] if _tk in _closes.columns else _closes
                         _price_map[_tk] = float(_col.dropna().iloc[-1])
@@ -981,8 +982,9 @@ def main():
             update_gsheet_prices(_price_map, _usdkrw)
         except Exception as _e:
             print(f"  ⚠ gsheet 시세 업데이트 실패: {_e}")
-    else:
-        fetch_and_write_prices()   # xlsx O열 업데이트 (있을 때만 작동)
+
+    # xlsx도 있으면 추가 업데이트 (원본 포함 — fallback 파일 최신화)
+    fetch_and_write_prices()
     print()
 
     # yfinance 쿠키 캐시 초기화 — 이후 다른 스크립트에서 Invalid Crumb 방지
