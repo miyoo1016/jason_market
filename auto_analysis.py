@@ -209,11 +209,11 @@ def algo_signal(r):
     if r['ma20'] and r['curr'] > r['ma20']: score += 1
     if r['ma50'] and r['curr'] > r['ma50']: score += 1
 
-    if score >= 3:   verdict = "매수"
+    if score >= 3:   verdict = "기술적 긍정"
     elif score >= 1: verdict = "관망(긍정)"
     elif score >= -1: verdict = "관망(중립)"
     elif score >= -3: verdict = "관망(부정)"
-    else:             verdict = "매도"
+    else:             verdict = "기술적 부정"
     return verdict, ", ".join(reasons[:3])
 
 def algo_analysis(results, macro):
@@ -241,10 +241,13 @@ def algo_analysis(results, macro):
 # ── Ollama 로컬 LLM A/B 분석 (신규) ──────────────────────
 # ══════════════════════════════════════════════════════════
 
-# 삼파전 비교 모델 (A / B / C)
-_OLLAMA_MODELS = ["gemma4:26b", "gemma4:31b", "qwen3.6:latest"]
-_OLLAMA_LABELS = {"gemma4:26b": "26b", "gemma4:31b": "31b", "qwen3.6:latest": "qwen36"}
-_OLLAMA_TAGS   = {"gemma4:26b": "[A]", "gemma4:31b": "[B]", "qwen3.6:latest": "[C]"}
+# ── 모델 설정 ────────────────────────────────────────────────────
+# 기본 정밀 분석: gemma4:31b  /  빠른 분석: gemma4:26b
+# qwen3.6은 삼파전 테스트 결과 장황하고 외부 기준 혼입 → 제외
+_OLLAMA_MODEL_PRECISE = "gemma4:31b"
+_OLLAMA_MODEL_FAST    = "gemma4:26b"
+_OLLAMA_MODEL_LABEL   = {_OLLAMA_MODEL_PRECISE: "31b", _OLLAMA_MODEL_FAST: "26b"}
+_OLLAMA_MODEL_NAME    = {_OLLAMA_MODEL_PRECISE: "정밀 분석", _OLLAMA_MODEL_FAST: "빠른 분석"}
 
 _OLLAMA_SYSTEM = """너는 Jason의 기존 9번 표를 해석하는 로컬 AI 분석 보조자다.
 매수/매도 추천자가 아니다.
@@ -258,6 +261,7 @@ _OLLAMA_SYSTEM = """너는 Jason의 기존 9번 표를 해석하는 로컬 AI �
 - VIX, DXY, US10Y, USDKRW는 거시 부담/완충 요인으로 해석한다.
 - CD금리 상품은 현금성 자산으로 분류한다.
 - 숫자는 DATA FACTS 기준만 사용한다. 새 숫자를 만들지 않는다.
+- DATA FACTS에 없는 역사적 평균, 일반적 시장 평균, 외부 뉴스, 외부 기준은 언급하지 않는다.
 - 금지 표현: 강력 매수, 강력 매도, 지금 사야, 지금 팔아야, 확정 상승, 확정 하락, 폭락 확정, 수익 보장, 투자 추천.
 
 다음 형식으로 한국어로 분석하라. 각 섹션은 지정된 줄 수를 넘지 않는다.
@@ -407,12 +411,40 @@ p{font-size:13px;line-height:1.8;color:#333;margin:4px 0}
 ul{padding-left:22px;margin:4px 0}
 li{font-size:13px;line-height:1.9;color:#333}
 strong{color:#1a237e}
-.meta{font-size:12px;color:#888;margin-bottom:20px}
+.meta{font-size:12px;color:#888;margin-bottom:12px}
 .badge{display:inline-block;background:#e8f5e9;color:#2e7d32;font-size:11px;
   font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px}
 pre.facts{background:#f0f2f8;border-radius:8px;padding:14px;font-size:12px;
   font-family:monospace;white-space:pre-wrap;color:#333;margin:16px 0}
+.copy-btn{display:inline-block;background:#1a237e;color:#fff;border:none;
+  border-radius:6px;padding:7px 18px;font-size:13px;font-weight:600;
+  cursor:pointer;margin:10px 0 18px;transition:background .15s}
+.copy-btn:hover{background:#283593}
+.copy-btn.copied{background:#2e7d32}
 """
+
+_COPY_JS = """
+<script>
+function copyAnalysis(btnId, textareaId) {
+  var text = document.getElementById(textareaId).value;
+  var btn  = document.getElementById(btnId);
+  function done() {
+    btn.textContent = '복사됨';
+    btn.classList.add('copied');
+    setTimeout(function(){ btn.textContent = '전체복사'; btn.classList.remove('copied'); }, 1600);
+  }
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(done, function() { fallback(text, btn, done); });
+  } else { fallback(text, btn, done); }
+}
+function fallback(text, btn, done) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand('copy'); done(); } catch(e) { alert('복사 실패: 수동으로 복사하세요.'); }
+  document.body.removeChild(ta);
+}
+</script>"""
 
 
 def _save_result_md(text: str, label: str) -> str:
@@ -425,9 +457,13 @@ def _save_result_md(text: str, label: str) -> str:
 
 def _save_result_html(text: str, label: str, model: str, ts: str,
                       data_facts: str) -> str:
-    """outputs/ai_analysis_{label}.html 저장 → 경로 반환."""
-    body  = _md_to_html_body(text)
+    """outputs/ai_analysis_{label}.html 저장 (전체복사 버튼 포함) → 경로 반환."""
+    body      = _md_to_html_body(text)
     facts_esc = data_facts.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+    # 복사 대상: 마크다운 원문 (HTML 태그 미포함, plain text)
+    raw_esc   = text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
+    btn_id    = "copy-all-btn"
+    ta_id     = "raw-md-text"
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -438,9 +474,14 @@ def _save_result_html(text: str, label: str, model: str, ts: str,
 <body>
 <h1 style="margin-top:0">📊 Jason AI 분석 <span class="badge">🏠 {model}</span></h1>
 <div class="meta">{ts}</div>
+<button id="{btn_id}" class="copy-btn" onclick="copyAnalysis('{btn_id}','{ta_id}')">전체복사</button>
+<textarea id="{ta_id}" style="display:none" readonly>{raw_esc}</textarea>
+<div id="analysis-content">
 {body}
+</div>
 <h2 style="margin-top:32px">📋 DATA FACTS (분석 기준)</h2>
 <pre class="facts">{facts_esc}</pre>
+{_COPY_JS}
 </body>
 </html>"""
     path = os.path.join(_outputs_dir(), f"ai_analysis_{label}.html")
@@ -449,68 +490,66 @@ def _save_result_html(text: str, label: str, model: str, ts: str,
     return path
 
 
-def _save_compare(res_a: dict, res_b: dict, res_c: dict,
+def _save_latest(text: str, model: str, ts: str, data_facts: str) -> tuple:
+    """ai_analysis_latest.md + .html 저장 → (md_path, html_path)."""
+    md_path   = _save_result_md(text, "latest")
+    html_path = _save_result_html(text, "latest", model, ts, data_facts)
+    return md_path, html_path
+
+
+def _save_compare(res_a: dict, res_b: dict,
                   data_facts: str, ts: str) -> tuple:
     """비교 리포트 MD + HTML 저장 → (md_path, html_path)."""
     import ollama_client as _oc
 
-    # ── 3모델 데이터 준비 ────────────────────────────────
-    all_res   = [res_a, res_b, res_c]
-    ok_strs   = []
-    t_strs    = []
-    len_strs  = []
-    forb_strs = []
-    susp_strs = []
-    verd_strs = []
-    pros_list = []
-    cons_list = []
+    # ── 2모델 데이터 준비 ────────────────────────────────
+    all_res   = [res_a, res_b]
 
-    for res in all_res:
-        ok_strs.append("✅ 성공" if res['success']
-                        else f"❌ 실패 ({res.get('error','?')[:35]})")
-        t_strs.append(f"{res.get('elapsed',0):.1f}s")
-        len_strs.append(str(len(res.get('text',''))))
+    def _mk_row(res):
+        ok   = "✅ 성공" if res['success'] else f"❌ 실패 ({res.get('error','?')[:35]})"
+        t    = f"{res.get('elapsed',0):.1f}s"
+        ln   = str(len(res.get('text','')))
         _, forb = _oc.validate_output(res.get('text',''))
-        forb_strs.append("없음" if not forb else f"⚠ {', '.join(forb)}")
+        fb   = "없음" if not forb else f"⚠ {', '.join(forb)}"
         susp, nums = _oc.check_number_distortion(data_facts, res.get('text',''))
-        susp_strs.append(f"⚠ {nums[:2]}" if susp else "정상")
-        verd_strs.append((_oc.extract_verdict(res.get('text','')) or "—")[:55])
-        pros, cons = _oc.memo_quality(res)
-        pros_list.append(pros); cons_list.append(cons)
+        su   = f"⚠ {nums[:2]}" if susp else "정상"
+        vd   = (_oc.extract_verdict(res.get('text','')) or "—")[:55]
+        pr, co = _oc.memo_quality(res)
+        return ok, t, ln, fb, su, vd, pr, co
+
+    ra = _mk_row(res_a)
+    rb = _mk_row(res_b)
+
+    def _row2(key, va, vb):
+        return f"| {key} | {va[:50]} | {vb[:50]} |"
 
     # ── MD 비교 리포트 ─────────────────────────────────
-    hdr = " | ".join(r['model'] for r in all_res)
-    sep = "|".join(["----------"] * 3)
-    def _row3(key, *vals):
-        return f"| {key} | " + " | ".join(v[:50] for v in vals) + " |"
-
     lines = [
-        "# Jason AI 분석 — 삼파전 비교 리포트",
+        "# Jason AI 분석 — 비교 리포트 (26b vs 31b)",
         f"생성 시각: {ts}",
         "",
         "## 실행 결과",
         "",
-        f"| 항목 | {hdr} |",
-        f"|------|{sep}|",
-        _row3("성공 여부",    *ok_strs),
-        _row3("실행 시간",    *t_strs),
-        _row3("출력 길이(자)", *len_strs),
-        _row3("금지 표현",    *forb_strs),
-        _row3("숫자 왜곡 의심", *susp_strs),
-        _row3("한 줄 판정",   *verd_strs),
-        _row3("장점",         *pros_list),
-        _row3("단점",         *cons_list),
+        f"| 항목 | {res_a['model']} | {res_b['model']} |",
+        "|------|------------|------------|",
+        _row2("성공 여부",    ra[0], rb[0]),
+        _row2("실행 시간",    ra[1], rb[1]),
+        _row2("출력 길이(자)", ra[2], rb[2]),
+        _row2("금지 표현",    ra[3], rb[3]),
+        _row2("숫자 왜곡",   ra[4], rb[4]),
+        _row2("한 줄 판정",   ra[5], rb[5]),
+        _row2("장점",         ra[6], rb[6]),
+        _row2("단점",         ra[7], rb[7]),
         "",
         "## 저장 파일",
         "- 26b MD : `outputs/ai_analysis_26b.md`",
         "- 26b HTML: `outputs/ai_analysis_26b.html`",
         "- 31b MD : `outputs/ai_analysis_31b.md`",
         "- 31b HTML: `outputs/ai_analysis_31b.html`",
-        "- qwen36 MD : `outputs/ai_analysis_qwen36.md`",
-        "- qwen36 HTML: `outputs/ai_analysis_qwen36.html`",
         "",
         "## 동일 DATA FACTS 확인",
-        "세 모델 모두 완전히 동일한 DATA FACTS와 동일한 프롬프트를 사용했습니다.",
+        "두 모델 모두 완전히 동일한 DATA FACTS와 동일한 프롬프트를 사용했습니다.",
+        "qwen3.6은 삼파전 테스트 결과 제외됨.",
         "",
         "---",
         "*비교 리포트는 Ollama 없이 Python 코드로 생성 (deterministic)*",
@@ -531,7 +570,6 @@ table.cmp td.lbl{font-weight:600;color:#444;width:140px;white-space:nowrap}
 .warn{color:#e65100;font-weight:600}
 .col-a{background:#f0f8ff}
 .col-b{background:#fff8f0}
-.col-c{background:#f8f0ff}
 .box{background:#fff;border-radius:10px;padding:16px 20px;border:1px solid #dde3f0;
      box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px}
 .section-title{font-size:12px;font-weight:700;color:#1a237e;text-transform:uppercase;
@@ -544,25 +582,27 @@ table.cmp td.lbl{font-weight:600;color:#444;width:140px;white-space:nowrap}
         if v.startswith("⚠"):  return f'<span class="warn">{v}</span>'
         return v
 
-    def _crow3(key, va, vb, vc):
+    def _crow2(key, va, vb):
         return (f'<tr><td class="lbl">{key}</td>'
                 f'<td class="col-a">{_styled(va)}</td>'
-                f'<td class="col-b">{_styled(vb)}</td>'
-                f'<td class="col-c">{_styled(vc)}</td></tr>')
+                f'<td class="col-b">{_styled(vb)}</td></tr>')
 
     facts_esc = data_facts.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-    ma, mb, mc = all_res[0]['model'], all_res[1]['model'], all_res[2]['model']
+    # 복사용 raw text: MD 비교 리포트 내용
+    raw_esc_cmp = md_text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>Jason AI 삼파전 비교</title>
+<title>Jason AI 비교 — 26b vs 31b</title>
 <style>{compare_css}</style>
 </head>
 <body>
-<h1 style="margin-top:0">📊 Jason AI 삼파전 비교 리포트</h1>
+<h1 style="margin-top:0">📊 Jason AI 비교 리포트 (26b vs 31b)</h1>
 <div class="meta">{ts} — 동일 DATA FACTS 기반 | API 비용 없음</div>
+<button id="copy-cmp-btn" class="copy-btn" onclick="copyAnalysis('copy-cmp-btn','raw-cmp-text')">전체복사</button>
+<textarea id="raw-cmp-text" style="display:none" readonly>{raw_esc_cmp}</textarea>
 
 <div class="box">
 <div class="section-title">실행 결과 비교</div>
@@ -570,20 +610,19 @@ table.cmp td.lbl{font-weight:600;color:#444;width:140px;white-space:nowrap}
 <thead>
   <tr>
     <th>항목</th>
-    <th class="col-a">{ma}</th>
-    <th class="col-b">{mb}</th>
-    <th class="col-c">{mc}</th>
+    <th class="col-a">{res_a['model']}</th>
+    <th class="col-b">{res_b['model']}</th>
   </tr>
 </thead>
 <tbody>
-  {_crow3("성공 여부",    *ok_strs)}
-  {_crow3("실행 시간",    *t_strs)}
-  {_crow3("출력 길이(자)", *len_strs)}
-  {_crow3("금지 표현",    *forb_strs)}
-  {_crow3("숫자 왜곡",   *susp_strs)}
-  {_crow3("한 줄 판정",   *verd_strs)}
-  {_crow3("장점",         *pros_list)}
-  {_crow3("단점",         *cons_list)}
+  {_crow2("성공 여부",    ra[0], rb[0])}
+  {_crow2("실행 시간",    ra[1], rb[1])}
+  {_crow2("출력 길이(자)", ra[2], rb[2])}
+  {_crow2("금지 표현",    ra[3], rb[3])}
+  {_crow2("숫자 왜곡",   ra[4], rb[4])}
+  {_crow2("한 줄 판정",   ra[5], rb[5])}
+  {_crow2("장점",         ra[6], rb[6])}
+  {_crow2("단점",         ra[7], rb[7])}
 </tbody>
 </table>
 </div>
@@ -591,22 +630,19 @@ table.cmp td.lbl{font-weight:600;color:#444;width:140px;white-space:nowrap}
 <div class="box">
 <div class="section-title">저장 파일</div>
 <ul>
-  <li>26b: <a href="ai_analysis_26b.html">ai_analysis_26b.html</a> /
-           <a href="ai_analysis_26b.md">ai_analysis_26b.md</a></li>
-  <li>31b: <a href="ai_analysis_31b.html">ai_analysis_31b.html</a> /
-           <a href="ai_analysis_31b.md">ai_analysis_31b.md</a></li>
-  <li>qwen36: <a href="ai_analysis_qwen36.html">ai_analysis_qwen36.html</a> /
-              <a href="ai_analysis_qwen36.md">ai_analysis_qwen36.md</a></li>
+  <li>26b: <a href="ai_analysis_26b.html">ai_analysis_26b.html</a> / ai_analysis_26b.md</li>
+  <li>31b: <a href="ai_analysis_31b.html">ai_analysis_31b.html</a> / ai_analysis_31b.md</li>
 </ul>
 </div>
 
 <div class="box">
-<div class="section-title">DATA FACTS (세 모델 공통 입력)</div>
+<div class="section-title">DATA FACTS (두 모델 공통 입력)</div>
 <pre class="facts">{facts_esc}</pre>
 </div>
 <p style="color:#888;font-size:11px;margin-top:16px">
   *비교 리포트는 Ollama 없이 Python 코드로 생성 (deterministic)*
 </p>
+{_COPY_JS}
 </body>
 </html>"""
 
@@ -617,41 +653,124 @@ table.cmp td.lbl{font-weight:600;color:#444;width:140px;white-space:nowrap}
     return md_path, html_path
 
 
-def run_ollama_triple_test(results: list, macro: dict, ts: str) -> dict:
-    """
-    Ollama 삼파전: gemma4:26b / gemma4:31b / qwen3.6:latest 동시 비교.
+# ── 모드 선택 ──────────────────────────────────────────────────────
 
-    - 세 모델 모두 동일한 DATA FACTS + 동일한 프롬프트 사용
-    - 한 모델 실패해도 나머지 계속 실행
-    - 결과 파일 + 비교 리포트 저장
-    - 반환: {'26b': res, '31b': res, 'qwen36': res, 'data_facts': str}
+def _select_mode() -> tuple:
+    """사용자 입력 또는 환경변수로 분석 모드 선택.
+
+    우선순위:
+      1) 환경변수 JASON_MARKET_AI_MODE (fast/precise/26b/31b)
+      2) 터미널 대화형 선택
+      3) 기본값 = 정밀 분석 (gemma4:31b)
+
+    Returns
+    -------
+    (model: str, label: str, mode_name: str)
+    """
+    env = os.getenv('JASON_MARKET_AI_MODE', '').strip().lower()
+    if env in ('fast', '빠른', '26b'):
+        m = _OLLAMA_MODEL_FAST
+    elif env in ('precise', '정밀', '31b'):
+        m = _OLLAMA_MODEL_PRECISE
+    else:
+        # 대화형 선택
+        print()
+        print(f"  {'─'*45}")
+        print(f"  종합 AI 분석 모드 선택:")
+        print(f"  1. 정밀 분석  (gemma4:31b, 기본)   약 3~4분")
+        print(f"  2. 빠른 분석  (gemma4:26b)          약 45초")
+        try:
+            choice = input("  선택 [Enter=1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = ""
+        m = _OLLAMA_MODEL_FAST if choice == "2" else _OLLAMA_MODEL_PRECISE
+
+    return m, _OLLAMA_MODEL_LABEL[m], _OLLAMA_MODEL_NAME[m]
+
+
+# ── 단일 모델 실행 ─────────────────────────────────────────────────
+
+def run_ollama_single(results: list, macro: dict, ts: str,
+                      model: str, label: str, mode_name: str) -> dict:
+    """
+    단일 Ollama 모델 분석 실행.
+
+    - DATA FACTS = 기존 3개 표
+    - 결과 → ai_analysis_{label}.md/html + ai_analysis_latest.md/html
+    - 브라우저로 latest.html 자동 오픈
+    - 실패해도 프로그램 종료 안 함
+    """
+    import ollama_client as _oc
+    _timeout = _oc.MODEL_TIMEOUTS.get(model, _oc.DEFAULT_TIMEOUT)
+
+    print(f"\n{'━'*62}")
+    if mode_name == "정밀 분석":
+        print(f"  모드: {CYAN}로컬 LLM 정밀 분석 (Ollama {model}){RESET}")
+    else:
+        print(f"  모드: {CYAN}로컬 LLM 빠른 분석 (Ollama {model}){RESET}")
+    print(f"  API 비용 없음")
+    print(f"  분석 완료 후 약 30초 뒤 모델 자동 언로드")
+    print(f"{'━'*62}")
+
+    data_facts = build_data_facts(results, macro)
+    prompt     = _build_ollama_prompt(data_facts, "")
+
+    print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자, 기존 3개 표만 사용)")
+    print(f"  {model} 분석 중 (최대 {_timeout}s)...", flush=True)
+
+    res = _oc.generate(prompt, model)
+
+    if res['success']:
+        _, forb  = _oc.validate_output(res['text'])
+        verdict  = _oc.extract_verdict(res['text'])
+        warn_s   = f"  {AMBER}⚠ 금지 표현: {forb}{RESET}" if forb else ""
+        print(f"  완료  {res['elapsed']}s  {len(res['text'])}자  판정: {verdict}{warn_s}")
+
+        md_path   = _save_result_md(res['text'], label)
+        html_path = _save_result_html(res['text'], label, model, ts, data_facts)
+        lat_md, lat_html = _save_latest(res['text'], model, ts, data_facts)
+
+        print(f"\n  MD      : {md_path}")
+        print(f"  HTML    : {html_path}")
+        print(f"  latest  : {lat_html}")
+        webbrowser.open(f"file://{lat_html}")
+    else:
+        print(f"  {ALERT}⚠ {model} 실패: {res['error']}{RESET}")
+        print(f"  → Ollama 실패, 기존 알고리즘 분석 fallback 유지")
+        err_text = (f"# {model} 분석 실패\n\n"
+                    f"오류: {res['error']}\n실행 시간: {res['elapsed']}s\n")
+        _save_result_md(err_text, label)
+        _save_result_html(err_text, label, model, ts, data_facts)
+
+    return res
+
+
+# ── 비교 모드 (JASON_MARKET_AI_COMPARE=true) ──────────────────────
+
+def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
+    """
+    26b + 31b 비교 모드.
+    환경변수 JASON_MARKET_AI_COMPARE=true 일 때만 호출.
+    qwen3.6 제외.
     """
     import ollama_client as _oc
 
     print(f"\n{'━'*62}")
-    print(f"  모드: {CYAN}로컬 LLM 삼파전 비교{RESET}")
-    for i, m in enumerate(_OLLAMA_MODELS):
-        tag = chr(65 + i)  # A, B, C
-        print(f"  모델 {tag}: {m}  (timeout={_oc.MODEL_TIMEOUTS.get(m, _oc.DEFAULT_TIMEOUT)}s)")
-    print(f"  keep_alive: {_oc.KEEP_ALIVE}")
-    print(f"  temperature: {_oc.DEFAULT_OPTIONS.get('temperature', 0.2)}")
-    print(f"  출력 길이: 프롬프트 지시로 제어 (thinking 토큰 호환)")
+    print(f"  모드: {CYAN}로컬 LLM 비교 분석 (gemma4:26b vs gemma4:31b){RESET}")
+    print(f"  qwen3.6 제외")
     print(f"  API 비용 없음")
     print(f"{'━'*62}")
 
-    # ── DATA FACTS 공통 생성 (세 모델 동일) ──────────────
     data_facts = build_data_facts(results, macro)
-    prompt     = _build_ollama_prompt(data_facts, "")   # 모델명 대입 없음
+    prompt     = _build_ollama_prompt(data_facts, "")
     print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자)")
-    print(f"  프롬프트 총 길이: {len(prompt)}자")
-    print(f"  (세 모델 모두 동일한 DATA FACTS + 프롬프트 사용)")
 
     results_map = {}
-    for model in _OLLAMA_MODELS:
-        label = _OLLAMA_LABELS[model]
-        tag   = _OLLAMA_TAGS[model]
+    for model, label, tag in [
+        (_OLLAMA_MODEL_FAST,    "26b", "[A]"),
+        (_OLLAMA_MODEL_PRECISE, "31b", "[B]"),
+    ]:
         _timeout = _oc.MODEL_TIMEOUTS.get(model, _oc.DEFAULT_TIMEOUT)
-
         print(f"\n  {tag} {model} 분석 중 (최대 {_timeout}s)...", flush=True)
 
         res = _oc.generate(prompt, model)
@@ -662,35 +781,25 @@ def run_ollama_triple_test(results: list, macro: dict, ts: str) -> dict:
             verdict = _oc.extract_verdict(res['text'])
             warn_s  = f"  {AMBER}⚠ 금지 표현: {forb}{RESET}" if forb else ""
             print(f"  {tag} 완료  {res['elapsed']}s  {len(res['text'])}자  판정: {verdict}{warn_s}")
-            md_path   = _save_result_md(res['text'], label)
-            html_path = _save_result_html(res['text'], label, model, ts, data_facts)
-            print(f"       MD  : {md_path}")
-            print(f"       HTML: {html_path}")
+            _save_result_md(res['text'], label)
+            _save_result_html(res['text'], label, model, ts, data_facts)
         else:
             print(f"  {tag} {ALERT}{model} 실패: {res['error']}{RESET}")
-            print(f"       → 결과 파일에 실패 사유 기록, 다음 모델 계속 실행")
-            err_text = (f"# {model} 분석 실패\n\n"
-                        f"오류: {res['error']}\n"
-                        f"실행 시간: {res['elapsed']}s\n"
-                        f"keep_alive: {_oc.KEEP_ALIVE}\n"
-                        f"timeout 설정: {_timeout}s\n")
+            err_text = f"# {model} 분석 실패\n\n오류: {res['error']}\n실행 시간: {res['elapsed']}s\n"
             _save_result_md(err_text, label)
-            # 빈 HTML도 생성
             _save_result_html(err_text, label, model, ts, data_facts)
 
-    # ── 비교 리포트 ──────────────────────────────────────
     _empty = lambda m: {"success": False, "text": "", "error": "실행 안 됨",
-                         "elapsed": 0, "model": m}
-    res_a = results_map.get("26b",    _empty(_OLLAMA_MODELS[0]))
-    res_b = results_map.get("31b",    _empty(_OLLAMA_MODELS[1]))
-    res_c = results_map.get("qwen36", _empty(_OLLAMA_MODELS[2]))
+                        "elapsed": 0, "model": m}
+    res_a = results_map.get("26b", _empty(_OLLAMA_MODEL_FAST))
+    res_b = results_map.get("31b", _empty(_OLLAMA_MODEL_PRECISE))
 
-    md_cmp, html_cmp = _save_compare(res_a, res_b, res_c, data_facts, ts)
+    md_cmp, html_cmp = _save_compare(res_a, res_b, data_facts, ts)
     print(f"\n  비교 리포트 MD  : {md_cmp}")
     print(f"  비교 리포트 HTML: {html_cmp}")
     webbrowser.open(f"file://{html_cmp}")
 
-    return {"26b": res_a, "31b": res_b, "qwen36": res_c, "data_facts": data_facts}
+    return {"26b": res_a, "31b": res_b, "data_facts": data_facts}
 
 
 # ── AI 분석 실행 ──────────────────────────────────────────
@@ -1017,13 +1126,26 @@ def main():
         print(f"  {r['name']:<14} {rsi_s:>5} {macd_s:>6} {r['pct_b']:>5.0f}% "
               f"{r['pos52']:>5.0f}%" if r['pos52'] else f"  {r['name']:<14} {rsi_s:>5} {macd_s:>6} {r['pct_b']:>5.0f}%")
 
-    # ── Ollama 삼파전 비교 (가능할 때) ───────────────────────
+    # ── Ollama 분석 (가능할 때) ─────────────────────────────
+    ollama_used = False
     if _ollama_ok:
-        run_ollama_triple_test(results, macro, ts)
+        compare_mode = os.getenv('JASON_MARKET_AI_COMPARE', '').strip().lower() in ('true', '1', 'yes')
+        if compare_mode:
+            # 비교 모드: 26b + 31b 동시 실행 → compare HTML
+            run_ollama_compare(results, macro, ts)
+            ollama_used = True
+        else:
+            # 기본 모드: 단일 모델 선택 실행
+            _model, _label, _mode_name = _select_mode()
+            res = run_ollama_single(results, macro, ts, _model, _label, _mode_name)
+            ollama_used = res.get('success', False)
 
-    # ── 기존 Groq / 알고리즘 분석 (항상 실행, fallback 역할) ─
+    # ── 기존 알고리즘 / Groq fallback ───────────────────────
     print(f"\n  {'─'*56}")
-    print(f"  기존 분석 실행 중 ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
+    if ollama_used:
+        print(f"  기존 알고리즘 분석 (참고용 fallback)...")
+    else:
+        print(f"  기존 분석 실행 중 ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
     tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text)
 
     # 터미널 결과 출력

@@ -17,9 +17,8 @@ KEEP_ALIVE      = "30s"
 
 # 모델별 timeout (초) — 크기별 차등 적용
 MODEL_TIMEOUTS: dict = {
-    "gemma4:26b":      240,
-    "gemma4:31b":      600,
-    "qwen3.6:latest":  600,
+    "gemma4:26b": 240,   # 빠른 분석
+    "gemma4:31b": 600,   # 정밀 분석 (기본)
 }
 DEFAULT_TIMEOUT = 300   # 알 수 없는 모델의 기본값
 
