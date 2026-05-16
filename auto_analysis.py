@@ -355,7 +355,7 @@ def build_data_facts(results, macro) -> str:
 
 def _build_ollama_prompt(data_facts: str, model: str) -> str:
     """DATA FACTS + 시스템 역할 합성 → 최종 Ollama 프롬프트.
-    세 모델 모두 동일한 DATA FACTS와 동일한 프롬프트 구조를 사용한다."""
+    두 모델 모두 동일한 DATA FACTS와 동일한 프롬프트 구조를 사용한다."""
     return (
         f"{_OLLAMA_SYSTEM}\n\n"
         f"DATA FACTS (아래 숫자 이외의 수치는 사용하지 말 것):\n"
@@ -363,6 +363,28 @@ def _build_ollama_prompt(data_facts: str, model: str) -> str:
         f"{data_facts}\n"
         f"{'─'*60}\n\n"
         f"위 DATA FACTS를 기반으로 분석하라."
+    )
+
+
+# compact prompt — 기본 프롬프트 실패/빈응답 시 1회만 사용
+_OLLAMA_COMPACT_SYSTEM = """너는 Jason의 포트폴리오 표를 해석하는 분석 보조자다. 매수/매도 추천 금지.
+DATA FACTS의 숫자만 사용. 외부 기준·역사적 평균 언급 금지. 금지 표현: 강력 매수/매도, 지금 사야/팔아야, 확정 상승/하락."""
+
+
+def _build_compact_prompt(data_facts: str) -> str:
+    """기본 프롬프트 실패 시 1회 재시도용 간결 프롬프트."""
+    return (
+        f"{_OLLAMA_COMPACT_SYSTEM}\n\n"
+        f"DATA FACTS:\n{data_facts}\n\n"
+        "아래 형식으로 한국어 분석. 각 섹션 2~4줄 이내.\n\n"
+        "# Jason 종합 AI 분석\n\n"
+        "## 1. 시세 흐름 요약\n"
+        "## 2. 기술지표 해석\n"
+        "## 3. 거시지표 해석\n"
+        "## 4. 리스크 체크\n"
+        "## 5. 하지 말아야 할 것\n"
+        "## 6. 한 줄 판정\n"
+        "주의/중립/양호 중 하나 + 이유 한 문장"
     )
 
 
@@ -695,20 +717,23 @@ def run_ollama_single(results: list, macro: dict, ts: str,
     """
     단일 Ollama 모델 분석 실행.
 
-    - DATA FACTS = 기존 3개 표
-    - 결과 → ai_analysis_{label}.md/html + ai_analysis_latest.md/html
-    - 브라우저로 latest.html 자동 오픈
-    - 실패해도 프로그램 종료 안 함
+    흐름:
+      1. 기본 프롬프트로 generate() 호출
+      2. 빈/불완전 응답이면 compact prompt로 1회만 재시도
+      3. 성공 → md/html + latest 저장, 브라우저 오픈
+      4. 실패 → 오류 파일 저장, 호출자에 실패 반환 (fallback은 main()이 처리)
     """
     import ollama_client as _oc
     _timeout = _oc.MODEL_TIMEOUTS.get(model, _oc.DEFAULT_TIMEOUT)
+    _opts    = _oc.MODEL_OPTIONS.get(model, _oc.DEFAULT_OPTIONS)
 
     print(f"\n{'━'*62}")
     if mode_name == "정밀 분석":
         print(f"  모드: {CYAN}로컬 LLM 정밀 분석 (Ollama {model}){RESET}")
     else:
         print(f"  모드: {CYAN}로컬 LLM 빠른 분석 (Ollama {model}){RESET}")
-    print(f"  API 비용 없음")
+    print(f"  API 비용 없음  |  keep_alive: {_oc.KEEP_ALIVE}"
+          f"  |  num_predict: {_opts.get('num_predict','—')}")
     print(f"  분석 완료 후 약 30초 뒤 모델 자동 언로드")
     print(f"{'━'*62}")
 
@@ -720,7 +745,24 @@ def run_ollama_single(results: list, macro: dict, ts: str,
 
     res = _oc.generate(prompt, model)
 
-    if res['success']:
+    # ── 빈/불완전 응답 처리 → compact prompt 1회 재시도 ──────
+    if res['success'] and not _oc.is_valid_response(res['text']):
+        print(f"  {AMBER}⚠ 불완전 응답 ({len(res['text'])}자) "
+              f"→ compact prompt 1회 재시도{RESET}", flush=True)
+        compact = _build_compact_prompt(data_facts)
+        res2    = _oc.generate(compact, model)
+        if res2['success'] and _oc.is_valid_response(res2['text']):
+            res = res2
+            print(f"  compact 재시도 성공 ({res['elapsed']}s, {len(res['text'])}자)")
+        else:
+            # 재시도도 실패 → success=False로 처리
+            res = {**res2,
+                   "success": False,
+                   "error":   "빈 응답 반복 (compact 재시도 후에도 실패)"}
+            print(f"  {ALERT}compact 재시도 실패{RESET}")
+
+    # ── 결과 처리 ────────────────────────────────────────────
+    if res['success'] and _oc.is_valid_response(res['text']):
         _, forb  = _oc.validate_output(res['text'])
         verdict  = _oc.extract_verdict(res['text'])
         warn_s   = f"  {AMBER}⚠ 금지 표현: {forb}{RESET}" if forb else ""
@@ -734,13 +776,17 @@ def run_ollama_single(results: list, macro: dict, ts: str,
         print(f"  HTML    : {html_path}")
         print(f"  latest  : {lat_html}")
         webbrowser.open(f"file://{lat_html}")
+        # 성공 플래그 보장
+        res = {**res, "success": True}
     else:
-        print(f"  {ALERT}⚠ {model} 실패: {res['error']}{RESET}")
-        print(f"  → Ollama 실패, 기존 알고리즘 분석 fallback 유지")
+        err_msg = res.get('error', '알 수 없는 오류')
+        print(f"  {ALERT}⚠ {model} 실패: {err_msg}{RESET}")
+        print(f"  → 기존 알고리즘 분석 fallback 진행")
         err_text = (f"# {model} 분석 실패\n\n"
-                    f"오류: {res['error']}\n실행 시간: {res['elapsed']}s\n")
+                    f"오류: {err_msg}\n실행 시간: {res['elapsed']}s\n")
         _save_result_md(err_text, label)
         _save_result_html(err_text, label, model, ts, data_facts)
+        res = {**res, "success": False}
 
     return res
 
@@ -751,13 +797,11 @@ def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
     """
     26b + 31b 비교 모드.
     환경변수 JASON_MARKET_AI_COMPARE=true 일 때만 호출.
-    qwen3.6 제외.
     """
     import ollama_client as _oc
 
     print(f"\n{'━'*62}")
     print(f"  모드: {CYAN}로컬 LLM 비교 분석 (gemma4:26b vs gemma4:31b){RESET}")
-    print(f"  qwen3.6 제외")
     print(f"  API 비용 없음")
     print(f"{'━'*62}")
 
@@ -1140,22 +1184,30 @@ def main():
             res = run_ollama_single(results, macro, ts, _model, _label, _mode_name)
             ollama_used = res.get('success', False)
 
-    # ── 기존 알고리즘 / Groq fallback ───────────────────────
-    print(f"\n  {'─'*56}")
-    if ollama_used:
-        print(f"  기존 알고리즘 분석 (참고용 fallback)...")
+    # ── fallback: Ollama 미사용/실패 시에만 실행 ────────────
+    if not ollama_used:
+        print(f"\n  {'─'*56}")
+        if _ollama_ok:
+            print(f"  Ollama 실패 → 기존 분석 실행"
+                  f" ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
+        else:
+            print(f"  Ollama 미사용 → 기존 분석 실행"
+                  f" ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
+
+        tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text)
+
+        print(f"\n{'━'*62}")
+        if tech_t:  print(tech_t)
+        if macro_t: print(f"\n{macro_t}")
+        if final_t: print(f"\n{final_t}")
+        print(f"{'━'*62}\n")
+
+        generate_html(results, macro, tech_t, macro_t, final_t, is_ai, ts)
     else:
-        print(f"  기존 분석 실행 중 ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
-    tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text)
-
-    # 터미널 결과 출력
-    print(f"\n{'━'*62}")
-    if tech_t:  print(tech_t)
-    if macro_t: print(f"\n{macro_t}")
-    if final_t: print(f"\n{final_t}")
-    print(f"{'━'*62}\n")
-
-    generate_html(results, macro, tech_t, macro_t, final_t, is_ai, ts)
+        # Ollama 성공 → latest.html 이미 오픈됨, 알고리즘 fallback 생략
+        print(f"\n{'━'*62}")
+        print(f"  ✅ Ollama 분석 완료 — 알고리즘 fallback 생략")
+        print(f"{'━'*62}\n")
 
 if __name__ == '__main__':
     main()

@@ -4,7 +4,7 @@
 endpoint  : http://127.0.0.1:11434/api/generate
 stream    : false
 keep_alive: 30s  (모델 자동 언로드 타이머)
-options   : temperature=0.2, num_predict=1800
+num_predict: 모델별 차등 (thinking 토큰 예산 확보)
 """
 
 import re
@@ -15,21 +15,23 @@ import requests
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434/api/generate"
 KEEP_ALIVE      = "30s"
 
-# 모델별 timeout (초) — 크기별 차등 적용
+# 모델별 timeout (초)
 MODEL_TIMEOUTS: dict = {
-    "gemma4:26b": 240,   # 빠른 분석
+    "gemma4:26b": 300,   # 빠른 분석
     "gemma4:31b": 600,   # 정밀 분석 (기본)
 }
-DEFAULT_TIMEOUT = 300   # 알 수 없는 모델의 기본값
+DEFAULT_TIMEOUT = 300
 
-# Ollama 공통 generation 옵션
-# ※ num_predict를 설정하지 않는 이유:
-#    Gemma4 / Qwen3 계열은 thinking(내부 추론) 토큰이 num_predict 예산을 먼저 소모해
-#    visible output이 0이 되는 문제가 발생합니다.
-#    출력 길이 제한은 프롬프트 내 "5줄 이내" 지시로 제어합니다.
-DEFAULT_OPTIONS: dict = {
-    "temperature": 0.2,
+# 모델별 generation 옵션
+# ※ num_predict 설정 이유:
+#    Gemma4 계열은 thinking(내부 추론) 토큰이 먼저 실행된다.
+#    num_predict가 너무 작으면 thinking 단계에서 예산을 소모해 visible output이 0이 된다.
+#    4096 / 6144로 충분한 예산을 확보하여 이 문제를 방지한다.
+MODEL_OPTIONS: dict = {
+    "gemma4:26b": {"temperature": 0.2, "num_predict": 4096},
+    "gemma4:31b": {"temperature": 0.2, "num_predict": 6144},
 }
+DEFAULT_OPTIONS: dict = {"temperature": 0.2}   # 알 수 없는 모델 fallback
 
 # ── 금지 표현 목록 ─────────────────────────────────────────────────
 FORBIDDEN_PHRASES: list = [
@@ -64,9 +66,9 @@ def generate(prompt: str,
     Parameters
     ----------
     prompt  : str    완성된 분석 프롬프트
-    model   : str    예) "gemma4:26b" / "gemma4:31b" / "qwen3.6:latest"
+    model   : str    예) "gemma4:26b" / "gemma4:31b"
     timeout : int    HTTP 타임아웃(초). None이면 MODEL_TIMEOUTS 자동 적용.
-    options : dict   generation 옵션. None이면 DEFAULT_OPTIONS 사용.
+    options : dict   generation 옵션. None이면 MODEL_OPTIONS 자동 적용.
 
     Returns
     -------
@@ -78,7 +80,7 @@ def generate(prompt: str,
         model   : str    호출한 모델명
     """
     _timeout = timeout if timeout is not None else MODEL_TIMEOUTS.get(model, DEFAULT_TIMEOUT)
-    _options = options if options is not None else DEFAULT_OPTIONS.copy()
+    _options = options if options is not None else MODEL_OPTIONS.get(model, DEFAULT_OPTIONS).copy()
 
     payload = {
         "model":      model,
@@ -116,6 +118,22 @@ def generate(prompt: str,
 
 # ── 검증 ──────────────────────────────────────────────────────────
 
+def is_valid_response(text: str) -> bool:
+    """
+    응답이 유효한지 판단.
+
+    아래 조건이면 False (빈 응답 또는 불완전 응답):
+    - None / 빈 문자열
+    - strip 후 50자 미만
+    - 마크다운 제목(##)과 판정 키워드(주의/중립/양호) 모두 없음
+    """
+    if not text or len(text.strip()) < 50:
+        return False
+    has_heading = bool(re.search(r'^##?\s+', text, re.MULTILINE))
+    has_verdict = any(w in text for w in ('주의', '중립', '양호', '판정'))
+    return has_heading or has_verdict
+
+
 def validate_output(text: str) -> tuple:
     """
     금지 표현 검사.
@@ -150,7 +168,6 @@ def extract_verdict(text: str) -> str:
     LLM 출력에서 '한 줄 판정' 섹션(## 6 또는 ## 7) 이후 첫 실질 줄 추출.
     없으면 '주의/중립/양호' 키워드 검색.
     """
-    # 섹션 6 또는 7 탐색
     match = re.search(r'##\s*[67][.\s]*한\s*줄\s*판정', text)
     if match:
         after = text[match.end():]
@@ -158,7 +175,6 @@ def extract_verdict(text: str) -> str:
             line = line.strip().lstrip('-').strip()
             if line and not line.startswith('#'):
                 return line[:120]
-    # 키워드 fallback
     for word in ['주의', '중립', '양호']:
         if word in text:
             return word
