@@ -1,3 +1,4 @@
+from __future__ import annotations
 """yfinance 가격 데이터 통합 헬퍼
 Yahoo Finance v8 API — curl 직접 호출 (429 Rate-Limit 우회)
 
@@ -196,13 +197,13 @@ def _us_equity_price_data(ticker: str) -> dict | None:
 
     - chartPreviousClose 메타값은 range에 따라 변하는 잘못된 값 → 사용 안 함
     - range=2d 일봉 closes[0]=어제, closes[1]=오늘 → _resolve_prev로 전일 종가 정확 추출
-    curr 소스:
-    - 정규장 (22:30~05:00 KST): Yahoo regularMarketPrice (실시간)
-    - 애프터마켓 (05:00~09:00 KST): Pyth POST MARKET → Yahoo
-    - 주간거래 (09:00~17:00 KST): Pyth OVERNIGHT → Yahoo (블루오션 근사치)
-    - 프리마켓 (17:00~22:30 KST): Pyth PRE MARKET → Yahoo
 
-    prev: Yahoo range=2d 역사 종가 → 전일 정규장 종가 (chartPreviousClose 버그 우회)
+    세션별 curr/prev 로직:
+    - 정규장 (22:30~05:00 KST): Yahoo regularMarketPrice 실시간 / prev = 전일 종가
+    - 블루오션 (09:00~17:00 KST): 미국 장 완전 마감 상태 → Yahoo 마감가를 curr로 사용
+                                   prev = 그 전날 종가 / 선물 추정 없음 (Yahoo Finance 일치)
+    - 프리마켓 (17:00~22:30 KST): Pyth PRE MARKET → 선물 추정 → Yahoo / prev = 마지막 종가
+    - 애프터마켓 (05:00~09:00 KST): Pyth POST MARKET → 선물 추정 → Yahoo / prev = 마지막 종가
     """
     # Yahoo에서 curr + closes 준비
     result = _chart(ticker, interval='1d', range_='2d')
@@ -221,21 +222,31 @@ def _us_equity_price_data(ticker: str) -> dict | None:
 
     session = _kst_session()
 
-    # ── prev 결정 ────────────────────────────────────────────────────
+    # ── 블루오션 전용 경로 ────────────────────────────────────────────
+    # 미국 장 완전 마감(한국 낮 시간) → QQQM 거래 없음
+    # Yahoo regularMarketPrice = 가장 최근 정규장 종가 → 그대로 curr로 사용
+    # prev = _resolve_prev: curr ≈ closes[-1] → closes[-2] (하루 전 종가) 반환
+    # 결과: Yahoo Finance 앱 표시와 동일한 종가·등락률
+    if session == 'blue_ocean':
+        prev = _resolve_prev(yahoo_curr, closes)
+        if not prev:
+            return None
+        pct = (yahoo_curr - prev) / prev * 100
+        return {'curr': yahoo_curr, 'prev': prev, 'pct': pct}
+
+    # ── prev 결정 (정규장 / 프리·애프터) ─────────────────────────────
     # 정규장: _resolve_prev 로 "오늘 장 중 vs 어제 종가" 정확 판단
-    # 비정규장(Blue Ocean/Pre/Post): closes[-1] = 가장 최근 정규장 종가 (= 비교 기준점)
-    #   * 예) 한국 월요일 낮 = 미국 일요일 밤 (Blue Ocean)
-    #         closes[-1] = 금요일 정규장 종가 → 이것이 올바른 prev
-    #   * _resolve_prev 를 쓰면 curr ≈ closes[-1] 이라서 closes[-2] (목요일) 반환 → 오류!
+    # 프리·애프터마켓: closes[-1] = 가장 최근 정규장 종가 (= 비교 기준점)
     if session == 'regular':
         prev = _resolve_prev(yahoo_curr, closes)
     else:
-        prev = closes[-1]   # 가장 최근 정규장 종가 = 블루오션 비교 기준
+        prev = closes[-1]   # 가장 최근 정규장 종가 = pre/post 비교 기준
 
     if not prev:
         return None
 
-    # ── curr 결정 (비정규장만) ────────────────────────────────────────
+    # ── curr 결정 (프리·애프터마켓만) ────────────────────────────────
+    # 실제 거래가 이뤄지는 세션에서만 Pyth/선물 추정으로 현재가 보정
     curr = yahoo_curr
     if session != 'regular':
         # 1순위: Pyth 세션 특화 피드 (신선도 30분 이내만 사용)
@@ -244,7 +255,6 @@ def _us_equity_price_data(ticker: str) -> dict | None:
             curr = pyth
         else:
             # 2순위: 연관 선물 등락률 기반 추정 (QQQM→NQ=F, SPY→ES=F 등)
-            #        기준점: prev (= closes[-1] = 가장 최근 정규장 종가)
             est = _futures_estimate(ticker, prev)
             if est:
                 curr = est
@@ -253,7 +263,7 @@ def _us_equity_price_data(ticker: str) -> dict | None:
                 pyth_reg = _pyth_curr(ticker, session, session_only=False, max_age_min=120)
                 if pyth_reg:
                     curr = pyth_reg
-                # 4순위: yahoo_curr (정규장 종가) 그대로 → pct=0
+                # 4순위: yahoo_curr (정규장 종가) 그대로
 
     pct = (curr - prev) / prev * 100
     return {'curr': curr, 'prev': prev, 'pct': pct}
