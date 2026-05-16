@@ -1,13 +1,13 @@
-from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
-
 #!/usr/bin/env python3
 """
-Jason Market — 종합 AI 분석 (11번)
+Jason Market — 종합 AI 분석 (9번)
 기술적 + 거시경제 + 리스크 멀티관점 분석
-무료 Groq API (Llama-3.3-70B) 사용 / 키 없으면 알고리즘 분석
+Ollama 로컬 LLM A/B 분석 / Groq 무료 API / 알고리즘 fallback
 """
 
-import os, requests, webbrowser, tempfile
+from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+
+import os, re, requests, webbrowser, tempfile
 import yfinance as yf
 import numpy as np
 from datetime import datetime
@@ -236,6 +236,467 @@ def algo_analysis(results, macro):
 
     lines.append("\n※ Groq API 키 없음 → 알고리즘 분석 (GROQ_API_KEY를 .env에 추가하면 AI 분석 활성화)")
     return "\n".join(lines)
+
+# ══════════════════════════════════════════════════════════
+# ── Ollama 로컬 LLM A/B 분석 (신규) ──────────────────────
+# ══════════════════════════════════════════════════════════
+
+_OLLAMA_MODELS = ["gemma4:26b", "gemma4:31b"]
+
+_OLLAMA_SYSTEM = """너는 Jason의 "9. 종합 AI 분석"을 해석하는 로컬 AI 분석 보조자다.
+매수/매도 추천자가 아니다. 아래 금지 표현은 절대 사용하지 않는다:
+강력 매수, 강력 매도, 지금 사야, 지금 팔아야, 확정 상승, 확정 하락, 폭락 확정, 수익 보장, 투자 추천.
+
+분석 기준:
+- 시세 요약의 일간/1주/1달 흐름을 비교한다.
+- 기술지표는 과열/침체/주의 관점으로만 해석한다. 매수/매도 신호로 단정하지 않는다.
+- RSI 과매수는 바로 매도 신호가 아니다. MACD 양전환은 바로 매수 신호가 아니다.
+- 볼린저 상단 근접은 과열 또는 변동성 확대 신호로만 본다.
+- 52주 위치가 높으면 장기 강세와 과열 가능성을 함께 본다.
+- VIX, DXY, US10Y, USDKRW는 거시 부담/완충 요인으로 해석한다.
+- CD금리 상품은 현금성 자산으로 분류한다.
+- 숫자는 DATA FACTS 기준만 사용한다. 새 숫자를 만들지 않는다.
+
+다음 형식대로 한국어로 분석하라:
+
+# Jason 종합 AI 분석
+
+## 1. 데이터 기준
+- 분석 시각: (DATA FACTS 첫 줄에서 가져올 것)
+- 데이터 출처: 기존 9번 시세요약/기술지표/거시지표
+- 로컬 모델명: (아래 전달되는 {model} 값 사용)
+
+## 2. 시세 흐름 요약
+- 일간 약세/강세
+- 1주 흐름
+- 1달 흐름
+- 단기 하락과 1달 상승이 충돌하는 자산 구분
+
+## 3. 기술지표 해석
+- 과열권 자산
+- 중립권 자산
+- 침체권 자산
+- MACD 양/음 전환 해석
+- 볼린저%B와 52주 위치를 위험도 관점으로 해석
+
+## 4. 거시지표 해석
+- VIX
+- DXY
+- US10Y
+- USDKRW
+- 자산군에 줄 수 있는 부담/완충 요인
+
+## 5. 리스크 체크
+- 나스닥/반도체 중복 노출
+- 금리/환율 부담
+- 과열 지표가 많은 자산
+- 단기 하락이 큰 자산
+
+## 6. 하지 말아야 할 것
+- RSI/MACD만 보고 매수/매도 판단하지 않기
+- 하루 등락만 보고 방향성 단정하지 않기
+- 1달 상승률만 보고 리스크를 무시하지 않기
+- 거시지표를 개별 종목처럼 해석하지 않기
+
+## 7. 한 줄 판정
+- 주의 / 중립 / 양호 중 하나
+- 이유를 한 문장으로 설명"""
+
+
+def _fmt_nan(v, fmt="{:.2f}"):
+    """None/NaN → '데이터 없음', 그 외 형식 지정."""
+    if v is None:
+        return "데이터 없음"
+    try:
+        if v != v:   # NaN check
+            return "데이터 없음"
+        return fmt.format(v)
+    except Exception:
+        return "데이터 없음"
+
+
+def build_data_facts(results, macro) -> str:
+    """
+    기존 9번의 3개 표를 문자열로 조립 (Ollama A/B 공통 DATA FACTS).
+    nan 값은 '데이터 없음'으로 변환.
+    새 숫자나 새 항목을 추가하지 않는다.
+    """
+    from datetime import datetime as _dt
+    ts = _dt.now().strftime('%Y-%m-%d %H:%M KST')
+    lines = [f"분석 시각: {ts}", ""]
+
+    # ── 표 1: 시세 요약 ───────────────────────────────────
+    lines += [
+        "[시세 요약]",
+        f"{'자산':<16} {'현재가':>14} {'일간%':>8} {'1주%':>8} {'1달%':>8}",
+        "─" * 58,
+    ]
+    for r in results:
+        price = fmt_price(r)
+        d1 = _fmt_nan(r.get('pct_1d'), "{:+.2f}%")
+        w1 = _fmt_nan(r.get('pct_1w'), "{:+.2f}%")
+        m1 = _fmt_nan(r.get('pct_1m'), "{:+.2f}%")
+        lines.append(f"{r['name']:<16} {price:>14} {d1:>8} {w1:>8} {m1:>8}")
+
+    # ── 표 2: 기술지표 ────────────────────────────────────
+    lines += [
+        "",
+        "[기술지표]",
+        f"{'자산':<16} {'RSI':>7} {'MACD':>8} {'볼린저%B':>10} {'52주위치':>9}",
+        "─" * 54,
+    ]
+    for r in results:
+        rsi_s  = _fmt_nan(r.get('rsi'), "{:.1f}")
+        macd_s = "양전환" if r.get('macd_bull') else "음전환"
+        pctb_s = _fmt_nan(r.get('pct_b'), "{:.1f}%")
+        pos52  = _fmt_nan(r.get('pos52'), "{:.1f}%")
+        lines.append(
+            f"{r['name']:<16} {rsi_s:>7} {macd_s:>8} {pctb_s:>10} {pos52:>9}"
+        )
+
+    # ── 표 3: 거시지표 ────────────────────────────────────
+    lines += [
+        "",
+        "[거시지표]",
+        f"{'지표':<12} {'현재값':>12} {'변화%':>8}",
+        "─" * 36,
+    ]
+    for k, v in macro.items():
+        val_s = str(v.get('val', '데이터 없음'))
+        chg_s = _fmt_nan(v.get('chg'), "{:+.2f}%")
+        lines.append(f"{k:<12} {val_s:>12} {chg_s:>8}")
+
+    return "\n".join(lines)
+
+
+def _build_ollama_prompt(data_facts: str, model: str) -> str:
+    """DATA FACTS + 시스템 역할 합성 → 최종 Ollama 프롬프트."""
+    system = _OLLAMA_SYSTEM.replace("{model}", model)
+    return (
+        f"{system}\n\n"
+        f"DATA FACTS (아래 숫자 이외의 수치는 사용하지 말 것):\n"
+        f"{'─'*60}\n"
+        f"{data_facts}\n"
+        f"{'─'*60}\n\n"
+        f"위 DATA FACTS를 기반으로 분석하라. 모델명은 '{model}'을 사용하라."
+    )
+
+
+# ── 출력 저장 헬퍼 ─────────────────────────────────────────
+
+def _outputs_dir() -> str:
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _md_to_html_body(text: str) -> str:
+    """간단 Markdown → HTML 변환 (h1/h2/li/p/strong)."""
+    out = []
+    in_ul = False
+    for raw in text.split('\n'):
+        line = raw.rstrip()
+        if line.startswith('# ') and not line.startswith('## '):
+            if in_ul: out.append('</ul>'); in_ul = False
+            out.append(f'<h1>{line[2:]}</h1>')
+        elif line.startswith('## '):
+            if in_ul: out.append('</ul>'); in_ul = False
+            out.append(f'<h2>{line[3:]}</h2>')
+        elif line.startswith('- ') or line.startswith('* '):
+            if not in_ul: out.append('<ul>'); in_ul = True
+            content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line[2:])
+            out.append(f'  <li>{content}</li>')
+        elif line == '':
+            if in_ul: out.append('</ul>'); in_ul = False
+            out.append('')
+        else:
+            if in_ul: out.append('</ul>'); in_ul = False
+            content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
+            out.append(f'<p>{content}</p>')
+    if in_ul:
+        out.append('</ul>')
+    return '\n'.join(out)
+
+
+_HTML_CSS = """
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f5f6f8;color:#222;font-family:'Segoe UI',Arial,sans-serif;padding:24px;max-width:900px;margin:auto}
+h1{font-size:20px;font-weight:700;color:#1a237e;margin:20px 0 6px}
+h2{font-size:15px;font-weight:700;color:#00838f;margin:18px 0 6px;padding-left:8px;border-left:3px solid #00838f}
+p{font-size:13px;line-height:1.8;color:#333;margin:4px 0}
+ul{padding-left:22px;margin:4px 0}
+li{font-size:13px;line-height:1.9;color:#333}
+strong{color:#1a237e}
+.meta{font-size:12px;color:#888;margin-bottom:20px}
+.badge{display:inline-block;background:#e8f5e9;color:#2e7d32;font-size:11px;
+  font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px}
+pre.facts{background:#f0f2f8;border-radius:8px;padding:14px;font-size:12px;
+  font-family:monospace;white-space:pre-wrap;color:#333;margin:16px 0}
+"""
+
+
+def _save_result_md(text: str, label: str) -> str:
+    """outputs/ai_analysis_{label}.md 저장 → 경로 반환."""
+    path = os.path.join(_outputs_dir(), f"ai_analysis_{label}.md")
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return path
+
+
+def _save_result_html(text: str, label: str, model: str, ts: str,
+                      data_facts: str) -> str:
+    """outputs/ai_analysis_{label}.html 저장 → 경로 반환."""
+    body  = _md_to_html_body(text)
+    facts_esc = data_facts.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+    html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Jason AI 분석 — {model}</title>
+<style>{_HTML_CSS}</style>
+</head>
+<body>
+<h1 style="margin-top:0">📊 Jason AI 분석 <span class="badge">🏠 {model}</span></h1>
+<div class="meta">{ts}</div>
+{body}
+<h2 style="margin-top:32px">📋 DATA FACTS (분석 기준)</h2>
+<pre class="facts">{facts_esc}</pre>
+</body>
+</html>"""
+    path = os.path.join(_outputs_dir(), f"ai_analysis_{label}.html")
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(html)
+    return path
+
+
+def _save_compare(res_a: dict, res_b: dict,
+                  data_facts: str, ts: str) -> tuple:
+    """비교 리포트 MD + HTML 저장 → (md_path, html_path)."""
+    import ollama_client as _oc
+
+    def _row(key, va, vb):
+        return f"| {key} | {va} | {vb} |"
+
+    # ── MD 비교 리포트 ─────────────────────────────────
+    lines = [
+        "# Jason AI 분석 — A/B 비교 리포트",
+        f"생성 시각: {ts}",
+        "",
+        "## 실행 결과",
+        "",
+        f"| 항목 | {res_a['model']} | {res_b['model']} |",
+        "|------|------------|------------|",
+    ]
+
+    for res, label in [(res_a, 'A'), (res_b, 'B')]:
+        pass  # 아래에서 행 단위로 처리
+
+    ok_a = "✅ 성공" if res_a['success'] else f"❌ 실패 ({res_a.get('error','?')[:40]})"
+    ok_b = "✅ 성공" if res_b['success'] else f"❌ 실패 ({res_b.get('error','?')[:40]})"
+    lines.append(_row("성공 여부", ok_a, ok_b))
+
+    t_a = f"{res_a.get('elapsed',0):.1f}s"
+    t_b = f"{res_b.get('elapsed',0):.1f}s"
+    lines.append(_row("실행 시간", t_a, t_b))
+
+    len_a = len(res_a.get('text',''))
+    len_b = len(res_b.get('text',''))
+    lines.append(_row("출력 길이(자)", str(len_a), str(len_b)))
+
+    _, forb_a = _oc.validate_output(res_a.get('text',''))
+    _, forb_b = _oc.validate_output(res_b.get('text',''))
+    lines.append(_row("금지 표현",
+                       "없음" if not forb_a else f"⚠ {', '.join(forb_a)}",
+                       "없음" if not forb_b else f"⚠ {', '.join(forb_b)}"))
+
+    susp_a, nums_a = _oc.check_number_distortion(data_facts, res_a.get('text',''))
+    susp_b, nums_b = _oc.check_number_distortion(data_facts, res_b.get('text',''))
+    lines.append(_row("숫자 왜곡 의심",
+                       f"⚠ {nums_a[:2]}" if susp_a else "정상",
+                       f"⚠ {nums_b[:2]}" if susp_b else "정상"))
+
+    verdict_a = _oc.extract_verdict(res_a.get('text','')) or "—"
+    verdict_b = _oc.extract_verdict(res_b.get('text','')) or "—"
+    lines.append(_row("최종 판정", verdict_a[:60], verdict_b[:60]))
+
+    lines += [
+        "",
+        "## 저장 파일",
+        f"- 26b MD : `outputs/ai_analysis_26b.md`",
+        f"- 26b HTML: `outputs/ai_analysis_26b.html`",
+        f"- 31b MD : `outputs/ai_analysis_31b.md`",
+        f"- 31b HTML: `outputs/ai_analysis_31b.html`",
+        "",
+        "## 동일 DATA FACTS 확인",
+        "26b와 31b는 완전히 동일한 DATA FACTS를 사용했습니다.",
+        "",
+        "---",
+        "*비교 리포트는 Ollama 없이 Python 코드로 생성 (deterministic)*",
+    ]
+    md_text = "\n".join(lines)
+    md_path = os.path.join(_outputs_dir(), "ai_analysis_compare.md")
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_text)
+
+    # ── HTML 비교 리포트 ────────────────────────────────
+    def _cell(v):
+        return f"<td>{v}</td>"
+
+    def _hrow(key, va, vb):
+        return f"<tr><td class='lbl'>{key}</td>{_cell(va)}{_cell(vb)}</tr>"
+
+    compare_css = _HTML_CSS + """
+table.cmp{width:100%;border-collapse:collapse;margin:12px 0}
+table.cmp th{background:#1a237e;color:#fff;padding:8px 12px;font-size:12px;text-align:left}
+table.cmp td{padding:8px 12px;border-bottom:1px solid #eee;font-size:13px}
+table.cmp td.lbl{font-weight:600;color:#444;width:160px}
+.ok{color:#2e7d32;font-weight:600}
+.err{color:#c62828;font-weight:600}
+.warn{color:#e65100;font-weight:600}
+.col-a{background:#f0f8ff}
+.col-b{background:#fff8f0}
+.box{background:#fff;border-radius:10px;padding:16px 20px;border:1px solid #dde3f0;
+     box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px}
+.section-title{font-size:12px;font-weight:700;color:#1a237e;text-transform:uppercase;
+               letter-spacing:.4px;margin-bottom:10px}
+"""
+
+    def _styled(v):
+        if v.startswith("✅"): return f'<span class="ok">{v}</span>'
+        if v.startswith("❌"): return f'<span class="err">{v}</span>'
+        if v.startswith("⚠"):  return f'<span class="warn">{v}</span>'
+        return v
+
+    def _crow(key, va, vb):
+        return (f'<tr><td class="lbl">{key}</td>'
+                f'<td class="col-a">{_styled(va)}</td>'
+                f'<td class="col-b">{_styled(vb)}</td></tr>')
+
+    facts_esc = data_facts.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+
+    html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Jason AI 분석 — A/B 비교</title>
+<style>{compare_css}</style>
+</head>
+<body>
+<h1 style="margin-top:0">📊 Jason AI A/B 비교 리포트</h1>
+<div class="meta">{ts} — 동일 DATA FACTS 기반</div>
+
+<div class="box">
+<div class="section-title">실행 결과 비교</div>
+<table class="cmp">
+<thead>
+  <tr>
+    <th>항목</th>
+    <th class="col-a">{res_a['model']}</th>
+    <th class="col-b">{res_b['model']}</th>
+  </tr>
+</thead>
+<tbody>
+  {_crow("성공 여부", ok_a, ok_b)}
+  {_crow("실행 시간", t_a, t_b)}
+  {_crow("출력 길이(자)", str(len_a), str(len_b))}
+  {_crow("금지 표현", "없음" if not forb_a else f"⚠ {', '.join(forb_a)}",
+                      "없음" if not forb_b else f"⚠ {', '.join(forb_b)}")}
+  {_crow("숫자 왜곡 의심", f"⚠ {nums_a[:2]}" if susp_a else "정상",
+                            f"⚠ {nums_b[:2]}" if susp_b else "정상")}
+  {_crow("최종 판정", verdict_a[:80], verdict_b[:80])}
+</tbody>
+</table>
+</div>
+
+<div class="box">
+<div class="section-title">저장 파일</div>
+<ul>
+  <li>26b MD: outputs/ai_analysis_26b.md</li>
+  <li>26b HTML: <a href="ai_analysis_26b.html">outputs/ai_analysis_26b.html</a></li>
+  <li>31b MD: outputs/ai_analysis_31b.md</li>
+  <li>31b HTML: <a href="ai_analysis_31b.html">outputs/ai_analysis_31b.html</a></li>
+</ul>
+</div>
+
+<div class="box">
+<div class="section-title">DATA FACTS (동일 기준)</div>
+<pre class="facts">{facts_esc}</pre>
+</div>
+<p style="color:#888;font-size:11px;margin-top:16px">
+  *비교 리포트는 Ollama 없이 Python 코드로 생성 (deterministic)*
+</p>
+</body>
+</html>"""
+
+    html_path = os.path.join(_outputs_dir(), "ai_analysis_compare.html")
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html)
+
+    return md_path, html_path
+
+
+def run_ollama_ab_test(results: list, macro: dict, ts: str) -> dict:
+    """
+    Ollama gemma4:26b / gemma4:31b A/B 분석 실행.
+
+    - 동일 DATA FACTS 사용
+    - 각 모델 결과 저장
+    - 비교 리포트 생성
+    - 31b 실패해도 26b 결과 유지, 프로그램 종료 안 함
+    - 반환: {'26b': res_a, '31b': res_b, 'data_facts': str}
+    """
+    import ollama_client as _oc
+
+    print(f"\n{'━'*62}")
+    print(f"  모드: {CYAN}로컬 LLM A/B 분석{RESET}")
+    print(f"  모델 A: {_OLLAMA_MODELS[0]}")
+    print(f"  모델 B: {_OLLAMA_MODELS[1]}")
+    print(f"  keep_alive: {_oc.KEEP_ALIVE}")
+    print(f"  API 비용 없음")
+    print(f"{'━'*62}")
+
+    # ── DATA FACTS 공통 생성 ──────────────────────────────
+    data_facts = build_data_facts(results, macro)
+    print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자)")
+
+    results_ab = {}
+    for model, label in [(_OLLAMA_MODELS[0], "26b"), (_OLLAMA_MODELS[1], "31b")]:
+        tag = "[A]" if label == "26b" else "[B]"
+        print(f"\n  {tag} {model} 분석 중 (최대 {_oc.OLLAMA_TIMEOUT}s)...", flush=True)
+
+        prompt = _build_ollama_prompt(data_facts, model)
+        res    = _oc.generate(prompt, model)
+        results_ab[label] = res
+
+        if res['success']:
+            _, forb = _oc.validate_output(res['text'])
+            warn_s = f"  {AMBER}⚠ 금지 표현 감지: {forb}{RESET}" if forb else ""
+            print(f"  {tag} {model} 완료 ({res['elapsed']}s, {len(res['text'])}자){warn_s}")
+            # 저장
+            md_path   = _save_result_md(res['text'], label)
+            html_path = _save_result_html(res['text'], label, model, ts, data_facts)
+            print(f"       MD  : {md_path}")
+            print(f"       HTML: {html_path}")
+        else:
+            print(f"  {tag} {ALERT}{model} 실패: {res['error']}{RESET}")
+            print(f"       → 기존 알고리즘 분석 fallback 유지")
+            # 빈 파일 저장 (오류 기록)
+            err_text = f"# {model} 분석 실패\n\n오류: {res['error']}\n실행 시간: {res['elapsed']}s"
+            _save_result_md(err_text, label)
+
+    # ── 비교 리포트 ──────────────────────────────────────
+    res_a = results_ab.get("26b", {"success": False, "text": "", "error": "실행 안 됨",
+                                    "elapsed": 0, "model": _OLLAMA_MODELS[0]})
+    res_b = results_ab.get("31b", {"success": False, "text": "", "error": "실행 안 됨",
+                                    "elapsed": 0, "model": _OLLAMA_MODELS[1]})
+
+    md_cmp, html_cmp = _save_compare(res_a, res_b, data_facts, ts)
+    print(f"\n  비교 리포트 MD  : {md_cmp}")
+    print(f"  비교 리포트 HTML: {html_cmp}")
+    webbrowser.open(f"file://{html_cmp}")
+
+    return {"26b": res_a, "31b": res_b, "data_facts": data_facts}
+
 
 # ── AI 분석 실행 ──────────────────────────────────────────
 
@@ -517,11 +978,22 @@ def main():
     print(f"  Jason 종합 AI 분석  {ts}")
     print(f"{'━'*62}")
 
+    # ── 분석 모드 감지 ────────────────────────────────────
+    try:
+        import ollama_client as _oc
+        _ollama_ok = _oc.is_available()
+    except ImportError:
+        _ollama_ok = False
+
     has_groq = bool(os.getenv('GROQ_API_KEY', '').strip())
-    mode = f"{CYAN}Groq Llama-3.3-70B (무료 AI){RESET}" if has_groq else f"{AMBER}알고리즘 분석 (API 불필요){RESET}"
-    print(f"  모드: {mode}")
-    if not has_groq:
-        print(f"  {AMBER}→ .env 에 GROQ_API_KEY 추가 시 AI 분석 활성화 (groq.com 무료){RESET}")
+
+    if not _ollama_ok:
+        # Ollama 없을 때 기존 모드 표시
+        mode = (f"{CYAN}Groq Llama-3.3-70B (무료 AI){RESET}" if has_groq
+                else f"{AMBER}알고리즘 분석 (API 불필요){RESET}")
+        print(f"  모드: {mode}")
+        if not has_groq:
+            print(f"  {AMBER}→ .env 에 GROQ_API_KEY 추가 시 AI 분석 활성화 (groq.com 무료){RESET}")
     print()
 
     # 데이터 수집
@@ -550,7 +1022,13 @@ def main():
         print(f"  {r['name']:<14} {rsi_s:>5} {macd_s:>6} {r['pct_b']:>5.0f}% "
               f"{r['pos52']:>5.0f}%" if r['pos52'] else f"  {r['name']:<14} {rsi_s:>5} {macd_s:>6} {r['pct_b']:>5.0f}%")
 
-    print(f"\n  AI 분석 실행 중...")
+    # ── Ollama A/B 테스트 (가능할 때) ────────────────────────
+    if _ollama_ok:
+        run_ollama_ab_test(results, macro, ts)
+
+    # ── 기존 Groq / 알고리즘 분석 (항상 실행, fallback 역할) ─
+    print(f"\n  {'─'*56}")
+    print(f"  기존 분석 실행 중 ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
     tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text)
 
     # 터미널 결과 출력
