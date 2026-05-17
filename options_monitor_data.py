@@ -1,3 +1,4 @@
+from __future__ import annotations
 """옵션 모니터 — CBOE 데이터 수집 모듈
 옵션 체인 파싱, 만기별 집계, GEX 계산, SPX/NDX 폴백 데이터"""
 
@@ -5,19 +6,42 @@ import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
+from calendar import monthcalendar
 
 from jm_lib.options import bs_gamma, calc_max_pain
 from options_monitor_base import CBOE_URL, HEADERS, parse_opt_sym
 
 
+# ═══ 폴백용 동적 날짜 헬퍼 ═══
+
+def _next_monthly_expiry() -> tuple:
+    """오늘 이후 가장 가까운 월물 만기(3번째 금요일)와 DTE를 반환."""
+    today = datetime.now().date()
+    for month_offset in range(12):
+        yr = today.year  + (today.month + month_offset - 1) // 12
+        mo = (today.month + month_offset - 1) % 12 + 1
+        fridays = [week[4] for week in monthcalendar(yr, mo) if week[4] > 0]
+        if len(fridays) >= 3:
+            from datetime import date as _date
+            exp = _date(yr, mo, fridays[2])
+            if exp > today:
+                dte = (exp - today).days
+                return exp.strftime('%Y-%m-%d'), dte
+    # 최후 fallback
+    exp = today + timedelta(days=30)
+    return exp.strftime('%Y-%m-%d'), 30
+
+
 # ═══ SPX/NDX 폴백 데이터 (CBOE Index 403 대응) ═══
 
 def _spx_fallback(label: str) -> dict:
-    """SPX 전용 하드코딩 데이터"""
+    """SPX 전용 폴백 데이터 — 날짜/DTE를 오늘 기준으로 동적 계산"""
+    _exp, _days = _next_monthly_expiry()
     return {
         'sym': 'SPX', 'label': label, 'curr': 5711.52,
+        '_is_fallback': True,   # 신뢰도 페널티용 플래그
         'exp_rows': [{
-            'exp': '2026-05-15', 'days': 19,
+            'exp': _exp, 'days': _days,
             'c_vol': 85000, 'p_vol': 92000, 'pc_vol': 1.08,
             'c_oi': 1250000, 'p_oi': 2100000, 'pc_oi': 1.68,
             'iv': 14.5, 'atm_strike': 5700.0,
@@ -43,7 +67,7 @@ def _spx_fallback(label: str) -> dict:
                       {'strike': 5900.0, 'oi': 120000}],
         'top_puts': [{'strike': 5500.0, 'oi': 250000},
                      {'strike': 5600.0, 'oi': 220000}],
-        'cal_chart': {'dates': ['2026-05-15'],
+        'cal_chart': {'dates': [_exp],
                       'call_oi': [12500000], 'put_oi': [21000000],
                       'call_vol': [150000], 'put_vol': [180000]},
         'gex': {
@@ -60,11 +84,13 @@ def _spx_fallback(label: str) -> dict:
 
 
 def _ndx_fallback(label: str) -> dict:
-    """NDX 전용 하드코딩 데이터"""
+    """NDX 전용 폴백 데이터 — 날짜/DTE를 오늘 기준으로 동적 계산"""
+    _exp, _days = _next_monthly_expiry()
     return {
         'sym': 'NDX', 'label': label, 'curr': 27303.67,
+        '_is_fallback': True,
         'exp_rows': [{
-            'exp': '2026-05-15', 'days': 19,
+            'exp': _exp, 'days': _days,
             'c_vol': 24000, 'p_vol': 21000, 'pc_vol': 0.88,
             'c_oi': 362765, 'p_oi': 549262, 'pc_oi': 1.51,
             'iv': 22.4, 'atm_strike': 27300.0,
@@ -90,7 +116,7 @@ def _ndx_fallback(label: str) -> dict:
                       {'strike': 28000.0, 'oi': 76560}],
         'top_puts': [{'strike': 26000.0, 'oi': 109644},
                      {'strike': 26500.0, 'oi': 105149}],
-        'cal_chart': {'dates': ['2026-05-15'],
+        'cal_chart': {'dates': [_exp],
                       'call_oi': [3627659], 'put_oi': [5492625],
                       'call_vol': [45230], 'put_vol': [35210]},
         'gex': {

@@ -12,6 +12,10 @@ from options_monitor_base import (
     weekday_ko, is_monthly, days_badge,
 )
 from options_monitor_render import render_iv_rank, render_0dte_block
+from options_monitor_validate import (
+    validate_price_pair, validate_gex_regime, validate_max_pain_label,
+    calc_asset_confidence,
+)
 
 _SNAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'options_gex_snapshot.json')
 
@@ -72,14 +76,8 @@ def _exp_comment(row: dict, curr: float) -> str:
 
     if mp:
         diff = (mp - curr) / curr * 100
-        if diff >= 5:
-            parts.append(f'Max Pain +{diff:.1f}% → 상방 당김 강함')
-        elif diff >= 2:
-            parts.append(f'Max Pain +{diff:.1f}% → 약한 상방 인력')
-        elif diff <= -5:
-            parts.append(f'Max Pain {diff:.1f}% → 하방 당김 강함')
-        elif diff <= -2:
-            parts.append(f'Max Pain {diff:.1f}% → 약한 하방 인력')
+        # DTE에 따라 Max Pain 표현 제한 (>45 DTE: 방향 예측 금지)
+        parts.append(validate_max_pain_label(diff, days))
 
     tot_oi = c_oi + p_oi
     if tot_oi >= 1_000_000:
@@ -276,23 +274,39 @@ def generate_html(results: list, timestamp: str) -> str:
         ngb_cls = 'gex-pos' if ngb >= 0 else 'gex-neg'
         ngb_str = f'{"+" if ngb >= 0 else ""}${ngb:.3f}B'
 
-        # GEX 레짐
+        # GEX 레짐 — NET GEX 부호 + Gamma Flip 위치 분리 검증
+        _regime = validate_gex_regime(ngb * 1e9, curr, gflip)
+        gex_regime   = _regime['display_label']
+        _regime_final = _regime['final_regime']
+
+        # 혼합 신호 주의문 추가
+        if _regime['caution_note']:
+            gex_regime += f' — {_regime["caution_note"]}'
+
+        # Gamma Flip 라벨
         if gflip:
+            _dist = (curr - gflip) / curr * 100
             if curr > gflip:
-                gex_regime = "딜러 롱감마 구간 ✅ — 시장 안정화 작동 중"
-                gflip_label = "▼ 현재가 아래 ✅ — 딜러 롱감마 (Gamma Flip 하회 전까지 안정)"
-                gflip_cls = "gex-pos"
-                regime_badge = "b-long-gamma"
+                _flip_base = f"▼ 현재가 아래 ({_dist:+.1f}%)"
+                if _regime_final == 'MIXED_SIGNAL':
+                    gflip_label = _flip_base + ' ⚠ 혼합 신호 — 단독 롱감마 판정 금지'
+                else:
+                    gflip_label = _flip_base + ' ✅'
             else:
-                gex_regime = "딜러 숏감마 구간 ⚠ — 변동성 증폭 위험"
-                gflip_label = "▲ 현재가 위 ⚠ — 딜러 숏감마 (Gamma Flip 돌파 전까지 위험)"
-                gflip_cls = "gex-neg"
-                regime_badge = "b-short-gamma"
+                gflip_label = f"▲ 현재가 위 ({_dist:+.1f}%) ⚠"
         else:
-            gex_regime = "데이터 부족"
             gflip_label = "감마 플립 데이터 없음"
-            gflip_cls = ""
-            regime_badge = "b-neutral"
+
+        # Gamma Flip 이탈 주의 (>10%)
+        if _regime.get('flip_far_note'):
+            gflip_label += f' — {_regime["flip_far_note"]}'
+
+        gflip_cls    = ("gex-pos" if _regime_final == 'LONG_GAMMA'
+                        else "gex-neg" if _regime_final == 'SHORT_GAMMA'
+                        else "gex-warn")
+        regime_badge = ("b-long-gamma"  if _regime_final == 'LONG_GAMMA'
+                        else "b-short-gamma" if _regime_final == 'SHORT_GAMMA'
+                        else "b-neutral")
 
         # Call Wall 돌파 판단
         cwall_str = f'${cwall:,.2f}' if cwall else 'N/A'
@@ -407,7 +421,7 @@ def generate_html(results: list, timestamp: str) -> str:
         if len(_cone_rows) >= 2:
             cone_html = f"""
     <div class="section">
-      <div class="section-title" style="font-size:12px;font-weight:700;color:#555;margin-bottom:8px;">🔮 Prediction Cone — 만기별 기대변동 범위 <span style="font-weight:400;font-size:10px;color:#aaa">· ATM 스트래들 기준</span></div>
+      <div class="section-title" style="font-size:12px;font-weight:700;color:#555;margin-bottom:8px;">🔮 Prediction Cone — 만기별 기대변동 범위 <span style="font-weight:400;font-size:10px;color:#aaa">· Expected Move: ATM Straddle 기반</span></div>
       <div style="position:relative;height:140px;">
         <canvas id="chart-{sym}-cone"></canvas>
       </div>
@@ -415,14 +429,28 @@ def generate_html(results: list, timestamp: str) -> str:
         else:
             cone_html = ''
 
-        # SPX-SPY 페어 비율 경고
+        # SPX-SPY 페어 비율 검증 — validate_price_pair로 신뢰도 전파
         pair_ratio_html = ''
+        _pair_check     = None          # SPX 외 자산은 None 유지
         if sym == 'SPX':
             spy_p = next((x['curr'] for x in results if x and x['sym'] == 'SPY'), 0)
             if spy_p > 0:
-                ratio = curr / spy_p
-                warning = ' <span style="color:#ef5350;font-weight:700">⚠ 괴리율 경고</span>' if ratio < 7.8 or ratio > 8.2 else ''
-                pair_ratio_html = f'<div class="meta-sub" id="SPX-pair-ratio" style="margin-top:4px;color:#333;font-weight:500">📎 페어 ETF: SPY | SPX ÷ SPY 비율: {ratio:.2f}x{warning}</div>'
+                _pair_check = validate_price_pair(curr, spy_p, 'SPX', 'SPY')
+                ratio = _pair_check['ratio']
+                if _pair_check['low_confidence']:
+                    _pair_warn = (
+                        f' <span style="color:#ef5350;font-weight:700">⚠ 페어 비율 이상 '
+                        f'({_pair_check["confidence"]})</span>'
+                        f'<div style="font-size:9px;color:#ef5350;margin-top:2px;">'
+                        f'{_pair_check["warning"][:80]}</div>'
+                    )
+                else:
+                    _pair_warn = ' <span style="color:#22c55e;font-size:9px">✅ 정상 범위</span>'
+                pair_ratio_html = (
+                    f'<div class="meta-sub" id="SPX-pair-ratio" '
+                    f'style="margin-top:4px;color:#333;font-weight:500">'
+                    f'📎 페어 ETF: SPY | SPX ÷ SPY 비율: {ratio:.2f}x{_pair_warn}</div>'
+                )
 
         # MODULE 2 & 3 데이터 계산
         vc = calc_vanna_charm(r)
@@ -430,10 +458,39 @@ def generate_html(results: list, timestamp: str) -> str:
 
         vanna_cls = 'gex-pos' if vc['vanna'] >= 0 else 'gex-neg'
         charm_cls = 'gex-pos' if vc['charm'] >= 0 else 'gex-neg'
-        rank_color = '#26a69a' if iv_rank_data['rank'] <= 30 else ('#ef5350' if iv_rank_data['rank'] >= 70 else '#ffb300')
-        rank_desc = 'IV 저렴 🟢' if iv_rank_data['rank'] <= 30 else ('IV 고가 🔴' if iv_rank_data['rank'] >= 70 else 'IV 보통 🟡')
-        if iv_rank_data.get('new_high'):
-            rank_desc += ' <span style="font-size:10px; color:#d32f2f">⚠ 1년 신고IV</span>'
+
+        # IV Rank: None이면 insufficient_history 표시 (100% 강제 금지)
+        _iv_rank = iv_rank_data.get('rank')
+        _iv_pct  = iv_rank_data.get('pct')
+        if _iv_rank is None:
+            rank_str   = 'N/A'
+            pct_str    = 'N/A'
+            rank_color = '#94a3b8'
+            rank_desc  = f'이력 부족 / 계산 불가'
+            if iv_rank_data.get('low_confidence'):
+                rank_desc += ' <span style="font-size:9px;color:#ef5350">⚠ 저신뢰</span>'
+        else:
+            rank_str   = f'{_iv_rank:.1f}%'
+            pct_str    = f'{_iv_pct:.1f}%' if _iv_pct is not None else 'N/A'
+            rank_color = '#26a69a' if _iv_rank <= 30 else ('#ef5350' if _iv_rank >= 70 else '#ffb300')
+            rank_desc  = ('IV 저렴 🟢' if _iv_rank <= 30
+                          else 'IV 고가 🔴' if _iv_rank >= 70 else 'IV 보통 🟡')
+            if iv_rank_data.get('new_high'):
+                rank_desc += ' <span style="font-size:10px;color:#d32f2f">⚠ 1년 신고IV</span>'
+
+        # 자산별 신뢰도 점수 계산
+        _conf = calc_asset_confidence(r, pair_check=_pair_check)
+        _conf_badge = (
+            f'<span style="float:right;font-size:9px;font-weight:600;padding:2px 6px;'
+            f'border-radius:3px;background:{_conf["badge_color"]};color:#fff;">'
+            f'신뢰도 {_conf["label"]} ({_conf["score"]}점)'
+            f'</span>'
+        )
+        _conf_note = (
+            f'<div style="font-size:9px;color:{_conf["badge_color"]};'
+            f'margin-top:2px;font-weight:600">{_conf["display_note"]}</div>'
+            if _conf['display_note'] else ''
+        )
 
         # 0DTE 카드
         zdte = render_0dte_block(r)
@@ -479,8 +536,10 @@ def generate_html(results: list, timestamp: str) -> str:
       <span class="sym">{sym}</span>
       <span class="lbl">{r['label']}</span>
       <span class="price">${curr:,.2f}</span>
+      {_conf_badge}
     </div>
     <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
+    {_conf_note}
     {pair_ratio_html}
     {_occ_banner_html}
   </div>
@@ -500,7 +559,7 @@ def generate_html(results: list, timestamp: str) -> str:
     </div>
     <div class="sbox" style="border-left: 3px solid {rank_color}">
       <div class="slbl">IV RANK / PCT</div>
-      <div class="sval" style="color:{rank_color}">{iv_rank_data['rank']}% / {iv_rank_data['pct']}%</div>
+      <div class="sval" style="color:{rank_color}">{rank_str} / {pct_str}</div>
       <div class="ssub">{rank_desc}</div>
     </div>
     <div class="sbox">
@@ -786,6 +845,7 @@ a{color:inherit;}
 .gex-sub{font-size:11px;color:#cbd5e1;margin-top:6px;line-height:1.4;}
 .gex-pos{color:#22c55e;}
 .gex-neg{color:#ef4444;}
+.gex-warn{color:#eab308;}  /* 혼합 신호 */
 .gex-neu{color:#94a3b8;}
 
 .uoa-wrap{padding:10px 4px 4px;display:flex;flex-wrap:wrap;gap:6px;}
