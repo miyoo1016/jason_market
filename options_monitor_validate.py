@@ -5,8 +5,15 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+import json
+import os
+from datetime import date, datetime, timezone
 from typing import Optional
+
+# ── 히스토리 파일 ────────────────────────────────────────────────
+_STATE_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state')
+_HISTORY_FILE = os.path.join(_STATE_DIR, 'options_confidence_history.json')
+_HISTORY_MAX  = 100   # 심볼별 최대 보관 건수
 
 # ── 상수 ──────────────────────────────────────────────────────────
 
@@ -425,42 +432,55 @@ def calc_confidence_score(components: dict) -> dict:
         gex_consistency    : 15점
         iv_history         : 10점
         wall_sanity        : 10점
-        stale_penalty      : -0~30점 (페널티, 양수로 입력)
+        stale_penalty      : -0~20점 (데이터 경과 시간 기반, 양수로 입력)
+        fallback_penalty   : -0~20점 (하드코딩/폴백 데이터 기반, 양수로 입력)
 
     Returns
     -------
     dict
-        score        : int
-        label        : 'HIGH' | 'MEDIUM_HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW'
-        badge_color  : str
-        display_note : str
+        score          : int
+        label          : 'HIGH' | 'MEDIUM_HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW'
+        badge_color    : str
+        display_note   : str
+        stale_penalty  : int   — 실제 적용된 stale 페널티
+        fallback_penalty: int  — 실제 적용된 fallback 페널티
     """
-    keys   = ('price_pair', 'expiry_dte', 'chain_completeness',
-               'gex_consistency', 'iv_history', 'wall_sanity')
-    raw    = sum(components.get(k, 0) for k in keys)
-    penalty = components.get('stale_penalty', 0)
-    score   = max(0, min(100, raw - penalty))
+    keys             = ('price_pair', 'expiry_dte', 'chain_completeness',
+                        'gex_consistency', 'iv_history', 'wall_sanity')
+    raw              = sum(components.get(k, 0) for k in keys)
+    stale_pen        = int(components.get('stale_penalty',    0))
+    fallback_pen     = int(components.get('fallback_penalty', 0))
+    total_penalty    = stale_pen + fallback_pen
+    score            = max(0, min(100, raw - total_penalty))
 
+    _base = {
+        'score': score,
+        'stale_penalty':    stale_pen,
+        'fallback_penalty': fallback_pen,
+    }
     if score >= 85:
-        return {'score': score, 'label': 'HIGH',
+        return {**_base, 'label': 'HIGH',
                 'badge_color': '#22c55e', 'display_note': ''}
     if score >= 70:
-        return {'score': score, 'label': 'MEDIUM_HIGH',
+        return {**_base, 'label': 'MEDIUM_HIGH',
                 'badge_color': '#84cc16', 'display_note': ''}
     if score >= 55:
-        return {'score': score, 'label': 'MEDIUM',
+        return {**_base, 'label': 'MEDIUM',
                 'badge_color': '#eab308', 'display_note': '참고용'}
     if score >= 40:
-        return {'score': score, 'label': 'LOW',
+        return {**_base, 'label': 'LOW',
                 'badge_color': '#f97316',
                 'display_note': '저신뢰 — 원자료/계산 검증 필요'}
-    return {'score': score, 'label': 'VERY_LOW',
+    return {**_base, 'label': 'VERY_LOW',
             'badge_color': '#ef4444',
             'display_note': '저신뢰 — 원자료/계산 검증 필요'}
 
 
 def calc_asset_confidence(r: dict, pair_check: dict | None = None) -> dict:
-    """단일 자산 딕셔너리로 전체 신뢰도 점수 계산."""
+    """단일 자산 딕셔너리로 전체 신뢰도 점수 계산.
+
+    타임스탬프 기반 stale_penalty / is_fallback 기반 fallback_penalty 분리 반영.
+    """
     today      = datetime.now().date()
     components = {}
 
@@ -501,10 +521,138 @@ def calc_asset_confidence(r: dict, pair_check: dict | None = None) -> dict:
     else:
         components['wall_sanity'] = 5
 
-    # ⑦ 스테일 페널티
-    components['stale_penalty'] = 15 if r.get('_is_fallback', False) else 0
+    # ⑦ Stale 페널티 (타임스탬프 기반: 30분마다 +10점 페널티, 최대 20점)
+    stale_pen = 0
+    _ts = r.get('_timestamps', {})
+    _price_ts = _ts.get('price_timestamp')
+    if _price_ts:
+        try:
+            ts_dt   = datetime.fromisoformat(_price_ts.rstrip('Z')).replace(tzinfo=timezone.utc)
+            age_min = (datetime.now(tz=timezone.utc) - ts_dt).total_seconds() / 60
+            stale_pen = min(20, int(age_min / 30) * 10)
+        except Exception:
+            stale_pen = 0
+    components['stale_penalty'] = stale_pen
+
+    # ⑧ Fallback 페널티 (하드코딩/폴백 데이터, -20점)
+    ds = r.get('_data_source', {})
+    if r.get('_is_fallback') or ds.get('overall') == 'FALLBACK':
+        components['fallback_penalty'] = 20
+    elif ds.get('overall') == 'PARTIAL':
+        components['fallback_penalty'] = 10
+    else:
+        components['fallback_penalty'] = 0
 
     return calc_confidence_score(components)
+
+
+# ── 신뢰도 히스토리 ──────────────────────────────────────────────
+
+def record_confidence_history(sym: str, score_result: dict,
+                               components: dict | None = None) -> None:
+    """
+    신뢰도 점수 이력을 state/options_confidence_history.json에 저장.
+
+    심볼별 최대 100건 유지 (오래된 것 자동 제거).
+
+    Parameters
+    ----------
+    sym          : 자산 심볼 ('SPX', 'QQQ' 등)
+    score_result : calc_confidence_score() 반환값
+    components   : calc_asset_confidence() 입력 components (선택)
+    """
+    os.makedirs(_STATE_DIR, exist_ok=True)
+
+    try:
+        with open(_HISTORY_FILE, encoding='utf-8') as f:
+            history: dict = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        history = {}
+
+    ts_now = datetime.now(tz=timezone.utc).isoformat()
+    entry  = {
+        'ts':              ts_now,
+        'score':           score_result.get('score', 0),
+        'label':           score_result.get('label', 'UNKNOWN'),
+        'stale_penalty':   score_result.get('stale_penalty', 0),
+        'fallback_penalty': score_result.get('fallback_penalty', 0),
+    }
+    if components:
+        entry['components'] = {k: v for k, v in components.items()
+                               if k not in ('stale_penalty', 'fallback_penalty')}
+
+    bucket = history.setdefault(sym, [])
+    bucket.append(entry)
+    # 최대 100건 유지
+    if len(bucket) > _HISTORY_MAX:
+        history[sym] = bucket[-_HISTORY_MAX:]
+
+    try:
+        with open(_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass   # 히스토리 저장 실패는 비치명 — 메인 플로우에 영향 없음
+
+
+def load_confidence_history(sym: str | None = None) -> dict:
+    """
+    신뢰도 점수 이력 로드.
+
+    Parameters
+    ----------
+    sym : None이면 전체 반환, 문자열이면 해당 심볼만 반환
+
+    Returns
+    -------
+    dict  {sym: [entry, ...]}  or  [entry, ...]  (sym 지정 시)
+    """
+    try:
+        with open(_HISTORY_FILE, encoding='utf-8') as f:
+            history = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {} if sym is None else []
+
+    if sym is None:
+        return history
+    return history.get(sym, [])
+
+
+def get_confidence_trend(sym: str, n: int = 5) -> dict:
+    """
+    최근 n회 신뢰도 추세 반환.
+
+    Returns
+    -------
+    dict
+        scores     : list[int]    최근 n개 점수 (오래된 순)
+        labels     : list[str]    대응 레이블
+        trend      : 'UP' | 'DOWN' | 'FLAT'
+        delta      : int          (최신 - 최초) 차이
+        sparkline  : str          ASCII 미니 차트
+    """
+    entries = load_confidence_history(sym)
+    if not entries:
+        return {'scores': [], 'labels': [], 'trend': 'FLAT', 'delta': 0, 'sparkline': '—'}
+
+    recent  = entries[-n:]
+    scores  = [e['score'] for e in recent]
+    labels  = [e['label'] for e in recent]
+    delta   = scores[-1] - scores[0] if len(scores) >= 2 else 0
+    trend   = 'UP' if delta > 5 else ('DOWN' if delta < -5 else 'FLAT')
+
+    # ASCII 스파크라인 (5단계 블록)
+    _blocks = '▁▂▃▅▇'
+    _min_s, _max_s = min(scores), max(scores)
+    _range = _max_s - _min_s or 1
+    sparkline = ''.join(
+        _blocks[min(4, int((s - _min_s) / _range * 4))]
+        for s in scores
+    )
+
+    return {
+        'scores': scores, 'labels': labels,
+        'trend': trend, 'delta': delta, 'sparkline': sparkline,
+    }
 
 
 # ── 테스트 스위트 ────────────────────────────────────────────────
@@ -582,6 +730,82 @@ def run_tests() -> list:
     _chk('T6-no-strong-down', '하방 당김 강함' not in r6,         f"label='{r6}'")
     _chk('T6-long-term-ref',  '장기 포지션 분포 참고' in r6,      f"label='{r6}'")
 
+    # ── Test 7: data_source_status FALLBACK 처리 ──────────────
+    print('\nTest 7: FALLBACK data_source_status → fallback_penalty 적용')
+    _r7 = {
+        'sym': 'SPX', 'curr': 5711.52,
+        '_is_fallback': True,
+        '_data_source': {'overall': 'FALLBACK'},
+        '_timestamps': {'price_timestamp': None},
+        'tc_oi': 0, 'tp_oi': 0,
+        'exp_rows': [], 'gex': {}, 'max_pain': None, 'iv_call': 0, 'iv_put': 0,
+    }
+    c7 = calc_asset_confidence(_r7)
+    _chk('T7-fallback-penalty',   c7['fallback_penalty'] == 20,    f"fp={c7['fallback_penalty']}")
+    _chk('T7-score-penalized',    c7['score'] < 60,                f"score={c7['score']}")
+    _chk('T7-not-high',           c7['label'] != 'HIGH',           f"label={c7['label']}")
+
+    # ── Test 8: stale_penalty 타임스탬프 기반 ─────────────────────
+    print('\nTest 8: stale_penalty — 60분 경과 타임스탬프')
+    from datetime import timedelta
+    _old_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=65)).isoformat()
+    _r8 = {
+        'sym': 'QQQ', 'curr': 706.11,
+        '_is_fallback': False,
+        '_data_source': {'overall': 'LIVE'},
+        '_timestamps': {'price_timestamp': _old_ts},
+        'tc_oi': 1_000_000, 'tp_oi': 1_000_000,
+        'exp_rows': [{'exp': (date.today() + timedelta(days=10)).isoformat()}],
+        'gex': {'net_gex_b': -0.08, 'gamma_flip': 579.78},
+        'max_pain': 700.0, 'iv_call': 20.0, 'iv_put': 21.0,
+    }
+    c8 = calc_asset_confidence(_r8)
+    # 60분 → stale_penalty = 20 (30분마다 10점, min(20, 2*10)=20)
+    _chk('T8-stale-penalty-20',   c8['stale_penalty'] == 20,       f"sp={c8['stale_penalty']}")
+    _chk('T8-fallback-zero',      c8['fallback_penalty'] == 0,     f"fp={c8['fallback_penalty']}")
+
+    # ── Test 9: 히스토리 저장 / 로드 / 추세 ──────────────────────
+    # 전용 테스트 심볼(_TEST_)로 격리하여 실 데이터와 충돌 방지
+    print('\nTest 9: confidence history save/load/trend')
+    _TSYM = '_TEST_CONF_SYM'    # 실 심볼과 겹치지 않는 테스트 전용 이름
+    # 기존 테스트 엔트리 사전 제거
+    try:
+        import json as _json2, os as _os
+        if os.path.exists(_HISTORY_FILE):
+            _hdata = _json2.load(open(_HISTORY_FILE, encoding='utf-8'))
+            _hdata.pop(_TSYM, None)
+            with open(_HISTORY_FILE, 'w', encoding='utf-8') as _hf:
+                _json2.dump(_hdata, _hf, ensure_ascii=False)
+    except Exception:
+        pass
+    try:
+        # 저장
+        record_confidence_history(_TSYM, {'score': 70, 'label': 'MEDIUM_HIGH',
+                                           'stale_penalty': 0, 'fallback_penalty': 0})
+        record_confidence_history(_TSYM, {'score': 80, 'label': 'MEDIUM_HIGH',
+                                           'stale_penalty': 0, 'fallback_penalty': 0})
+        record_confidence_history(_TSYM, {'score': 65, 'label': 'MEDIUM',
+                                           'stale_penalty': 5, 'fallback_penalty': 0})
+        # 로드
+        hist = load_confidence_history(_TSYM)
+        _chk('T9-history-saved',   len(hist) == 3,                  f"entries={len(hist)}")
+        _chk('T9-history-score',   hist[-1]['score'] == 65,         f"last={hist[-1]['score']}")
+        # 추세
+        trend = get_confidence_trend(_TSYM, n=3)
+        _chk('T9-trend-scores',    trend['scores'] == [70, 80, 65], f"scores={trend['scores']}")
+        _chk('T9-trend-flag',      trend['trend'] in ('UP', 'DOWN', 'FLAT'),
+             f"trend={trend['trend']}")
+        _chk('T9-sparkline',       len(trend['sparkline']) == 3,    f"spark={trend['sparkline']}")
+    finally:
+        # 테스트 엔트리 정리
+        try:
+            _hdata2 = _json2.load(open(_HISTORY_FILE, encoding='utf-8'))
+            _hdata2.pop(_TSYM, None)
+            with open(_HISTORY_FILE, 'w', encoding='utf-8') as _hf2:
+                _json2.dump(_hdata2, _hf2, ensure_ascii=False)
+        except Exception:
+            pass
+
     # ── 결과 요약 ────────────────────────────────────────────────
     total  = len(results)
     passed = sum(1 for _, ok, _ in results if ok)
@@ -601,6 +825,9 @@ __all__ = [
     'validate_expected_move',
     'calc_confidence_score',
     'calc_asset_confidence',
+    'record_confidence_history',
+    'load_confidence_history',
+    'get_confidence_trend',
     'run_tests',
     # 상수
     'SPX_SPY_RATIO_MIN', 'SPX_SPY_RATIO_MAX',

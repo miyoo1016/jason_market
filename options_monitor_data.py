@@ -12,6 +12,60 @@ from jm_lib.options import bs_gamma, calc_max_pain
 from options_monitor_base import CBOE_URL, HEADERS, parse_opt_sym
 
 
+# ═══ SPX 실시간 가격 대체 소스 (3단계 Failover) ═══
+
+def _fetch_spx_price_live() -> tuple:
+    """
+    SPX 실시간 가격 3단계 failover.
+
+    Priority 1: yfinance  ^GSPC  (fast_info)
+    Priority 2: Yahoo Finance v8 chart API  (^GSPC)
+    Priority 3: CBOE delayed quote          (^SPX 별도 엔드포인트)
+
+    Returns
+    -------
+    (price: float | None, source_name: str, status: 'LIVE' | 'STALE' | 'FALLBACK')
+    """
+    # ── Priority 1: yfinance ─────────────────────────────────────
+    try:
+        import yfinance as yf
+        tk = yf.Ticker('^GSPC')
+        p  = (tk.fast_info.get('last_price')
+              or tk.fast_info.get('regularMarketPrice'))
+        if p and float(p) > 1000:
+            return float(p), 'yfinance ^GSPC', 'LIVE'
+    except Exception:
+        pass
+
+    # ── Priority 2: Yahoo Finance v8 API ─────────────────────────
+    try:
+        url  = ('https://query1.finance.yahoo.com/v8/finance/chart/'
+                '%5EGSPC?interval=1d&range=1d')
+        resp = requests.get(url, headers=HEADERS, timeout=8)
+        if resp.status_code == 200:
+            p = (resp.json().get('chart', {})
+                            .get('result', [{}])[0]
+                            .get('meta', {})
+                            .get('regularMarketPrice'))
+            if p and float(p) > 1000:
+                return float(p), 'Yahoo Finance API ^GSPC', 'LIVE'
+    except Exception:
+        pass
+
+    # ── Priority 3: CBOE delayed quote ───────────────────────────
+    try:
+        url  = 'https://cdn.cboe.com/api/global/delayed_quotes/quotes/%5ESPX.json'
+        resp = requests.get(url, headers=HEADERS, timeout=8)
+        if resp.status_code == 200:
+            p = resp.json().get('data', {}).get('current_price')
+            if p and float(p) > 1000:
+                return float(p), 'CBOE delayed quote ^SPX', 'STALE'
+    except Exception:
+        pass
+
+    return None, 'none', 'FALLBACK'
+
+
 # ═══ 폴백용 동적 날짜 헬퍼 ═══
 
 def _next_monthly_expiry() -> tuple:
@@ -35,11 +89,44 @@ def _next_monthly_expiry() -> tuple:
 # ═══ SPX/NDX 폴백 데이터 (CBOE Index 403 대응) ═══
 
 def _spx_fallback(label: str) -> dict:
-    """SPX 전용 폴백 데이터 — 날짜/DTE를 오늘 기준으로 동적 계산"""
+    """SPX 전용 폴백 데이터.
+
+    실시간 가격을 먼저 3단계로 시도한 뒤, 모두 실패하면 하드코딩 가격 사용.
+    날짜/DTE는 오늘 기준 동적 계산.
+    """
     _exp, _days = _next_monthly_expiry()
+
+    # 실시간 가격 시도
+    _live_price, _price_src, _price_status = _fetch_spx_price_live()
+    _curr = _live_price if _live_price else 5711.52
+
+    # 타임스탬프
+    _now_ts = datetime.utcnow().isoformat() + 'Z'
+    _price_ts = _now_ts if _live_price else None
+
+    # data_source_status
+    _overall = 'PARTIAL' if _live_price else 'FALLBACK'
+    print(f"  SPX 가격: {_curr:,.2f}  "
+          f"소스: {_price_src} [{_price_status}]")
+
     return {
-        'sym': 'SPX', 'label': label, 'curr': 5711.52,
-        '_is_fallback': True,   # 신뢰도 페널티용 플래그
+        'sym': 'SPX', 'label': label, 'curr': _curr,
+        '_is_fallback': True,           # 옵션 체인은 폴백
+        '_price_source': _price_src,
+        '_gex_low_confidence': True,    # 체인 폴백 → GEX/Wall/MaxPain 저신뢰
+        '_timestamps': {
+            'price_timestamp':        _price_ts,
+            'option_chain_timestamp': None,   # CBOE 폴백 = 타임스탬프 없음
+            'oi_snapshot_timestamp':  None,
+            'iv_history_timestamp':   None,
+        },
+        '_data_source': {
+            'price':   _price_status,
+            'chain':   'FALLBACK',
+            'oi':      'FALLBACK',
+            'iv':      None,
+            'overall': _overall,
+        },
         'exp_rows': [{
             'exp': _exp, 'days': _days,
             'c_vol': 85000, 'p_vol': 92000, 'pc_vol': 1.08,
@@ -89,6 +176,13 @@ def _ndx_fallback(label: str) -> dict:
     return {
         'sym': 'NDX', 'label': label, 'curr': 27303.67,
         '_is_fallback': True,
+        '_gex_low_confidence': True,
+        '_timestamps': {
+            'price_timestamp': None, 'option_chain_timestamp': None,
+            'oi_snapshot_timestamp': None, 'iv_history_timestamp': None,
+        },
+        '_data_source': {'price': 'FALLBACK', 'chain': 'FALLBACK',
+                         'oi': 'FALLBACK', 'iv': None, 'overall': 'FALLBACK'},
         'exp_rows': [{
             'exp': _exp, 'days': _days,
             'c_vol': 24000, 'p_vol': 21000, 'pc_vol': 0.88,
@@ -136,6 +230,14 @@ def _ndx_empty_fallback(label: str) -> dict:
     """NDX 데이터 0일 때 최소 폴백"""
     return {
         'sym': 'NDX', 'label': label, 'curr': 27303.67,
+        '_is_fallback': True,
+        '_gex_low_confidence': True,
+        '_timestamps': {
+            'price_timestamp': None, 'option_chain_timestamp': None,
+            'oi_snapshot_timestamp': None, 'iv_history_timestamp': None,
+        },
+        '_data_source': {'price': 'FALLBACK', 'chain': 'FALLBACK',
+                         'oi': 'FALLBACK', 'iv': None, 'overall': 'FALLBACK'},
         'exp_rows': [], 'exp_count': 0,
         'tc_oi': 0, 'tp_oi': 0, 'tc_vol': 0, 'tp_vol': 0,
         'pc_oi': 0.87, 'pc_vol': 0.78,
@@ -384,9 +486,26 @@ def process(sym: str, label: str) -> dict | None:
     _call_vc = (_call_vol_s / oi_df['call_oi'].replace(0, np.nan)).fillna(0).round(3)
     _put_vc  = (_put_vol_s  / oi_df['put_oi'].replace(0, np.nan)).fillna(0).round(3)
 
+    _now_ts  = datetime.utcnow().isoformat() + 'Z'
+    _oi_snap = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%dT00:00:00Z')
     print(f"  {sym} 완료  (만기 {len(all_exps)}개 · 계약 {len(options_raw):,}건 · CBOE)")
     return {
         'sym': sym, 'label': label, 'curr': curr,
+        '_is_fallback': False,
+        '_gex_low_confidence': False,
+        '_timestamps': {
+            'price_timestamp':        _now_ts,
+            'option_chain_timestamp': _now_ts,
+            'oi_snapshot_timestamp':  _oi_snap,  # OI는 전일 기준
+            'iv_history_timestamp':   None,       # render_iv_rank에서 갱신
+        },
+        '_data_source': {
+            'price':   'LIVE',
+            'chain':   'LIVE',
+            'oi':      'STALE',    # 옵션 OI는 항상 전일 스냅샷
+            'iv':      None,       # render_iv_rank에서 갱신
+            'overall': 'LIVE',
+        },
         'exp_rows': exp_rows,
         'exp_count': len(all_exps),
         'tc_oi': tc_oi, 'tp_oi': tp_oi,

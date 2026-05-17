@@ -14,7 +14,7 @@ from options_monitor_base import (
 from options_monitor_render import render_iv_rank, render_0dte_block
 from options_monitor_validate import (
     validate_price_pair, validate_gex_regime, validate_max_pain_label,
-    calc_asset_confidence,
+    calc_asset_confidence, record_confidence_history, get_confidence_trend,
 )
 
 _SNAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'options_gex_snapshot.json')
@@ -478,19 +478,74 @@ def generate_html(results: list, timestamp: str) -> str:
             if iv_rank_data.get('new_high'):
                 rank_desc += ' <span style="font-size:10px;color:#d32f2f">⚠ 1년 신고IV</span>'
 
-        # 자산별 신뢰도 점수 계산
+        # 자산별 신뢰도 점수 계산 + 히스토리 기록
         _conf = calc_asset_confidence(r, pair_check=_pair_check)
+        try:
+            record_confidence_history(sym, _conf)
+        except Exception:
+            pass
+
+        # 신뢰도 추세 스파크라인
+        _trend = get_confidence_trend(sym, n=6)
+        _trend_html = ''
+        if _trend['scores']:
+            _arrow = {'UP': '▲', 'DOWN': '▼', 'FLAT': '→'}[_trend['trend']]
+            _arrow_color = ({'UP': '#22c55e', 'DOWN': '#ef4444', 'FLAT': '#94a3b8'}
+                            [_trend['trend']])
+            _trend_html = (
+                f'<span style="font-size:9px;color:#888;margin-left:8px;">'
+                f'추세 <span style="font-family:monospace;letter-spacing:1px;">'
+                f'{_trend["sparkline"]}</span> '
+                f'<span style="color:{_arrow_color}">{_arrow}{abs(_trend["delta"])}pt</span>'
+                f'</span>'
+            )
+
         _conf_badge = (
             f'<span style="float:right;font-size:9px;font-weight:600;padding:2px 6px;'
             f'border-radius:3px;background:{_conf["badge_color"]};color:#fff;">'
             f'신뢰도 {_conf["label"]} ({_conf["score"]}점)'
-            f'</span>'
+            f'</span>{_trend_html}'
         )
         _conf_note = (
             f'<div style="font-size:9px;color:{_conf["badge_color"]};'
-            f'margin-top:2px;font-weight:600">{_conf["display_note"]}</div>'
+            f'margin-top:2px;font-weight:600">{_conf["display_note"]}'
+            + (f' &nbsp;|&nbsp; stale-{_conf["stale_penalty"]}pt fallback-{_conf["fallback_penalty"]}pt'
+               if _conf["stale_penalty"] or _conf["fallback_penalty"] else '')
+            + '</div>'
             if _conf['display_note'] else ''
         )
+
+        # 데이터 소스 워터마크 (FALLBACK / STALE 시 카드 상단 표시)
+        _ds       = r.get('_data_source', {})
+        _ds_status = _ds.get('overall', 'LIVE')
+        _watermark_html = ''
+        if _ds_status == 'FALLBACK':
+            _watermark_html = (
+                '<div style="margin-top:6px;padding:4px 10px;'
+                'background:#fff3e0;border:1.5px dashed #f97316;'
+                'border-radius:4px;font-size:9px;color:#7c4100;font-weight:600;">'
+                '📦 FALLBACK 데이터 — 옵션 체인 CBOE 미수집 · GEX/Wall/Max Pain 저신뢰'
+                '</div>'
+            )
+        elif _ds_status == 'PARTIAL':
+            _watermark_html = (
+                '<div style="margin-top:6px;padding:4px 10px;'
+                'background:#fff8e1;border:1.5px dashed #f59e0b;'
+                'border-radius:4px;font-size:9px;color:#78350f;font-weight:600;">'
+                '⚠ PARTIAL 데이터 — 가격은 실시간 · 옵션 체인 폴백'
+                '</div>'
+            )
+        elif _ds_status == 'STALE':
+            _watermark_html = (
+                '<div style="margin-top:6px;padding:4px 10px;'
+                'background:#f0f9ff;border:1.5px dashed #38bdf8;'
+                'border-radius:4px;font-size:9px;color:#0c4a6e;font-weight:600;">'
+                '⏱ STALE 데이터 — 30분 이상 경과 · 신뢰도 제한'
+                '</div>'
+            )
+
+        # GEX 저신뢰 강등 (폴백 자산의 GEX 섹션)
+        _gex_low_conf = r.get('_gex_low_confidence', False)
 
         # 0DTE 카드
         zdte = render_0dte_block(r)
@@ -540,6 +595,7 @@ def generate_html(results: list, timestamp: str) -> str:
     </div>
     <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
     {_conf_note}
+    {_watermark_html}
     {pair_ratio_html}
     {_occ_banner_html}
   </div>
@@ -595,6 +651,7 @@ def generate_html(results: list, timestamp: str) -> str:
   {em_html}{cone_html}
 
   <!-- GEX 요약 -->
+  {'<div style="margin-bottom:6px;padding:4px 10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:3px;font-size:9px;color:#78350f;font-weight:600;">⚠ GEX/Call Wall/Put Wall/Max Pain — 폴백 데이터 기반, 저신뢰. 원자료 확인 필요.</div>' if _gex_low_conf else ''}
   <div class="gex-grid"{_gex_grid_style}>
     <div class="gex-box">
       <div class="gex-lbl">⚡ Net GEX (1개월이내)</div>
