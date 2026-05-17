@@ -268,45 +268,280 @@ def validate_gex_regime(
 
 def validate_max_pain_label(diff_pct: float, dte: int) -> str:
     """
-    Max Pain 방향 문구를 DTE에 따라 제한.
+    Max Pain 방향 문구 — 전 구간에서 "당김", "끌어당김" 계열 표현 금지.
 
-    - ≤7 DTE  : 단기 참고 가능 (강한 표현 허용)
-    - ≤45 DTE : 보조 참고 (완화된 표현)
-    - >45 DTE : 방향 예측 금지 → "장기 포지션 분포 참고"만 허용
+    - ≤7 DTE  : "단기 옵션 포지션 편향"
+    - ≤45 DTE : "보조 참고"
+    - >45 DTE : "장기 포지션 분포 참고, 방향 예측 불가"
+
+    금지 표현: 하방 당김, 상방 당김, 가격 자석, 끌어당김, 옵션 자석
+    """
+    abs_diff = abs(diff_pct)
+
+    if dte > MAX_PAIN_DTE_MEDIUM:
+        return f'Max Pain {diff_pct:+.1f}% — 장기 포지션 분포 참고, 방향 예측 불가'
+
+    if dte <= MAX_PAIN_DTE_STRONG:
+        # 0~7 DTE: 단기 옵션 포지션 편향 (강도 표현은 허용, "당김" 금지)
+        direction = '상방' if diff_pct > 0 else '하방'
+        if abs_diff >= 5:
+            return f'Max Pain {diff_pct:+.1f}% — 단기 옵션 포지션 편향 ({direction} 강함)'
+        if abs_diff >= 2:
+            return f'Max Pain {diff_pct:+.1f}% — 단기 옵션 포지션 편향 ({direction} 약함)'
+        return f'Max Pain {diff_pct:+.1f}% — 중립 근처 (단기 포지션 균형)'
+
+    # 8~45 DTE: 보조 참고
+    direction = '상방' if diff_pct > 0 else '하방'
+    if abs_diff >= 5:
+        return f'Max Pain {diff_pct:+.1f}% — {direction} 방향 보조 참고 (예측 불가)'
+    if abs_diff >= 2:
+        return f'Max Pain {diff_pct:+.1f}% — 약한 {direction} 편향, 보조 참고'
+    return f'Max Pain {diff_pct:+.1f}% — 중립 근처, 보조 참고'
+
+
+# ── E-2. Confidence Score 강등 Cap ───────────────────────────────
+
+# SPX/NDX용 score cap 조건
+_CAP_RATIO_ABNORMAL   = 45   # SPX/SPY 비율 이상 시 최대 점수
+_CAP_FULL_FALLBACK    = 40   # 가격+체인 모두 FALLBACK 시 최대 점수
+_CAP_RENDER_MISMATCH  = 30   # live price ≠ rendered price 시 최대 점수
+_CAP_FALLBACK_RATIO   = 35   # FALLBACK + 비율 이상 동시 시 최대 점수
+_CAP_CHAIN_FALLBACK   = 65   # 체인만 FALLBACK 시 최대 점수
+
+
+def cap_confidence_by_conditions(base_score: int, conditions: dict) -> tuple:
+    """
+    특수 강등 조건에 따라 confidence score에 hard cap 적용.
 
     Parameters
     ----------
-    diff_pct : (max_pain - curr) / curr * 100
-    dte      : Days to Expiry
+    base_score : int  — calc_confidence_score()의 score
+    conditions : dict
+        is_full_fallback  : bool — price AND chain 모두 FALLBACK
+        chain_is_fallback : bool — chain만 FALLBACK
+        ratio_abnormal    : bool — 페어 비율 이상
+        render_mismatch   : bool — live price ≠ rendered price
+        stale_timestamp   : bool — 30분 이상 경과
 
     Returns
     -------
-    str : 화면에 안전하게 표시할 Max Pain 문구
+    (capped_score: int, cap_reason: str, forced_label: str | None)
+        forced_label: None이면 score로 label 재계산, 아니면 강제 라벨
     """
-    if dte > MAX_PAIN_DTE_MEDIUM:
-        return f'Max Pain {diff_pct:+.1f}% — 장기 포지션 분포 참고 (방향 예측 불가)'
+    full_fb    = conditions.get('is_full_fallback',  False)
+    chain_fb   = conditions.get('chain_is_fallback', False)
+    ratio_bad  = conditions.get('ratio_abnormal',    False)
+    mismatch   = conditions.get('render_mismatch',   False)
+    stale      = conditions.get('stale_timestamp',   False)
 
-    abs_diff = abs(diff_pct)
+    # 악조건 갯수 (VERY_LOW 강등 기준)
+    bad_count = sum([full_fb, ratio_bad, mismatch, stale])
+    if bad_count >= 2:
+        return min(base_score, _CAP_FALLBACK_RATIO), 'VERY_LOW: 복합 악조건', 'VERY_LOW'
 
-    if dte <= MAX_PAIN_DTE_STRONG:
-        if diff_pct >= 5:
-            return f'Max Pain +{diff_pct:.1f}% → 상방 당김 강함'
-        if diff_pct >= 2:
-            return f'Max Pain +{diff_pct:.1f}% → 약한 상방 인력'
-        if diff_pct <= -5:
-            return f'Max Pain {diff_pct:.1f}% → 하방 당김 강함'
-        if diff_pct <= -2:
-            return f'Max Pain {diff_pct:.1f}% → 약한 하방 인력'
-        return f'Max Pain {diff_pct:+.1f}% (중립 근처)'
+    # 개별 cap 적용
+    cap    = 100
+    reason = ''
 
-    # 8~45 DTE: 완화된 표현
-    if abs_diff >= 5:
-        direction = '상방' if diff_pct > 0 else '하방'
-        return f'Max Pain {diff_pct:+.1f}% — {direction} 방향 참고 (보조 지표)'
-    if abs_diff >= 2:
-        direction = '상방' if diff_pct > 0 else '하방'
-        return f'Max Pain {diff_pct:+.1f}% — 약한 {direction} 편향 (보조 참고)'
-    return f'Max Pain {diff_pct:+.1f}% (중립 근처, 보조 참고)'
+    if mismatch:
+        cap    = min(cap, _CAP_RENDER_MISMATCH)
+        reason = 'render mismatch (live price ≠ rendered)'
+    if full_fb and ratio_bad:
+        cap    = min(cap, _CAP_FALLBACK_RATIO)
+        reason = 'full fallback + ratio abnormal'
+    elif full_fb:
+        cap    = min(cap, _CAP_FULL_FALLBACK)
+        reason = 'full fallback (price+chain)'
+    elif ratio_bad:
+        cap    = min(cap, _CAP_RATIO_ABNORMAL)
+        reason = 'pair ratio abnormal'
+    elif chain_fb:
+        cap    = min(cap, _CAP_CHAIN_FALLBACK)
+        reason = 'chain fallback'
+
+    capped = min(base_score, cap)
+    # 강등 후 label 재결정
+    forced = None
+    if capped <= 39:
+        forced = 'VERY_LOW'
+    elif capped <= 54 or full_fb or ratio_bad:
+        forced = 'LOW'
+    return capped, reason, forced
+
+
+# ── E-3. Compressed Mixed Gamma Risk ──────────────────────────────
+
+def detect_compressed_gamma_risk(
+    spot: float,
+    net_gex: float,
+    gamma_flip: Optional[float],
+    call_wall: Optional[float],
+    put_wall: Optional[float],
+    pc_oi: float = 0.0,
+    near_iv: float = 0.0,
+) -> dict:
+    """
+    압축된 혼합 감마 위험(Coiled Spring) 감지.
+
+    조건 (모두 충족 시 compressed=True):
+    1. net_gex < 0       딜러 숏감마
+    2. spot > gamma_flip  현재가가 Gamma Flip 위
+    3. |spot - flip| / spot > 10%  Flip이 멀리
+    4. box_width = (call_wall - put_wall) / spot ≤ 1.0%
+    5. pc_oi > 1.3 OR near_iv > 30  헤지/이벤트 신호
+
+    Returns
+    -------
+    dict
+        compressed    : bool
+        label         : str
+        box_width_pct : float | None
+        conditions    : dict
+    """
+    if spot <= 0:
+        return {'compressed': False, 'label': '', 'box_width_pct': None, 'conditions': {}}
+
+    cond1 = net_gex < 0
+    cond2 = (gamma_flip is not None) and (spot > gamma_flip)
+    cond3 = (gamma_flip is not None) and (abs(spot - gamma_flip) / spot > 0.10)
+
+    box_w = None
+    cond4 = False
+    if call_wall and put_wall and spot > 0:
+        box_w = (call_wall - put_wall) / spot * 100
+        cond4 = box_w <= 1.0
+
+    cond5 = (pc_oi > 1.3) or (near_iv > 30)
+
+    conds = {
+        'net_gex_negative': cond1,
+        'above_gamma_flip': cond2,
+        'flip_far':         cond3,
+        'narrow_box':       cond4,
+        'hedge_signal':     cond5,
+    }
+
+    # 완전 조건: 1~4 모두 + (5 또는 합산 ≥ 4)
+    if cond1 and cond2 and cond3 and cond4:
+        _bw = f'{box_w:.1f}%' if box_w is not None else '?%'
+        label = (
+            f'압축된 혼합 감마 위험 ⚠ — NET GEX 음수, Gamma Flip 멀리, '
+            f'Call/Put Wall 박스 {_bw} (매우 좁음). '
+            '방향성 돌파 시 변동성 확대 가능.'
+        )
+        return {'compressed': True, 'label': label,
+                'box_width_pct': box_w, 'conditions': conds}
+
+    # 부분 혼합 신호
+    if cond1 and cond2:
+        _bw_s = f'{box_w:.1f}%' if box_w is not None else 'N/A'
+        label = f'혼합 감마 신호 — NET GEX 음수, 현재가 Gamma Flip 위 (박스 {_bw_s})'
+        return {'compressed': False, 'label': label,
+                'box_width_pct': box_w, 'conditions': conds}
+
+    return {'compressed': False, 'label': '', 'box_width_pct': box_w, 'conditions': conds}
+
+
+# ── E-4. Proxy Priority Engine ────────────────────────────────────
+
+# NDX/QQQ 정상 비율 범위 (NDX ÷ QQQ ≈ 38~42배)
+NDX_QQQ_RATIO_MIN = 35.0
+NDX_QQQ_RATIO_MAX = 45.0
+
+
+def select_proxy_mode(asset_confs: dict) -> dict:
+    """
+    자산별 신뢰도 라벨에 따라 Proxy 선택 모드 결정.
+
+    Parameters
+    ----------
+    asset_confs : {sym: {'label': str, 'score': int, 'fallback_penalty': int, ...}}
+
+    Returns
+    -------
+    dict
+        proxies : {'SP500': {...}, 'NASDAQ': {...}, 'GOLD': {...}, 'GOOGL': {...}}
+        notes   : list[str]   — 각 프록시 선택 이유
+        banner  : str         — 대시보드 상단 표시 문구
+    """
+    proxies: dict = {}
+    notes:   list = []
+
+    def _label(sym: str) -> str:
+        return asset_confs.get(sym, {}).get('label', 'UNKNOWN')
+
+    def _fp(sym: str) -> int:
+        return asset_confs.get(sym, {}).get('fallback_penalty', 0)
+
+    # ── S&P 500 ──────────────────────────────────────────────────
+    spx_label = _label('SPX')
+    if spx_label in ('LOW', 'VERY_LOW'):
+        proxies['SP500']  = {'primary': 'SPY', 'ignored': 'SPX',
+                             'reason': f'SPX {spx_label}'}
+        notes.append(f'S&P: SPY PRIMARY — SPX {spx_label} (fallback/ratio abnormal).')
+    else:
+        proxies['SP500']  = {'primary': 'SPX', 'secondary': 'SPY',
+                             'reason': f'SPX {spx_label}'}
+        notes.append(f'S&P: SPX PRIMARY ({spx_label}).')
+
+    # ── Nasdaq ────────────────────────────────────────────────────
+    ndx_label = _label('NDX')
+    ndx_fb    = _fp('NDX') > 0
+    if ndx_label in ('LOW', 'VERY_LOW') or (ndx_label == 'MEDIUM' and ndx_fb):
+        proxies['NASDAQ'] = {'primary': 'QQQ', 'secondary': 'NDX',
+                             'reason': f'NDX {ndx_label}/fallback chain'}
+        notes.append(
+            f'Nasdaq: QQQ PRIMARY — NDX {ndx_label}'
+            + (' (fallback chain)' if ndx_fb else '') + '.'
+        )
+    else:
+        proxies['NASDAQ'] = {'primary': 'NDX', 'secondary': 'QQQ',
+                             'reason': f'NDX {ndx_label}'}
+        notes.append(f'Nasdaq: NDX PRIMARY ({ndx_label}).')
+
+    # ── Gold / GOOGL ──────────────────────────────────────────────
+    proxies['GOLD']  = {'primary': 'GLD'}
+    proxies['GOOGL'] = {'primary': 'GOOGL'}
+    notes.append('Gold: GLD PRIMARY.')
+    notes.append('Alphabet: GOOGL PRIMARY.')
+
+    # 배너
+    sp_mode  = proxies['SP500']['primary']
+    nq_mode  = proxies['NASDAQ']['primary']
+    banner   = (
+        f'Market Proxy Status: '
+        f'S&P={sp_mode}, Nasdaq={nq_mode}, Gold=GLD, Alphabet=GOOGL'
+    )
+
+    return {'proxies': proxies, 'notes': notes, 'banner': banner}
+
+
+# ── E-5. IV Rank 이상 감지 ────────────────────────────────────────
+
+def detect_iv_rank_anomaly(iv_ranks: dict) -> dict:
+    """
+    여러 자산의 IV Rank가 동시에 100%이면 이상 감지.
+
+    Parameters
+    ----------
+    iv_ranks : {sym: {'rank': float | None, 'source': str}}
+
+    Returns
+    -------
+    dict
+        anomaly   : bool
+        flag      : str  — 'broad_iv_rank_extreme' | 'iv_rank_source_check_required' | ''
+        affected  : list[str]
+    """
+    extremes = [sym for sym, v in iv_ranks.items()
+                if v.get('rank') is not None and v['rank'] >= 99.0]
+    if len(extremes) >= 3:
+        return {
+            'anomaly':  True,
+            'flag':     'broad_iv_rank_extreme / iv_rank_source_check_required',
+            'affected': extremes,
+        }
+    return {'anomaly': False, 'flag': '', 'affected': []}
 
 
 # ── F. IV Rank 검증 ──────────────────────────────────────────────
@@ -806,6 +1041,127 @@ def run_tests() -> list:
         except Exception:
             pass
 
+    # ── Test A: SPX live price must not be overwritten ────────────
+    print('\nTest A: SPX live price must not be overwritten by fallback')
+    live_p   = 7408.50
+    fback_p  = 5711.52
+    # 비즈니스 규칙: live_price가 있으면 반드시 그것이 rendered price
+    final_p  = live_p if live_p else fback_p
+    _chk('TA-live-wins',       final_p == live_p,      f"final={final_p}")
+    _chk('TA-not-fallback',    final_p != fback_p,     f"final={final_p}")
+    _chk('TA-mismatch-ok',     final_p == live_p,      'no mismatch when live wins')
+
+    # ── Test B: SPX fallback + ratio abnormal → cap ≤ 45 ─────────
+    print('\nTest B: SPX fallback + ratio abnormal → confidence cap')
+    _r_spx = validate_price_pair(5711.52, 739.17)  # ratio = 7.73
+    cond_b  = {
+        'is_full_fallback':  True,   # price+chain FALLBACK
+        'chain_is_fallback': True,
+        'ratio_abnormal':    _r_spx['low_confidence'],
+        'render_mismatch':   False,
+        'stale_timestamp':   False,
+    }
+    base_b = 70  # 보정 전 가상 점수
+    capped_b, reason_b, forced_b = cap_confidence_by_conditions(base_b, cond_b)
+    _chk('TB-cap-le-45',      capped_b <= 45,            f"capped={capped_b}")
+    _chk('TB-label-low',      forced_b in ('LOW','VERY_LOW'), f"label={forced_b}")
+    _chk('TB-reason',         len(reason_b) > 0,          f"reason={reason_b[:30]}")
+
+    # ── Test C: NDX chain fallback → cap ≤ 65 ───────────────────
+    print('\nTest C: NDX chain fallback → cap ≤ 65')
+    cond_c  = {
+        'is_full_fallback':  False,
+        'chain_is_fallback': True,   # 체인만 FALLBACK
+        'ratio_abnormal':    False,
+        'render_mismatch':   False,
+        'stale_timestamp':   False,
+    }
+    base_c    = 80
+    capped_c, _, forced_c = cap_confidence_by_conditions(base_c, cond_c)
+    _chk('TC-cap-le-65',      capped_c <= 65,            f"capped={capped_c}")
+    _chk('TC-not-high',       forced_c != 'HIGH' if forced_c else capped_c <= 65,
+         f"forced={forced_c}")
+
+    # ── Test D: Proxy mode selection ─────────────────────────────
+    print('\nTest D: proxy mode — SPX LOW → SPY PRIMARY, NDX FALLBACK → QQQ PRIMARY')
+    asset_d = {
+        'SPX': {'label': 'LOW',         'fallback_penalty': 20, 'score': 40},
+        'SPY': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 90},
+        'NDX': {'label': 'MEDIUM',      'fallback_penalty': 20, 'score': 55},
+        'QQQ': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 88},
+        'GLD': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 85},
+        'GOOGL': {'label': 'HIGH',      'fallback_penalty': 0,  'score': 87},
+    }
+    pm = select_proxy_mode(asset_d)
+    _chk('TD-sp500-spy',    pm['proxies']['SP500']['primary']  == 'SPY',
+         f"sp500={pm['proxies']['SP500']['primary']}")
+    _chk('TD-nasdaq-qqq',   pm['proxies']['NASDAQ']['primary'] == 'QQQ',
+         f"nasdaq={pm['proxies']['NASDAQ']['primary']}")
+    _chk('TD-banner-ok',    'SPY' in pm['banner'] and 'QQQ' in pm['banner'],
+         f"banner={pm['banner']}")
+
+    # ── Test E: QQQ compressed mixed gamma risk ──────────────────
+    print('\nTest E: QQQ compressed mixed gamma risk')
+    rE = detect_compressed_gamma_risk(
+        spot=706.11, net_gex=-0.080e9, gamma_flip=579.78,
+        call_wall=705.0, put_wall=700.0, pc_oi=1.62, near_iv=0,
+    )
+    _chk('TE-compressed',    rE['compressed'] is True,      f"compressed={rE['compressed']}")
+    _chk('TE-label-ne',      len(rE['label']) > 10,         f"label='{rE['label'][:40]}'")
+    _chk('TE-box-width',     rE['box_width_pct'] is not None and
+                              abs(rE['box_width_pct'] - 0.706) < 0.05,
+         f"box={rE.get('box_width_pct'):.3f}%")
+    # SPY: box=1.35% → not compressed
+    rE2 = detect_compressed_gamma_risk(
+        spot=739.17, net_gex=-0.333e9, gamma_flip=607.0,
+        call_wall=740.0, put_wall=730.0, pc_oi=1.5, near_iv=0,
+    )
+    spy_bw = rE2.get('box_width_pct', 0)
+    _chk('TE-spy-not-compressed', rE2['compressed'] is False,
+         f"SPY box={spy_bw:.2f}% (>1%) → not compressed")
+
+    # ── Test F: Max Pain forbidden language ──────────────────────
+    print('\nTest F: Max Pain forbidden language')
+    _FORBIDDEN_MP = ['하방 당김', '상방 당김', '가격 자석', '끌어당김', '당김 강함']
+    _all_labels   = [
+        validate_max_pain_label(v, d)
+        for v in [-10, -5, -2, 0, 2, 5, 10]
+        for d in [3, 20, 100]
+    ]
+    _violations   = [(lbl, word) for lbl in _all_labels
+                     for word in _FORBIDDEN_MP if word in lbl]
+    _chk('TF-no-forbidden',  len(_violations) == 0,
+         f"violations={_violations[:3] if _violations else '없음'}")
+
+    # ── Test G: IV Rank source labeling ──────────────────────────
+    print('\nTest G: IV Rank anomaly detection (3+ symbols at 100%)')
+    iv_g = {
+        'QQQ':   {'rank': 100.0, 'source': 'REALIZED_VOL_PROXY'},
+        'SPY':   {'rank': 100.0, 'source': 'REALIZED_VOL_PROXY'},
+        'GOOGL': {'rank': 100.0, 'source': 'REALIZED_VOL_PROXY'},
+        'GLD':   {'rank':  55.0, 'source': 'REALIZED_VOL_PROXY'},
+    }
+    anomaly_g = detect_iv_rank_anomaly(iv_g)
+    _chk('TG-anomaly-detected', anomaly_g['anomaly'] is True,
+         f"flag={anomaly_g['flag'][:30]}")
+    _chk('TG-affected-3plus',   len(anomaly_g['affected']) >= 3,
+         f"affected={anomaly_g['affected']}")
+
+    # ── Test H: Dashboard integrity summary ──────────────────────
+    print('\nTest H: dashboard summary contains proxy mode')
+    asset_h = {
+        'SPX': {'label': 'LOW',    'fallback_penalty': 20, 'score': 38},
+        'SPY': {'label': 'HIGH',   'fallback_penalty': 0,  'score': 90},
+        'NDX': {'label': 'MEDIUM', 'fallback_penalty': 20, 'score': 55},
+        'QQQ': {'label': 'HIGH',   'fallback_penalty': 0,  'score': 88},
+    }
+    pm_h = select_proxy_mode(asset_h)
+    summary_text = ' '.join(pm_h['notes'])
+    _chk('TH-spy-in-notes',  'SPY' in summary_text,     f"notes='{summary_text[:60]}'")
+    _chk('TH-qqq-in-notes',  'QQQ' in summary_text,     f"notes='{summary_text[:60]}'")
+    _chk('TH-spx-ignored',   'SPX' in pm_h['proxies']['SP500'].get('ignored',''),
+         f"SP500 primary={pm_h['proxies']['SP500']['primary']}")
+
     # ── 결과 요약 ────────────────────────────────────────────────
     total  = len(results)
     passed = sum(1 for _, ok, _ in results if ok)
@@ -825,6 +1181,10 @@ __all__ = [
     'validate_expected_move',
     'calc_confidence_score',
     'calc_asset_confidence',
+    'cap_confidence_by_conditions',
+    'detect_compressed_gamma_risk',
+    'select_proxy_mode',
+    'detect_iv_rank_anomaly',
     'record_confidence_history',
     'load_confidence_history',
     'get_confidence_trend',

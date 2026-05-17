@@ -16,28 +16,41 @@ from options_monitor_base import CBOE_URL, HEADERS, parse_opt_sym
 
 def _fetch_spx_price_live() -> tuple:
     """
-    SPX 실시간 가격 3단계 failover.
+    SPX 실시간 가격 3단계 failover — 각 단계별 audit_trail 반환.
 
-    Priority 1: yfinance  ^GSPC  (fast_info)
-    Priority 2: Yahoo Finance v8 chart API  (^GSPC)
-    Priority 3: CBOE delayed quote          (^SPX 별도 엔드포인트)
+    Priority 1: yfinance  ^GSPC
+    Priority 2: Yahoo Finance v8 chart API
+    Priority 3: CBOE delayed quote
 
     Returns
     -------
-    (price: float | None, source_name: str, status: 'LIVE' | 'STALE' | 'FALLBACK')
+    (price: float | None,
+     source_name: str,
+     status: 'LIVE' | 'STALE' | 'FALLBACK',
+     audit_trail: dict)  ← 각 소스 시도 결과 기록
     """
-    # ── Priority 1: yfinance ─────────────────────────────────────
+    audit: dict = {
+        'yfinance':      {'tried': False, 'result': None, 'error': ''},
+        'yahoo_api':     {'tried': False, 'result': None, 'error': ''},
+        'cboe_delayed':  {'tried': False, 'result': None, 'error': ''},
+    }
+
+    # ── Priority 1: yfinance ^GSPC ──────────────────────────────
+    audit['yfinance']['tried'] = True
     try:
         import yfinance as yf
         tk = yf.Ticker('^GSPC')
         p  = (tk.fast_info.get('last_price')
               or tk.fast_info.get('regularMarketPrice'))
+        audit['yfinance']['result'] = float(p) if p else None
         if p and float(p) > 1000:
-            return float(p), 'yfinance ^GSPC', 'LIVE'
-    except Exception:
-        pass
+            return float(p), 'yfinance ^GSPC', 'LIVE', audit
+        audit['yfinance']['error'] = f'price={p} (≤1000 or None)'
+    except Exception as e:
+        audit['yfinance']['error'] = str(e)[:60]
 
     # ── Priority 2: Yahoo Finance v8 API ─────────────────────────
+    audit['yahoo_api']['tried'] = True
     try:
         url  = ('https://query1.finance.yahoo.com/v8/finance/chart/'
                 '%5EGSPC?interval=1d&range=1d')
@@ -47,23 +60,32 @@ def _fetch_spx_price_live() -> tuple:
                             .get('result', [{}])[0]
                             .get('meta', {})
                             .get('regularMarketPrice'))
+            audit['yahoo_api']['result'] = float(p) if p else None
             if p and float(p) > 1000:
-                return float(p), 'Yahoo Finance API ^GSPC', 'LIVE'
-    except Exception:
-        pass
+                return float(p), 'Yahoo Finance API ^GSPC', 'LIVE', audit
+            audit['yahoo_api']['error'] = f'price={p}'
+        else:
+            audit['yahoo_api']['error'] = f'HTTP {resp.status_code}'
+    except Exception as e:
+        audit['yahoo_api']['error'] = str(e)[:60]
 
     # ── Priority 3: CBOE delayed quote ───────────────────────────
+    audit['cboe_delayed']['tried'] = True
     try:
         url  = 'https://cdn.cboe.com/api/global/delayed_quotes/quotes/%5ESPX.json'
         resp = requests.get(url, headers=HEADERS, timeout=8)
         if resp.status_code == 200:
             p = resp.json().get('data', {}).get('current_price')
+            audit['cboe_delayed']['result'] = float(p) if p else None
             if p and float(p) > 1000:
-                return float(p), 'CBOE delayed quote ^SPX', 'STALE'
-    except Exception:
-        pass
+                return float(p), 'CBOE delayed quote ^SPX', 'STALE', audit
+            audit['cboe_delayed']['error'] = f'price={p}'
+        else:
+            audit['cboe_delayed']['error'] = f'HTTP {resp.status_code}'
+    except Exception as e:
+        audit['cboe_delayed']['error'] = str(e)[:60]
 
-    return None, 'none', 'FALLBACK'
+    return None, 'none', 'FALLBACK', audit
 
 
 # ═══ 폴백용 동적 날짜 헬퍼 ═══
@@ -96,24 +118,52 @@ def _spx_fallback(label: str) -> dict:
     """
     _exp, _days = _next_monthly_expiry()
 
-    # 실시간 가격 시도
-    _live_price, _price_src, _price_status = _fetch_spx_price_live()
-    _curr = _live_price if _live_price else 5711.52
+    # ── 실시간 가격 시도 (audit trail 포함) ──────────────────────
+    _HARDCODED_FALLBACK = 5711.52
+    _live_price, _price_src, _price_status, _audit = _fetch_spx_price_live()
 
-    # 타임스탬프
-    _now_ts = datetime.utcnow().isoformat() + 'Z'
+    # LIVE price가 있으면 반드시 그것을 사용 (fallback이 덮어쓰지 못함)
+    _selected_price  = _live_price if _live_price else _HARDCODED_FALLBACK
+    _selected_source = _price_src  if _live_price else 'hardcoded_fallback'
+    _render_mismatch = False  # live price ≠ rendered price 플래그
+
+    _now_ts   = datetime.utcnow().isoformat() + 'Z'
     _price_ts = _now_ts if _live_price else None
+    _overall  = 'PARTIAL' if _live_price else 'FALLBACK'
 
-    # data_source_status
-    _overall = 'PARTIAL' if _live_price else 'FALLBACK'
-    print(f"  SPX 가격: {_curr:,.2f}  "
-          f"소스: {_price_src} [{_price_status}]")
+    # Render mismatch guard: selected_price와 final render price 동일성 보장
+    # (이후 HTML 단계에서 curr이 교체되면 CRITICAL warning 발생)
+    _final_rendered = _selected_price   # 이 값이 HTML에 표시되어야 함
+
+    _price_audit = {
+        'raw_source_prices': {
+            src: _audit.get(src, {}).get('result')
+            for src in ('yfinance', 'yahoo_api', 'cboe_delayed')
+        },
+        'audit_trail':         _audit,
+        'selected_price':      _selected_price,
+        'selected_price_source': _selected_source,
+        'selected_price_status': _price_status,
+        'selected_price_timestamp': _price_ts,
+        'fallback_price':      _HARDCODED_FALLBACK,
+        'is_live':             bool(_live_price),
+        'render_mismatch':     _render_mismatch,
+        'final_rendered_price': _final_rendered,
+    }
+
+    _curr = _selected_price  # ← 이 값이 dict['curr']로 설정됨
+
+    print(f"  SPX 가격: {_curr:,.2f}  소스: {_selected_source} [{_price_status}]"
+          + ("" if _live_price else
+             f"  ⚠ FALLBACK — audit: "
+             + str({k: v['error'] for k, v in _audit.items() if v['tried']})[:80]))
 
     return {
         'sym': 'SPX', 'label': label, 'curr': _curr,
         '_is_fallback': True,           # 옵션 체인은 폴백
-        '_price_source': _price_src,
+        '_price_source': _selected_source,
         '_gex_low_confidence': True,    # 체인 폴백 → GEX/Wall/MaxPain 저신뢰
+        '_price_audit': _price_audit,   # 가격 선택 audit trail
         '_timestamps': {
             'price_timestamp':        _price_ts,
             'option_chain_timestamp': None,   # CBOE 폴백 = 타임스탬프 없음

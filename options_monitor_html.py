@@ -15,6 +15,8 @@ from options_monitor_render import render_iv_rank, render_0dte_block
 from options_monitor_validate import (
     validate_price_pair, validate_gex_regime, validate_max_pain_label,
     calc_asset_confidence, record_confidence_history, get_confidence_trend,
+    cap_confidence_by_conditions, detect_compressed_gamma_risk,
+    select_proxy_mode, detect_iv_rank_anomaly,
 )
 
 _SNAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'options_gex_snapshot.json')
@@ -129,6 +131,86 @@ def generate_html(results: list, timestamp: str) -> str:
         ]
 
     data_js = json.dumps(results, ensure_ascii=False)
+
+    # ─── ⑧ 전체 신뢰도 사전 계산 (proxy engine용) ────────────────────
+    _pre_confs: dict = {}
+    for _r0 in results:
+        if not _r0:
+            continue
+        _s0 = _r0['sym']
+        _pc0 = None
+        if _s0 == 'SPX':
+            _spy0 = next((x['curr'] for x in results if x and x['sym'] == 'SPY'), 0)
+            if _spy0 > 0:
+                _pc0 = validate_price_pair(_r0['curr'], _spy0)
+        _c0  = calc_asset_confidence(_r0, pair_check=_pc0)
+        # SPX/NDX confidence cap 적용
+        _ds0 = _r0.get('_data_source', {})
+        _cap_cond0 = {
+            'is_full_fallback':  _ds0.get('price') == 'FALLBACK' and _ds0.get('chain') == 'FALLBACK',
+            'chain_is_fallback': _ds0.get('chain') == 'FALLBACK',
+            'ratio_abnormal':    (_pc0 or {}).get('low_confidence', False),
+            'render_mismatch':   False,
+            'stale_timestamp':   _c0.get('stale_penalty', 0) > 0,
+        }
+        _capped0, _reason0, _forced0 = cap_confidence_by_conditions(_c0['score'], _cap_cond0)
+        if _forced0:
+            _c0 = {**_c0, 'score': _capped0, 'label': _forced0,
+                   '_cap_reason': _reason0}
+        _pre_confs[_s0] = _c0
+
+    # ─── ⑨ Proxy Priority Engine ─────────────────────────────────────
+    _proxy_mode = select_proxy_mode(_pre_confs)
+
+    # ─── ⑩ IV Rank 이상 감지 (루프 후 집계) ─────────────────────────
+    # (루프 내에서 수집 후 루프 뒤에서 사용)
+    _iv_rank_map: dict = {}
+
+    # ─── ⑪ Dashboard Integrity Summary HTML ─────────────────────────
+    _high_syms = [s for s, c in _pre_confs.items() if c['label'] in ('HIGH', 'MEDIUM_HIGH')]
+    _low_syms  = [s for s, c in _pre_confs.items() if c['label'] in ('LOW', 'VERY_LOW')]
+    _proxy_sp  = _proxy_mode['proxies']['SP500']['primary']
+    _proxy_nq  = _proxy_mode['proxies']['NASDAQ']['primary']
+    _spx_ignored = (_proxy_sp != 'SPX')
+    _ndx_demoted = (_proxy_nq != 'NDX')
+
+    _summary_notes_html = ''.join(
+        f'<li style="margin:2px 0">{n}</li>' for n in _proxy_mode['notes']
+    )
+    _dashboard_summary = f"""
+<div style="background:#0f172a;border:1.5px solid #334155;border-radius:10px;
+     padding:14px 18px;margin-bottom:18px;color:#f8fafc;">
+  <div style="font-size:13px;font-weight:700;color:#38bdf8;margin-bottom:8px;">
+    📊 Data Integrity Summary
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+    <div>
+      <div style="color:#94a3b8;font-weight:600;margin-bottom:4px;">PROXY STATUS</div>
+      <ul style="padding-left:14px;color:#e2e8f0;line-height:1.8;">
+        {_summary_notes_html}
+      </ul>
+    </div>
+    <div>
+      <div style="color:#94a3b8;font-weight:600;margin-bottom:4px;">CONFIDENCE</div>
+      <div style="color:#22c55e">HIGH/MH: {', '.join(_high_syms) or '없음'}</div>
+      <div style="color:#f97316">LOW/VL:  {', '.join(_low_syms) or '없음'}</div>
+      <div style="color:#94a3b8;margin-top:4px;font-size:10px;">
+        ⚠ FALLBACK GEX/Wall/Max Pain은 의사결정 제외
+      </div>
+    </div>
+  </div>
+</div>"""
+
+    # SPX stale/fallback 최상단 배너 (SPX가 IGNORED일 때)
+    _spx_stale_banner = ''
+    if _spx_ignored:
+        _spx_stale_banner = f"""
+<div style="background:#fff3e0;border:2px solid #f97316;border-radius:8px;
+     padding:10px 16px;margin-bottom:14px;font-size:12px;font-weight:700;color:#7c4100;">
+  ⛔ SPX price stale/fallback. Ignore SPX GEX/Wall/Max Pain.
+  Use <strong>SPY</strong> as S&P500 proxy.
+  SPX section is LOW/VERY_LOW confidence — Do not use for trading decisions.
+</div>"""
 
     cards = ''
     for r in results:
@@ -459,6 +541,11 @@ def generate_html(results: list, timestamp: str) -> str:
         vanna_cls = 'gex-pos' if vc['vanna'] >= 0 else 'gex-neg'
         charm_cls = 'gex-pos' if vc['charm'] >= 0 else 'gex-neg'
 
+        # IV Rank 소스 결정 (실현변동성 proxy vs implied IV)
+        _iv_src_label = ('INSUFFICIENT_HISTORY' if iv_rank_data.get('insufficient_history')
+                         else 'REALIZED_VOL_PROXY')   # yfinance는 항상 realized vol proxy
+        _iv_rank_map[sym] = {'rank': iv_rank_data.get('rank'), 'source': _iv_src_label}
+
         # IV Rank: None이면 insufficient_history 표시 (100% 강제 금지)
         _iv_rank = iv_rank_data.get('rank')
         _iv_pct  = iv_rank_data.get('pct')
@@ -466,7 +553,7 @@ def generate_html(results: list, timestamp: str) -> str:
             rank_str   = 'N/A'
             pct_str    = 'N/A'
             rank_color = '#94a3b8'
-            rank_desc  = f'이력 부족 / 계산 불가'
+            rank_desc  = 'INSUFFICIENT_HISTORY — 이력 부족'
             if iv_rank_data.get('low_confidence'):
                 rank_desc += ' <span style="font-size:9px;color:#ef5350">⚠ 저신뢰</span>'
         else:
@@ -477,9 +564,50 @@ def generate_html(results: list, timestamp: str) -> str:
                           else 'IV 고가 🔴' if _iv_rank >= 70 else 'IV 보통 🟡')
             if iv_rank_data.get('new_high'):
                 rank_desc += ' <span style="font-size:10px;color:#d32f2f">⚠ 1년 신고IV</span>'
+            # REALIZED_VOL_PROXY 경고
+            rank_desc += (
+                f' <span style="font-size:8px;color:#94a3b8;display:block;margin-top:2px;">'
+                f'소스: {_iv_src_label}'
+                f'{" ⚠ 옵션 IV 아님" if _iv_src_label == "REALIZED_VOL_PROXY" else ""}'
+                f'</span>'
+            )
 
-        # 자산별 신뢰도 점수 계산 + 히스토리 기록
-        _conf = calc_asset_confidence(r, pair_check=_pair_check)
+        # 자산별 신뢰도 점수 계산 (사전계산 결과 재사용)
+        _conf = _pre_confs.get(sym) or calc_asset_confidence(r, pair_check=_pair_check)
+
+        # SPX/NDX 추가 cap 적용 (사전계산에서 이미 적용됐지만 확인용)
+        _ds  = r.get('_data_source', {})
+        _cap_cond = {
+            'is_full_fallback':  _ds.get('price') == 'FALLBACK' and _ds.get('chain') == 'FALLBACK',
+            'chain_is_fallback': _ds.get('chain') == 'FALLBACK',
+            'ratio_abnormal':    (_pair_check or {}).get('low_confidence', False),
+            'render_mismatch':   False,
+            'stale_timestamp':   _conf.get('stale_penalty', 0) > 0,
+        }
+        # price audit mismatch 감지
+        _audit_trail = r.get('_price_audit', {})
+        _selected_p  = _audit_trail.get('selected_price')
+        _final_rend  = _audit_trail.get('final_rendered_price')
+        _mismatch_critical = ''
+        if _selected_p and _final_rend and abs(_selected_p - _final_rend) > 1.0:
+            _cap_cond['render_mismatch'] = True
+            _mismatch_critical = (
+                f'<div style="background:#ef4444;color:#fff;font-weight:700;'
+                f'padding:6px 10px;border-radius:4px;font-size:10px;margin-top:6px;">'
+                f'CRITICAL: selected SPX live price {_selected_p:,.2f} but rendered price '
+                f'{_final_rend:,.2f}. Snapshot/render mismatch.</div>'
+            )
+        _capped_s, _cap_reason, _forced_label = cap_confidence_by_conditions(
+            _conf['score'], _cap_cond)
+        if _forced_label:
+            from options_monitor_validate import calc_confidence_score as _ccs
+            _conf = {**_conf, **_ccs({'price_pair': _capped_s,
+                                       'expiry_dte': 0, 'chain_completeness': 0,
+                                       'gex_consistency': 0, 'iv_history': 0,
+                                       'wall_sanity': 0}),
+                     'score': _capped_s, 'label': _forced_label,
+                     '_cap_reason': _cap_reason}
+
         try:
             record_confidence_history(sym, _conf)
         except Exception:
@@ -544,8 +672,47 @@ def generate_html(results: list, timestamp: str) -> str:
                 '</div>'
             )
 
+        # ─── Compressed Mixed Gamma Risk ───────────────────────────
+        _cgr = detect_compressed_gamma_risk(
+            spot=curr,
+            net_gex=(gex.get('net_gex_b') or 0) * 1e9,
+            gamma_flip=gex.get('gamma_flip'),
+            call_wall=gex.get('call_wall'),
+            put_wall=gex.get('put_wall'),
+            pc_oi=r.get('pc_oi', 0),
+        )
+        _cgr_html = ''
+        if _cgr.get('compressed'):
+            _cgr_html = (
+                f'<div style="margin:8px 0;padding:8px 12px;'
+                f'background:#fff8e1;border-left:4px solid #f59e0b;'
+                f'border-radius:4px;font-size:11px;color:#78350f;font-weight:600;">'
+                f'⚠ {_cgr["label"]}</div>'
+            )
+        elif _cgr.get('label'):
+            _cgr_html = (
+                f'<div style="margin:6px 0;padding:6px 10px;'
+                f'background:#f0f9ff;border-left:3px solid #38bdf8;'
+                f'border-radius:4px;font-size:10px;color:#0c4a6e;">'
+                f'{_cgr["label"]}</div>'
+            )
+
         # GEX 저신뢰 강등 (폴백 자산의 GEX 섹션)
         _gex_low_conf = r.get('_gex_low_confidence', False)
+
+        # SPX LOW confidence 전용 배너
+        _gex_section_warning = ''
+        if _conf.get('label') in ('LOW', 'VERY_LOW') and sym in ('SPX', 'NDX'):
+            _proxy_sym = 'SPY' if sym == 'SPX' else 'QQQ'
+            _gex_section_warning = (
+                f'<div style="margin-bottom:8px;padding:8px 12px;'
+                f'background:#fef2f2;border:1.5px solid #ef4444;'
+                f'border-radius:6px;font-size:10px;color:#7f1d1d;font-weight:600;">'
+                f'⛔ {sym} section is {_conf["label"]} confidence. '
+                f'Do not use {sym}-derived GEX/Wall/Max Pain for trading decisions. '
+                f'Prefer <strong>{_proxy_sym}</strong> proxy.'
+                f'</div>'
+            )
 
         # 0DTE 카드
         zdte = render_0dte_block(r)
@@ -596,6 +763,7 @@ def generate_html(results: list, timestamp: str) -> str:
     <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
     {_conf_note}
     {_watermark_html}
+    {_mismatch_critical}
     {pair_ratio_html}
     {_occ_banner_html}
   </div>
@@ -651,6 +819,8 @@ def generate_html(results: list, timestamp: str) -> str:
   {em_html}{cone_html}
 
   <!-- GEX 요약 -->
+  {_gex_section_warning}
+  {_cgr_html}
   {'<div style="margin-bottom:6px;padding:4px 10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:3px;font-size:9px;color:#78350f;font-weight:600;">⚠ GEX/Call Wall/Put Wall/Max Pain — 폴백 데이터 기반, 저신뢰. 원자료 확인 필요.</div>' if _gex_low_conf else ''}
   <div class="gex-grid"{_gex_grid_style}>
     <div class="gex-box">
@@ -930,6 +1100,20 @@ a{color:inherit;}
 .box-hint{font-size:8.5px;color:#64748b;margin-left:auto;}
 """
     # ─── ① Δ GEX 스냅샷 저장 ────────────────────────────────────
+    # ─── IV Rank 이상 감지 (루프 후 집계) ───────────────────────────
+    _iv_anomaly = detect_iv_rank_anomaly(_iv_rank_map)
+    if _iv_anomaly['anomaly']:
+        _ia_banner = (
+            f'<div style="background:#fff3e0;border:1px solid #f97316;'
+            f'border-radius:6px;padding:8px 14px;margin-bottom:12px;'
+            f'font-size:10px;font-weight:600;color:#7c4100;">'
+            f'⚠ IV Rank 이상: {", ".join(_iv_anomaly["affected"])} 동시 100%'
+            f' — {_iv_anomaly["flag"]}. 소스: REALIZED_VOL_PROXY (옵션 IV 아님). 해석 주의.'
+            f'</div>'
+        )
+        # 배너를 dashboard_summary 앞에 삽입 (변수 교체)
+        _dashboard_summary = _ia_banner + _dashboard_summary
+
     try:
         with open(_SNAP_FILE, 'w') as _sf:
             json.dump(_curr_snap, _sf)
@@ -942,7 +1126,11 @@ a{color:inherit;}
   <h1>Jason Market — 옵션 모니터 (QQQ / SPY / GOOGL)</h1>
   <div class="meta">업데이트: {timestamp} &nbsp;|&nbsp; 날짜·OI: CBOE = optioncharts.io &nbsp;|&nbsp; 기대변동: ATM스트래들 = barchart 방식</div>
 </div>
-<div class="page">{cards}</div>
+<div class="page">
+{_spx_stale_banner}
+{_dashboard_summary}
+{cards}
+</div>
 
 <script>
 const ALL = {data_js};
