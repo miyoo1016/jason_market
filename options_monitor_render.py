@@ -47,18 +47,24 @@ def render_iv_rank(r: dict) -> dict:
         v = validate_iv_rank(curr_iv, iv_list)
 
         # rank/pct가 None이면 화면 표시용 기본값 대신 None 유지 (100% 강제 금지)
+        # 소스가 실현변동성 proxy이면 "IV Rank" 단독 사용 금지 → "RV Rank Proxy"
+        _src   = 'REALIZED_VOL_PROXY'   # yfinance 항상 실현변동성 기반
+        _dlbl  = 'RV Rank Proxy' if _src == 'REALIZED_VOL_PROXY' else 'IV Rank'
         return {
             'rank': v['rank'],
             'pct':  v['percentile'],
-            'status':              v['warning'] or 'OK',
-            'new_high':            v.get('is_new_high', False),
+            'status':               v['warning'] or 'OK',
+            'new_high':             v.get('is_new_high', False),
             'insufficient_history': v['insufficient_history'],
             'low_confidence':       v['low_confidence'],
+            'source':               _src,
+            'display_label':        _dlbl,   # "IV Rank" 단독 사용 금지
         }
     except Exception as e:
         return {'rank': None, 'pct': None,
                 'status': f'오류: {str(e)}',
-                'new_high': False, 'insufficient_history': True, 'low_confidence': True}
+                'new_high': False, 'insufficient_history': True, 'low_confidence': True,
+                'source': 'ERROR', 'display_label': 'RV Rank Proxy'}
 
 
 # ── MODULE 1: 0DTE 전용 렌더링 블록 ──────────────────────

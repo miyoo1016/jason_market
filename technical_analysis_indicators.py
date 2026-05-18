@@ -229,7 +229,7 @@ def calc_volume_profile(hist, bins=12):
 
 
 def calc_composite_score(r):
-    """종합 매매신호 점수 (-7 ~ +7)
+    """종합 기술상태 점수 (-7 ~ +7)
 
     Args:
         r: 지표 결과 딕셔너리
@@ -271,21 +271,21 @@ def calc_composite_score(r):
 
     total = trend_score + mom + vol_score
 
-    # 레이블 및 색상
+    # 레이블 및 색상: 기술상태 표현만 사용
     if total >= 5:
-        label, color = '강한매수', '#00838f'
+        label, color = '강한 상승우위', '#00838f'
     elif total >= 3:
-        label, color = '매수', '#26a69a'
+        label, color = '상승우위', '#26a69a'
     elif total >= 1:
-        label, color = '약매수', '#80cbc4'
+        label, color = '약한 상승우위', '#80cbc4'
     elif total >= -1:
         label, color = '중립', '#90a4ae'
     elif total >= -3:
-        label, color = '약매도', '#ff8a65'
+        label, color = '약한 하락우위', '#ff8a65'
     elif total >= -5:
-        label, color = '매도', '#e65100'
+        label, color = '하락우위', '#e65100'
     else:
-        label, color = '강한매도', '#c62828'
+        label, color = '강한 하락우위', '#c62828'
 
     bar_pct = int((total + 7) / 14 * 100)
 
@@ -311,9 +311,117 @@ def ma_series(close, p, n=60):
     return [safe_float(v) for v in s]
 
 
+def classify_asset(name, ticker):
+    """기술지표 해석용 최소 자산 분류."""
+    n = (name or '').upper()
+    t = (ticker or '').upper()
+    if 'CD금리' in (name or '') or t == '357870.KS' or 'CASH' in t:
+        return 'cash_like'
+    if t in ('USDKRW=X', 'KRW=X') or t.endswith('=X'):
+        return 'macro_fx'
+    if t in ('^TNX', '^FVX', '^IRX') or '10년' in (name or '') or '금리' in (name or ''):
+        return 'macro_rate'
+    if t == '^VIX' or 'VIX' in n:
+        return 'volatility_index'
+    if t in ('BTC-USD', 'ETH-USD') or '-USD' in t and 'BTC' in t:
+        return 'crypto'
+    if t in ('GC=F', 'CL=F', 'BZ=F', 'SI=F', 'HG=F') or 'COMMODITY' in n:
+        return 'commodity'
+    if t.startswith('^') or t in ('YM=F', 'ES=F', 'NQ=F', 'RTY=F'):
+        return 'index_or_futures'
+    return 'equity_or_etf'
+
+
+def has_reliable_volume(hist, asset_type):
+    """OBV 해석이 가능한 거래량인지 판정."""
+    if asset_type in ('macro_fx', 'macro_rate', 'volatility_index', 'index_or_futures'):
+        return False
+    if hist is None or 'Volume' not in hist.columns:
+        return False
+    vol = hist['Volume'].tail(90)
+    if vol.empty:
+        return False
+    zero_ratio = float((vol.fillna(0) <= 0).mean())
+    return zero_ratio < 0.30 and float(vol.fillna(0).sum()) > 0
+
+
+def bb_label(pct_b):
+    """볼린저밴드 %B 구간 라벨."""
+    if pct_b is None:
+        return 'N/A'
+    if pct_b >= 100:
+        return '상단 돌파'
+    if pct_b >= 85:
+        return '상단권'
+    if pct_b >= 65:
+        return '중립 상단'
+    if pct_b >= 35:
+        return '중립'
+    if pct_b >= 15:
+        return '중립 하단'
+    if pct_b >= 0:
+        return '하단권'
+    return '하단 이탈'
+
+
+def momentum_label(macd, macd_sig, hist=None):
+    """MACD 상태 라벨."""
+    if macd is None or macd_sig is None:
+        return '중립'
+    if hist is not None and abs(hist) < 1e-12:
+        return '중립'
+    return '상방 모멘텀' if macd > macd_sig else '하방 모멘텀' if macd < macd_sig else '중립'
+
+
+def rsi_label(value, asset_type):
+    if value is None:
+        return 'N/A'
+    high = '상단권' if asset_type in ('macro_fx', 'macro_rate', 'volatility_index') else '과열권'
+    low = '하단권' if asset_type in ('macro_fx', 'macro_rate', 'volatility_index') else '침체권'
+    return high if value >= 70 else low if value <= 30 else '중립'
+
+
+def stoch_label(value, asset_type):
+    if value is None:
+        return 'N/A'
+    high = '상단권' if asset_type in ('macro_fx', 'macro_rate', 'volatility_index') else '과열권'
+    low = '하단권' if asset_type in ('macro_fx', 'macro_rate', 'volatility_index') else '침체권'
+    return high if value >= 80 else low if value <= 20 else '중립'
+
+
+def obv_label(trend, reliable=True):
+    if not reliable:
+        return 'N/A — 거래량 신뢰도 낮음'
+    if trend == 'up':
+        return '상승 — 거래량 동반 가능'
+    if trend == 'down':
+        return '하락 — 거래량 약화 가능'
+    return '중립'
+
+
+def pivot_position_label(pivot, curr):
+    if not pivot or curr is None:
+        return 'N/A'
+    try:
+        s1, p, r1, r2 = pivot['S1'], pivot['P'], pivot['R1'], pivot['R2']
+        if curr > r2:
+            return '현재가 R2 위 — 단기 상단 돌파 구간'
+        if curr >= r1:
+            return '현재가 R1~R2 — 상단권'
+        if curr >= p:
+            return '현재가 P~R1 — 중립 상단'
+        if curr >= s1:
+            return '현재가 S1~P — 중립 하단'
+        return '현재가 S1 아래 — 약세 구간'
+    except Exception:
+        return 'N/A'
+
+
 __all__ = [
     'calc_rsi', 'calc_macd', 'calc_bollinger', 'calc_stochastic',
     'calc_atr', 'calc_adx', 'calc_obv', 'calc_pivot_weekly',
     'calc_volume_profile', 'calc_composite_score',
     'safe_float', 'ma_series', '_ma',
+    'classify_asset', 'has_reliable_volume', 'bb_label', 'momentum_label',
+    'rsi_label', 'stoch_label', 'obv_label', 'pivot_position_label',
 ]

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Alpha Hunter — 거시경제 & 지정학 분석 모듈
 Fear & Greed, VIX, CFTC COT, Yahoo 헤드라인"""
 

@@ -1,6 +1,20 @@
 # 환경 변수 (API 키 등 절대 업로드 금지)
 .env
 .env.local
+.env.*
+!.env.example
+
+# Google OAuth 인증 파일 (절대 업로드 금지)
+credentials.json
+token.json
+token.pickle
+authorized_user.json
+*.pickle
+*.pkl
+
+# 가상환경 (각 머신에서 재생성)
+venv/
+.venv/
 
 # Python 캐시
 __pycache__/

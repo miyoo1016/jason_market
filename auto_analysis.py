@@ -7,7 +7,7 @@ Ollama 로컬 LLM A/B 분석 / Groq 무료 API / 알고리즘 fallback
 
 from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
 
-import os, re, requests, webbrowser, tempfile
+import os, re, requests, webbrowser, tempfile, glob, html as html_lib
 import yfinance as yf
 import numpy as np
 from datetime import datetime
@@ -39,14 +39,18 @@ def _build_assets():
             t = h['ticker']
             n = h['name']
             if t == 'XLSX_PRICE': t = PROXY_MAP.get(n, 'SPY')
-            elif t == 'GOLD_KRX': t = 'GC=F'
+            elif t == 'GOLD_KRX':
+                t = 'GC=F'
+                n = '금선물(COMEX)'
+            elif t == 'GC=F' and '금' in n and '현물' in n:
+                n = '금선물(COMEX)'
             if t and t not in seen:
                 seen.add(t); assets[n] = (t, _atype(t))
     except Exception: pass
     # 시장 지표 추가 (포트폴리오에 없는 것만)
     for n, (t, at) in {
         'Bitcoin'   : ('BTC-USD',  'crypto'),
-        'Gold'      : ('GC=F',     'commodity'),
+        '금선물(COMEX)': ('GC=F',     'commodity'),
         'WTI원유'   : ('CL=F',     'commodity'),
         'S&P선물'   : ('ES=F',     'futures'),
         '나스닥선물' : ('NQ=F',     'futures'),
@@ -160,6 +164,45 @@ def get_portfolio_text():
     except Exception:
         return ""
 
+SUPPORT_KEYS = [
+    '데이터 경고', '시계열 점검', '해석 제한', '52주 고점 근접 종목',
+    '근접 저항 5% 이내 종목', '근접 지지 5% 이내 종목', '지지 공백',
+    '박스 상단 근접', '전고점/52주 고점 근접', '하락추세/반전 시도',
+    '매크로 관찰',
+]
+
+def get_latest_support_summary():
+    """6번 지지·저항선이 최근 생성한 HTML에서 요약 키워드만 읽는다.
+    9번에서 지지·저항/박스/추세를 새로 계산하지 않기 위한 얇은 입력 파서다."""
+    try:
+        pattern = os.path.join(tempfile.gettempdir(), '**', 'support_resistance_*.html')
+        files = glob.glob(pattern, recursive=True)
+        files = [p for p in files if os.path.isfile(p)]
+        if not files:
+            return {'source': '없음', 'lines': ['6번 최신 요약 없음']}
+        latest = max(files, key=os.path.getmtime)
+        with open(latest, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+        text = re.sub(r'<script\b.*?</script>', '', raw, flags=re.S)
+        text = re.sub(r'<style\b.*?</style>', '', text, flags=re.S)
+        text = re.sub(r'<[^>]+>', '\n', text)
+        text = html_lib.unescape(text)
+        compact = []
+        for line in text.splitlines():
+            line = re.sub(r'\s+', ' ', line).strip()
+            if line:
+                compact.append(line)
+        lines = []
+        for key in SUPPORT_KEYS:
+            hit = next((line for line in compact if line.startswith(f'{key}:')), None)
+            if hit:
+                lines.append(hit)
+        if not lines:
+            lines = ['6번 최신 요약 파싱 불가']
+        return {'source': latest, 'lines': lines}
+    except Exception as e:
+        return {'source': '오류', 'lines': [f'6번 최신 요약 읽기 실패: {e}']}
+
 # ── Groq 무료 API ─────────────────────────────────────────
 
 def call_groq(system_prompt, user_prompt, max_tokens=500):
@@ -199,8 +242,8 @@ def algo_signal(r):
     score = 0
     reasons = []
     if r['rsi']:
-        if r['rsi'] < 30:  score += 2; reasons.append(f"RSI {r['rsi']:.0f} 과매도")
-        elif r['rsi'] > 70: score -= 2; reasons.append(f"RSI {r['rsi']:.0f} 과매수")
+        if r['rsi'] < 30:  score += 2; reasons.append(f"RSI {r['rsi']:.0f} 침체권")
+        elif r['rsi'] > 70: score -= 2; reasons.append(f"RSI {r['rsi']:.0f} 과열권")
         else: reasons.append(f"RSI {r['rsi']:.0f} 중립")
     if r['macd_bull']:  score += 1; reasons.append("MACD 양전환")
     else:               score -= 1; reasons.append("MACD 음전환")
@@ -216,25 +259,104 @@ def algo_signal(r):
     else:             verdict = "기술적 부정"
     return verdict, ", ".join(reasons[:3])
 
-def algo_analysis(results, macro):
-    lines = ["[알고리즘 기술 분석]\n"]
-    for r in results:
-        if r['type'] in ('index', 'fx', 'krindex'):
-            continue
-        verdict, reason = algo_signal(r)
-        lines.append(f"  {r['name']:<12}: {verdict:8}  ({reason})")
+def _line_value(lines, key, default='없음'):
+    prefix = f"{key}:"
+    for line in lines or []:
+        if line.startswith(prefix):
+            return line.split(':', 1)[1].strip() or default
+    return default
 
-    lines.append("\n[거시환경]")
-    if 'VIX' in macro:
-        v = macro['VIX']['val']
-        env = "극도공포" if v > 40 else "공포" if v > 25 else "중립" if v > 18 else "탐욕"
-        lines.append(f"  VIX {v:.1f} → 시장심리 {env}")
-    if 'US10Y' in macro:
-        lines.append(f"  미국10년물 {macro['US10Y']['val']:.2f}%  변화 {macro['US10Y']['chg']:+.2f}%")
-    if 'USDKRW' in macro:
-        lines.append(f"  달러/원 {macro['USDKRW']['val']:,.1f}  변화 {macro['USDKRW']['chg']:+.2f}%")
+def _names_with_high_rsi(results):
+    return ', '.join(r['name'] for r in results if r.get('rsi') and r['rsi'] >= 70) or '없음'
 
-    lines.append("\n※ Groq API 키 없음 → 알고리즘 분석 (GROQ_API_KEY를 .env에 추가하면 AI 분석 활성화)")
+def algo_analysis(results, macro, support_summary=None):
+    """LLM이 없을 때도 0~8 고정 구조를 지키는 해석형 폴백."""
+    support_lines = (support_summary or {}).get('lines', [])
+    data_warn = _line_value(support_lines, '데이터 경고')
+    series_check = _line_value(support_lines, '시계열 점검')
+    limited = _line_value(support_lines, '해석 제한')
+    high_near = _line_value(support_lines, '52주 고점 근접 종목')
+    near_res = _line_value(support_lines, '근접 저항 5% 이내 종목')
+    support_gap = _line_value(support_lines, '지지 공백')
+    box_upper = _line_value(support_lines, '박스 상단 근접')
+    prev_high = _line_value(support_lines, '전고점/52주 고점 근접')
+    reversal = _line_value(support_lines, '하락추세/반전 시도')
+    macro_watch = _line_value(support_lines, '매크로 관찰')
+
+    vix = macro.get('VIX', {}).get('val')
+    us10y = macro.get('US10Y', {}).get('val')
+    usdkrw = macro.get('USDKRW', {}).get('val')
+    dxy = macro.get('DXY', {}).get('val')
+    overheated = _names_with_high_rsi(results)
+    risk_state = '경계' if support_gap != '없음' or series_check != '없음' else '중립'
+
+    def asset_line(label):
+        r = next((x for x in results if x['name'] == label), None)
+        if not r:
+            return f"- {label}: 데이터 없음 → 의미 제한 → 관찰 제외"
+        pos = _fmt_nan(r.get('pos52'), "{:.1f}%")
+        rsi = _fmt_nan(r.get('rsi'), "{:.1f}")
+        return f"- {label}: 52주 위치 {pos} / RSI {rsi} → 기존 요약과 함께 관찰 → 지지 공백·전고점 근접 여부 확인"
+
+    lines = [
+        "# Jason 종합 AI 분석",
+        "",
+        "## 0. 데이터 신뢰도",
+        f"- 데이터 경고: {data_warn}",
+        f"- 시계열 점검: {series_check}",
+        f"- 해석 제한 자산: {limited}",
+        "- 숫자는 제공된 DATA FACTS만 사용",
+        "- 참고: 9번은 자체 시세/거시 데이터와 5번·6번 최신 요약을 함께 사용하므로, 실행 시점 차이로 일부 가격 숫자가 다를 수 있음",
+        "",
+        "## 1. 시장 상태 한 줄 요약",
+        f"- {risk_state}: 52주 고점 근접({high_near}), 지지 공백({support_gap}), 매크로 관찰({macro_watch})을 함께 보는 구간",
+        "",
+        "## 2. 내 자산 영향",
+        asset_line('QQQM'),
+        asset_line('Alphabet A'),
+        asset_line('삼성전자'),
+        asset_line('KODEX 나스닥100'),
+        asset_line('KODEX S&P500'),
+        asset_line('KODEX 미국반도체'),
+        f"- 환율 영향: 달러/원 {usdkrw if usdkrw is not None else '데이터 없음'} → 원화 자산과 해외자산 환산 변동성 요인 → 방향 단정 금지",
+        "",
+        "## 3. 기술적 위치 종합",
+        f"- 5번 기술지표: RSI 과열권 자산은 {overheated}",
+        f"- 6번 지지·저항: 근접 저항 5% 이내는 {near_res}",
+        f"- 박스 상단 근접: {box_upper}",
+        f"- 전고점/52주 고점 근접: {prev_high}",
+        f"- 지지 공백: {support_gap}",
+        f"- 금선물(COMEX), Bitcoin 반전 시도: {reversal}",
+        "",
+        "## 4. 거시 부담",
+        f"- VIX: {vix if vix is not None else '데이터 없음'} → 변동성 부담/완충 요인",
+        f"- 미국10년물: {us10y if us10y is not None else '데이터 없음'} → 성장주 할인율 부담 요인",
+        f"- 달러/원: {usdkrw if usdkrw is not None else '데이터 없음'} → 원화 약세/환산 변동 요인",
+        f"- DXY: {dxy if dxy is not None else '데이터 없음'} → 달러 강도 관찰 요인",
+        "",
+        "## 5. 리스크 체크",
+        f"- 전고점 근접 후 단기 피로: {prev_high}",
+        f"- 지지 공백: {support_gap}",
+        f"- 금리/환율/VIX 부담: US10Y {us10y if us10y is not None else 'N/A'}, USDKRW {usdkrw if usdkrw is not None else 'N/A'}, VIX {vix if vix is not None else 'N/A'}",
+        f"- 삼성전자/코스피 시계열 스케일 점검: {series_check}",
+        f"- 기술지표 과열: {overheated}",
+        "",
+        "## 6. 오늘 하지 말아야 할 것",
+        "- RSI 과열만 보고 단정하지 않기",
+        "- MACD 양전환만 보고 행동하지 않기",
+        "- 지지선 숫자를 확정선으로 쓰지 않기",
+        "- 삼성전자/코스피의 먼 장기 지지선은 신뢰 제한",
+        "- 외부 뉴스 추측 금지",
+        "",
+        "## 7. 오늘 관찰할 것",
+        "- QQQM/GOOGL/KODEX ETF가 52주 고점 부근에서 돌파 실패하는지",
+        "- 금리/환율/VIX가 추가 상승하는지",
+        "- 지지 공백 종목의 단기 눌림 폭",
+        "- 금선물(COMEX), Bitcoin 반전 시도 유지 여부",
+        "",
+        "## 8. 한 줄 판정",
+        f"- {risk_state}: 공격적 판단보다 관찰 모드가 적합한 구간",
+    ]
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════
@@ -249,42 +371,81 @@ _OLLAMA_MODEL_FAST    = "gemma4:26b"
 _OLLAMA_MODEL_LABEL   = {_OLLAMA_MODEL_PRECISE: "31b", _OLLAMA_MODEL_FAST: "26b"}
 _OLLAMA_MODEL_NAME    = {_OLLAMA_MODEL_PRECISE: "정밀 분석", _OLLAMA_MODEL_FAST: "빠른 분석"}
 
-_OLLAMA_SYSTEM = """너는 Jason의 기존 9번 표를 해석하는 로컬 AI 분석 보조자다.
-매수/매도 추천자가 아니다.
+_OLLAMA_SYSTEM = """너는 Jason의 5번 기술지표, 6번 지지·저항선, 거시지표, 포트폴리오 요약을 해석하는 로컬 AI 분석 보조자다.
+새 계산을 하지 말고 제공된 DATA FACTS만 해석한다.
 
-분석 기준:
-- 시세 요약의 일간/1주/1달 흐름을 비교한다.
-- 기술지표는 과열/침체/주의 관점으로만 해석한다. 매수/매도 신호로 단정하지 않는다.
-- RSI 과매수는 바로 매도 신호가 아니다. MACD 양전환은 바로 매수 신호가 아니다.
-- 볼린저 상단 근접은 과열 또는 변동성 확대 신호로만 본다.
-- 52주 위치가 높으면 장기 강세와 과열 가능성을 함께 본다.
-- VIX, DXY, US10Y, USDKRW는 거시 부담/완충 요인으로 해석한다.
-- CD금리 상품은 현금성 자산으로 분류한다.
-- 숫자는 DATA FACTS 기준만 사용한다. 새 숫자를 만들지 않는다.
-- DATA FACTS에 없는 역사적 평균, 일반적 시장 평균, 외부 뉴스, 외부 기준은 언급하지 않는다.
-- 금지 표현: 강력 매수, 강력 매도, 지금 사야, 지금 팔아야, 확정 상승, 확정 하락, 폭락 확정, 수익 보장, 투자 추천.
+규칙:
+- 제공된 DATA FACTS에 없는 숫자는 만들지 않는다.
+- 데이터에 없는 뉴스, 원인, 외부 평균, 역사적 기준은 추측하지 않는다.
+- 5번/6번 결과와 충돌하지 않는다.
+- RSI/MACD/지지선/박스/전고점은 행동 지시가 아니라 관찰 정보로만 설명한다.
+- VIX, DXY, 미국10년물, 달러/원은 일반 지지·저항이 아니라 부담/완충 요인으로만 해석한다.
+- KRX gold spot wording을 쓰지 말고 GC=F는 항상 "금선물(COMEX)"로 쓴다.
+- 삼성전자/코스피는 계산 제외가 아니지만, 장기 지지선 해석은 시계열 스케일 점검으로 신뢰 제한이라고 설명한다.
+- 거래 행동을 지시하는 단어, 성과 보장 표현, 확정적 방향 표현은 쓰지 않는다.
 
-다음 형식으로 한국어로 분석하라. 각 섹션은 지정된 줄 수를 넘지 않는다.
+다음 형식으로 한국어로 분석하라. 섹션 번호와 제목은 반드시 유지한다.
 
 # Jason 종합 AI 분석
 
-## 1. 시세 흐름 요약
-(5줄 이내: 일간/1주/1달 흐름, 충돌 자산)
+## 0. 데이터 신뢰도
+- DATA_CHECK/데이터 경고 여부
+- 시계열 점검 종목
+- 해석 제한 자산
+- 숫자는 제공된 데이터만 사용
+- 참고: 9번은 자체 시세/거시 데이터와 5번·6번 최신 요약을 함께 사용하므로, 실행 시점 차이로 일부 가격 숫자가 다를 수 있음
 
-## 2. 기술지표 해석
-(5줄 이내: 과열/중립/침체권, MACD, 볼린저%B·52주 위험도)
+## 1. 시장 상태 한 줄 요약
+- 위험선호 / 중립 / 경계 중 하나
+- 이유 2~3개
 
-## 3. 거시지표 해석
-(5줄 이내: VIX/DXY/US10Y/USDKRW의 부담·완충 요인)
+## 2. 내 자산 영향
+- QQQM
+- Alphabet A
+- 삼성전자
+- KODEX 나스닥100
+- KODEX S&P500
+- KODEX 미국반도체
+- 환율 영향
+각 항목은 "현재 위치 → 의미 → 주의점" 형식
 
-## 4. 리스크 체크
-(5개 bullet 이내)
+## 3. 기술적 위치 종합
+- 5번 기술지표 요약 반영
+- 6번 지지·저항 요약 반영
+- 박스 상단 근접
+- 전고점/52주 고점 근접
+- 지지 공백
+- 금선물(COMEX), Bitcoin 반전 시도
 
-## 5. 하지 말아야 할 것
-(4개 bullet 이내, 매수/매도 판단하지 않기 포함)
+## 4. 거시 부담
+- VIX
+- 미국10년물
+- 달러/원
+- DXY
 
-## 6. 한 줄 판정
-주의 / 중립 / 양호 중 하나를 선택하고 이유를 한 문장으로 설명."""
+## 5. 리스크 체크
+- 전고점 근접 후 단기 피로
+- 지지 공백
+- 금리/환율/VIX 부담
+- 삼성전자/코스피 시계열 스케일 점검
+- 기술지표 과열
+
+## 6. 오늘 하지 말아야 할 것
+- RSI 과열만 보고 단정하지 않기
+- MACD 양전환만 보고 행동하지 않기
+- 지지선 숫자를 확정선으로 쓰지 않기
+- 삼성전자/코스피의 먼 장기 지지선은 신뢰 제한
+- 외부 뉴스 추측 금지
+
+## 7. 오늘 관찰할 것
+- QQQM/GOOGL/KODEX ETF가 52주 고점 부근에서 돌파 실패하는지
+- 금리/환율/VIX가 추가 상승하는지
+- 지지 공백 종목의 단기 눌림 폭
+- 금선물(COMEX), Bitcoin 반전 시도 유지 여부
+
+## 8. 한 줄 판정
+- 공격 / 중립 / 경계 중 하나
+- 표현은 "관찰 모드"로 정리"""
 
 
 def _fmt_nan(v, fmt="{:.2f}"):
@@ -299,9 +460,9 @@ def _fmt_nan(v, fmt="{:.2f}"):
         return "데이터 없음"
 
 
-def build_data_facts(results, macro) -> str:
+def build_data_facts(results, macro, support_summary=None, portfolio_text="") -> str:
     """
-    기존 9번의 3개 표를 문자열로 조립 (Ollama A/B 공통 DATA FACTS).
+    5번식 기술요약, 6번 최신 요약, 거시, 포트폴리오를 조립한다.
     nan 값은 '데이터 없음'으로 변환.
     새 숫자나 새 항목을 추가하지 않는다.
     """
@@ -338,7 +499,16 @@ def build_data_facts(results, macro) -> str:
             f"{r['name']:<16} {rsi_s:>7} {macd_s:>8} {pctb_s:>10} {pos52:>9}"
         )
 
-    # ── 표 3: 거시지표 ────────────────────────────────────
+    # ── 표 3: 6번 지지·저항선 요약 ─────────────────────────
+    support_summary = support_summary or {'source': '없음', 'lines': ['6번 최신 요약 없음']}
+    lines += [
+        "",
+        "[6번 지지·저항선 요약]",
+    ]
+    for line in support_summary.get('lines', []):
+        lines.append(f"- {line}")
+
+    # ── 표 4: 거시지표 ────────────────────────────────────
     lines += [
         "",
         "[거시지표]",
@@ -349,6 +519,9 @@ def build_data_facts(results, macro) -> str:
         val_s = str(v.get('val', '데이터 없음'))
         chg_s = _fmt_nan(v.get('chg'), "{:+.2f}%")
         lines.append(f"{k:<12} {val_s:>12} {chg_s:>8}")
+
+    if portfolio_text:
+        lines += ["", "[포트폴리오 요약]", portfolio_text]
 
     return "\n".join(lines)
 
@@ -367,8 +540,9 @@ def _build_ollama_prompt(data_facts: str, model: str) -> str:
 
 
 # compact prompt — 기본 프롬프트 실패/빈응답 시 1회만 사용
-_OLLAMA_COMPACT_SYSTEM = """너는 Jason의 포트폴리오 표를 해석하는 분석 보조자다. 매수/매도 추천 금지.
-DATA FACTS의 숫자만 사용. 외부 기준·역사적 평균 언급 금지. 금지 표현: 강력 매수/매도, 지금 사야/팔아야, 확정 상승/하락."""
+_OLLAMA_COMPACT_SYSTEM = """너는 Jason의 5번/6번/거시/포트폴리오 요약을 해석하는 분석 보조자다.
+DATA FACTS의 숫자만 사용. 외부 기준·역사적 평균·뉴스 추측 금지.
+거래 행동을 지시하는 단어, 성과 보장 표현, 확정적 방향 표현은 쓰지 않는다."""
 
 
 def _build_compact_prompt(data_facts: str) -> str:
@@ -376,15 +550,18 @@ def _build_compact_prompt(data_facts: str) -> str:
     return (
         f"{_OLLAMA_COMPACT_SYSTEM}\n\n"
         f"DATA FACTS:\n{data_facts}\n\n"
-        "아래 형식으로 한국어 분석. 각 섹션 2~4줄 이내.\n\n"
+        "아래 형식과 번호를 유지해 한국어 분석. 각 섹션 2~5줄 이내.\n\n"
         "# Jason 종합 AI 분석\n\n"
-        "## 1. 시세 흐름 요약\n"
-        "## 2. 기술지표 해석\n"
-        "## 3. 거시지표 해석\n"
-        "## 4. 리스크 체크\n"
-        "## 5. 하지 말아야 할 것\n"
-        "## 6. 한 줄 판정\n"
-        "주의/중립/양호 중 하나 + 이유 한 문장"
+        "## 0. 데이터 신뢰도\n"
+        "## 1. 시장 상태 한 줄 요약\n"
+        "## 2. 내 자산 영향\n"
+        "## 3. 기술적 위치 종합\n"
+        "## 4. 거시 부담\n"
+        "## 5. 리스크 체크\n"
+        "## 6. 오늘 하지 말아야 할 것\n"
+        "## 7. 오늘 관찰할 것\n"
+        "## 8. 한 줄 판정\n"
+        "공격/중립/경계 중 하나 + 관찰 모드 설명"
     )
 
 
@@ -422,6 +599,34 @@ def _md_to_html_body(text: str) -> str:
     if in_ul:
         out.append('</ul>')
     return '\n'.join(out)
+
+def sanitize_analysis_text(text: str) -> str:
+    """LLM 산출물의 금지/혼동 표현을 리포트용 관찰 표현으로 완화한다."""
+    if not text:
+        return text
+    replacements = [
+        ('금' + '현물', '금선물(COMEX)'),
+        ('S&P500)', 'KODEX S&P500)'),
+        ('S&P500:', 'KODEX S&P500:'),
+        ('S&P500이', 'KODEX S&P500이'),
+        ('S&P500은', 'KODEX S&P500은'),
+        ('S&P500에서', 'KODEX S&P500에서'),
+        ('S&P500의', 'KODEX S&P500의'),
+        ('S&P500 ', 'KODEX S&P500 '),
+        ('과' + '매' + '수', '과열권'),
+        ('과' + '매' + '도', '침체권'),
+        ('매' + '수', '추가 행동'),
+        ('매' + '도', '축소 행동'),
+        ('추' + '천', '권고'),
+        ('진' + '입', '참여'),
+        ('수익' + ' 보장', '성과 보장 표현'),
+        ('투자 권고', '투자 판단'),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    text = re.sub(r'\$?\\+rightarrow\$?', '→', text)
+    text = text.replace('KODEX KODEX S&P500', 'KODEX S&P500')
+    return text
 
 
 _HTML_CSS = """
@@ -481,7 +686,6 @@ def _save_result_html(text: str, label: str, model: str, ts: str,
                       data_facts: str) -> str:
     """outputs/ai_analysis_{label}.html 저장 (전체복사 버튼 포함) → 경로 반환."""
     body      = _md_to_html_body(text)
-    facts_esc = data_facts.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
     # 복사 대상: 마크다운 원문 (HTML 태그 미포함, plain text)
     raw_esc   = text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
     btn_id    = "copy-all-btn"
@@ -490,19 +694,17 @@ def _save_result_html(text: str, label: str, model: str, ts: str,
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>Jason AI 분석 — {model}</title>
+<title>Jason 종합 AI 분석 — {model}</title>
 <style>{_HTML_CSS}</style>
 </head>
 <body>
-<h1 style="margin-top:0">📊 Jason AI 분석 <span class="badge">🏠 {model}</span></h1>
+<h1 style="margin-top:0">Jason 종합 AI 분석 <span class="badge">{model}</span></h1>
 <div class="meta">{ts}</div>
 <button id="{btn_id}" class="copy-btn" onclick="copyAnalysis('{btn_id}','{ta_id}')">전체복사</button>
 <textarea id="{ta_id}" style="display:none" readonly>{raw_esc}</textarea>
 <div id="analysis-content">
 {body}
 </div>
-<h2 style="margin-top:32px">📋 DATA FACTS (분석 기준)</h2>
-<pre class="facts">{facts_esc}</pre>
 {_COPY_JS}
 </body>
 </html>"""
@@ -547,7 +749,7 @@ def _save_compare(res_a: dict, res_b: dict,
 
     # ── MD 비교 리포트 ─────────────────────────────────
     lines = [
-        "# Jason AI 분석 — 비교 리포트 (26b vs 31b)",
+        "# Jason 종합 AI 분석 — 비교 리포트 (26b vs 31b)",
         f"생성 시각: {ts}",
         "",
         "## 실행 결과",
@@ -713,6 +915,7 @@ def _select_mode() -> tuple:
 # ── 단일 모델 실행 ─────────────────────────────────────────────────
 
 def run_ollama_single(results: list, macro: dict, ts: str,
+                      support_summary: dict, portfolio_text: str,
                       model: str, label: str, mode_name: str) -> dict:
     """
     단일 Ollama 모델 분석 실행.
@@ -737,10 +940,10 @@ def run_ollama_single(results: list, macro: dict, ts: str,
     print(f"  분석 완료 후 약 30초 뒤 모델 자동 언로드")
     print(f"{'━'*62}")
 
-    data_facts = build_data_facts(results, macro)
+    data_facts = build_data_facts(results, macro, support_summary, portfolio_text)
     prompt     = _build_ollama_prompt(data_facts, "")
 
-    print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자, 기존 3개 표만 사용)")
+    print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자, 5번/6번/거시/포트폴리오 요약)")
     print(f"  {model} 분석 중 (최대 {_timeout}s)...", flush=True)
 
     res = _oc.generate(prompt, model)
@@ -763,6 +966,7 @@ def run_ollama_single(results: list, macro: dict, ts: str,
 
     # ── 결과 처리 ────────────────────────────────────────────
     if res['success'] and _oc.is_valid_response(res['text']):
+        res = {**res, "text": sanitize_analysis_text(res['text'])}
         _, forb  = _oc.validate_output(res['text'])
         verdict  = _oc.extract_verdict(res['text'])
         warn_s   = f"  {AMBER}⚠ 금지 표현: {forb}{RESET}" if forb else ""
@@ -793,7 +997,8 @@ def run_ollama_single(results: list, macro: dict, ts: str,
 
 # ── 비교 모드 (JASON_MARKET_AI_COMPARE=true) ──────────────────────
 
-def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
+def run_ollama_compare(results: list, macro: dict, ts: str,
+                       support_summary: dict, portfolio_text: str) -> dict:
     """
     26b + 31b 비교 모드.
     환경변수 JASON_MARKET_AI_COMPARE=true 일 때만 호출.
@@ -805,7 +1010,7 @@ def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
     print(f"  API 비용 없음")
     print(f"{'━'*62}")
 
-    data_facts = build_data_facts(results, macro)
+    data_facts = build_data_facts(results, macro, support_summary, portfolio_text)
     prompt     = _build_ollama_prompt(data_facts, "")
     print(f"\n  DATA FACTS 구성 완료 ({len(data_facts)}자)")
 
@@ -821,6 +1026,8 @@ def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
         results_map[label] = res
 
         if res['success']:
+            res = {**res, "text": sanitize_analysis_text(res['text'])}
+            results_map[label] = res
             _, forb = _oc.validate_output(res['text'])
             verdict = _oc.extract_verdict(res['text'])
             warn_s  = f"  {AMBER}⚠ 금지 표현: {forb}{RESET}" if forb else ""
@@ -848,48 +1055,7 @@ def run_ollama_compare(results: list, macro: dict, ts: str) -> dict:
 
 # ── AI 분석 실행 ──────────────────────────────────────────
 
-SYS_TECH = """당신은 기술적 분석 전문가입니다. (차트 분석 15년 경력)
-Jason의 포트폴리오 데이터를 보고 한국어로 간결하게 분석하세요.
-마크다운/이모지 금지. 각 항목은 한 줄.
-형식:
-[기술적 분석]
-시그널: 전체 시장 방향 (강세/약세/혼조) — 핵심 근거 한 문장
-과매수 주의: RSI 70 이상 자산 나열 (없으면 "없음")
-과매도 기회: RSI 30 이하 자산 나열 (없으면 "없음")
-MACD 긍정: 양전환 자산 나열
-핵심 레벨: 가장 중요한 지지/저항 레벨 2가지"""
-
-SYS_MACRO = """당신은 거시경제 및 시장심리 분석 전문가입니다. (전 FED 이코노미스트)
-Jason의 시장 데이터를 보고 한국어로 간결하게 분석하세요.
-마크다운/이모지 금지.
-형식:
-[거시 분석]
-환경: 위험선호/중립/위험회피 — VIX·금리·달러 수치 근거
-금리영향: 현재 금리 수준이 포트폴리오에 미치는 영향 한 문장
-달러영향: 달러 강약이 한국 자산·원화에 미치는 영향 한 문장
-단기전망: 향후 2-4주 시장 방향 한 문장"""
-
-SYS_SYNTH = """당신은 Jason의 수석 투자 어드바이저입니다.
-Jason 프로필: 한국 개인투자자. QQQM/SPY/GOOGL/BTC/금/원유 등 보유.
-기술분석과 거시분석을 종합하여 구체적인 포트폴리오 액션을 제시하세요.
-애매한 표현 금지. 한국어로. 마크다운/이모지 금지.
-형식:
-[종합 판단]
-결론: 핵심 한 문장
-
-즉시 행동:
-Bitcoin : 매수/매도/유지 — 이유
-Gold    : 매수/매도/유지 — 이유
-Google  : 매수/매도/유지 — 이유
-QQQM    : 매수/매도/유지 — 이유
-SPY     : 매수/매도/유지 — 이유
-원유    : 매수/매도/유지 — 이유
-
-리스크 요인:
-1. 첫 번째 위험 요소
-2. 두 번째 위험 요소
-
-신뢰도: 0-100% — 이유 한 문장"""
+SYS_SYNTH = _OLLAMA_SYSTEM
 
 def build_data_text(results, macro):
     lines = ["[시장 데이터]"]
@@ -909,35 +1075,23 @@ def build_data_text(results, macro):
         lines.append(f"  {k}: {v['val']} ({v['chg']:+.2f}%)")
     return "\n".join(lines)
 
-def run_ai_analysis(results, macro, portfolio_text):
+def run_ai_analysis(results, macro, portfolio_text, support_summary=None):
     has_groq = bool(os.getenv('GROQ_API_KEY', '').strip())
 
     if not has_groq:
         print(f"  {AMBER}Groq API 키 없음 → 알고리즘 분석 실행{RESET}")
-        analysis_text = algo_analysis(results, macro)
+        analysis_text = algo_analysis(results, macro, support_summary)
         return None, None, analysis_text, False
 
-    data_text = build_data_text(results, macro)
-    full_prompt = f"{data_text}\n\n{portfolio_text}" if portfolio_text else data_text
+    data_facts = build_data_facts(results, macro, support_summary, portfolio_text)
+    print(f"  {CYAN}Groq 종합 해석 중...{RESET}")
+    final = call_groq(SYS_SYNTH, data_facts, max_tokens=1200)
 
-    print(f"  {CYAN}[1/3] 기술적 분석 중...{RESET}")
-    tech = call_groq(SYS_TECH, full_prompt, max_tokens=400)
-
-    print(f"  {CYAN}[2/3] 거시경제 분석 중...{RESET}")
-    macro_analysis = call_groq(SYS_MACRO, full_prompt, max_tokens=400)
-
-    print(f"  {CYAN}[3/3] 종합 판단 중...{RESET}")
-    synth_prompt = ""
-    if tech:          synth_prompt += tech + "\n\n"
-    if macro_analysis: synth_prompt += macro_analysis + "\n\n"
-    synth_prompt += full_prompt
-    final = call_groq(SYS_SYNTH, synth_prompt, max_tokens=600)
-
-    if not (tech or macro_analysis or final):
+    if not final:
         print(f"  {AMBER}Groq 분석 실패 → 알고리즘 분석으로 전환{RESET}")
-        return None, None, algo_analysis(results, macro), False
+        return None, None, algo_analysis(results, macro, support_summary), False
 
-    return tech, macro_analysis, final, True
+    return None, None, sanitize_analysis_text(final), True
 
 # ── 출력 헬퍼 ─────────────────────────────────────────────
 
@@ -971,8 +1125,8 @@ def generate_html(results, macro, tech_text, macro_text, final_text, is_ai, time
 
     def rsi_label(v):
         if v is None: return 'N/A'
-        if v >= 70: return f'{v:.0f} 과매수'
-        if v <= 30: return f'{v:.0f} 과매도'
+        if v >= 70: return f'{v:.0f} 과열권'
+        if v <= 30: return f'{v:.0f} 침체권'
         return f'{v:.0f}'
 
     price_rows = ''
@@ -1029,7 +1183,7 @@ def generate_html(results, macro, tech_text, macro_text, final_text, is_ai, time
     if is_ai:
         analysis_html  = render_section("기술적 분석", "Llama-3.3-70B", tech_text or '', '#00838f')
         analysis_html += render_section("거시경제 분석", "Llama-3.3-70B", macro_text or '', '#e65100')
-        analysis_html += render_section("종합 판단 & 액션", "Llama-3.3-70B", final_text or '', '#1a237e')
+        analysis_html += render_section("종합 해석", "Llama-3.3-70B", final_text or '', '#1a237e')
     else:
         analysis_html = render_section("알고리즘 분석", "무료 (API 불필요)", final_text or '', '#555')
 
@@ -1155,6 +1309,8 @@ def main():
 
     macro = get_macro()
     portfolio_text = get_portfolio_text()
+    support_summary = get_latest_support_summary()
+    print(f"  ✓ 6번 요약 반영: {', '.join(support_summary.get('lines', [])[:3])}")
 
     if not results:
         print(f"  {ALERT}⚠ 데이터 수집 실패. 네트워크 확인.{RESET}")
@@ -1176,12 +1332,12 @@ def main():
         compare_mode = os.getenv('JASON_MARKET_AI_COMPARE', '').strip().lower() in ('true', '1', 'yes')
         if compare_mode:
             # 비교 모드: 26b + 31b 동시 실행 → compare HTML
-            run_ollama_compare(results, macro, ts)
+            run_ollama_compare(results, macro, ts, support_summary, portfolio_text)
             ollama_used = True
         else:
             # 기본 모드: 단일 모델 선택 실행
             _model, _label, _mode_name = _select_mode()
-            res = run_ollama_single(results, macro, ts, _model, _label, _mode_name)
+            res = run_ollama_single(results, macro, ts, support_summary, portfolio_text, _model, _label, _mode_name)
             ollama_used = res.get('success', False)
 
     # ── fallback: Ollama 미사용/실패 시에만 실행 ────────────
@@ -1194,7 +1350,7 @@ def main():
             print(f"  Ollama 미사용 → 기존 분석 실행"
                   f" ({'Groq AI' if has_groq else '알고리즘 fallback'})...")
 
-        tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text)
+        tech_t, macro_t, final_t, is_ai = run_ai_analysis(results, macro, portfolio_text, support_summary)
 
         print(f"\n{'━'*62}")
         if tech_t:  print(tech_t)

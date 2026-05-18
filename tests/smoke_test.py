@@ -302,4 +302,4 @@ class SmokeTest:
 if __name__ == '__main__':
     tester = SmokeTest()
     tester.run()
-    sys.exit(tester.print_summary() - 1)  # Adjust exit code
+    sys.exit(0 if tester.failed == 0 else 1)

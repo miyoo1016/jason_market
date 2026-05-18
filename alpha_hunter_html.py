@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Alpha Hunter — HTML 생성 및 렌더링
 대시보드 및 카드 HTML 생성"""
 

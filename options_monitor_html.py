@@ -17,6 +17,7 @@ from options_monitor_validate import (
     calc_asset_confidence, record_confidence_history, get_confidence_trend,
     cap_confidence_by_conditions, detect_compressed_gamma_risk,
     select_proxy_mode, detect_iv_rank_anomaly,
+    validate_chain_price_mismatch, validate_expected_move_validity,
 )
 
 _SNAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'options_gex_snapshot.json')
@@ -94,6 +95,7 @@ def _exp_comment(row: dict, curr: float) -> str:
 
 def generate_html(results: list, timestamp: str) -> str:
     """전체 옵션 모니터 대시보드 HTML"""
+    _debug = os.getenv('OPTIONS_MONITOR_DEBUG', '').lower() in ('1', 'true', 'yes')
 
     # ─── ① Δ GEX: 이전 스냅샷 로드 ─────────────────────────────
     try:
@@ -157,6 +159,8 @@ def generate_html(results: list, timestamp: str) -> str:
         if _forced0:
             _c0 = {**_c0, 'score': _capped0, 'label': _forced0,
                    '_cap_reason': _reason0}
+        _c0['chain_status'] = _ds0.get('chain', 'UNKNOWN')  # proxy engine용
+        _c0['price_is_na'] = bool(_r0.get('_price_is_na', False))
         _pre_confs[_s0] = _c0
 
     # ─── ⑨ Proxy Priority Engine ─────────────────────────────────────
@@ -167,16 +171,59 @@ def generate_html(results: list, timestamp: str) -> str:
     _iv_rank_map: dict = {}
 
     # ─── ⑪ Dashboard Integrity Summary HTML ─────────────────────────
-    _high_syms = [s for s, c in _pre_confs.items() if c['label'] in ('HIGH', 'MEDIUM_HIGH')]
-    _low_syms  = [s for s, c in _pre_confs.items() if c['label'] in ('LOW', 'VERY_LOW')]
+    # PARTIAL: 가격은 LIVE지만 옵션체인이 FALLBACK인 자산 (의사결정 제외 대상)
+    _partial_syms = [s for s, c in _pre_confs.items()
+                     if c.get('chain_status') == 'FALLBACK'
+                     and not c.get('price_is_na', False)
+                     and c['label'] not in ('LOW', 'VERY_LOW')]
+    _disabled_syms = [s for s, c in _pre_confs.items()
+                      if c.get('price_is_na', False)]
+    _high_syms = [s for s, c in _pre_confs.items()
+                  if c['label'] in ('HIGH', 'MEDIUM_HIGH')
+                  and s not in _partial_syms]
+    _low_syms  = [s for s, c in _pre_confs.items()
+                  if c['label'] in ('LOW', 'VERY_LOW')
+                  and s not in _disabled_syms]
     _proxy_sp  = _proxy_mode['proxies']['SP500']['primary']
     _proxy_nq  = _proxy_mode['proxies']['NASDAQ']['primary']
-    _spx_ignored = (_proxy_sp != 'SPX')
+    _spx_ignored = (_proxy_sp != 'SPX')   # PRICE_ONLY_SECONDARY or IGNORED
     _ndx_demoted = (_proxy_nq != 'NDX')
+
+    # PARTIAL 상세 설명 (chain FALLBACK 자산)
+    _partial_details = []
+    for _ps in _partial_syms:
+        _pcs = _pre_confs[_ps].get('chain_status', 'FALLBACK')
+        _pl  = _pre_confs[_ps].get('label', '')
+        _partial_details.append(f'{_ps}: price live / chain {_pcs} ({_pl})')
 
     _summary_notes_html = ''.join(
         f'<li style="margin:2px 0">{n}</li>' for n in _proxy_mode['notes']
     )
+    _partial_html = ''
+    if _partial_syms:
+        _partial_html = (
+            f'<div style="color:#f59e0b;margin-top:3px;">'
+            f'PARTIAL: {", ".join(_partial_syms)} '
+            f'<span style="font-size:9px;color:#94a3b8">'
+            f'(SPX price live but option chain fallback — options positioning excluded)</span></div>'
+        )
+    _disabled_html = ''
+    if _disabled_syms:
+        _disabled_html = (
+            f'<div style="color:#ef4444;margin-top:3px;">'
+            f'Disabled assets: {", ".join(_disabled_syms)}</div>'
+        )
+
+    # SPX stats disabled 주의 문구
+    _spx_stats_disabled = ('SPX' in _partial_syms or 'SPX' in _low_syms)
+    _spx_stats_note_html = ''
+    if _spx_stats_disabled:
+        _spx_stats_note_html = (
+            '<div style="color:#ef4444;font-size:9px;margin-top:4px;font-weight:600;">'
+            '⛔ SPX stats disabled: price/chain fallback. '
+            'Use SPY for S&amp;P positioning.'
+            '</div>'
+        )
     _dashboard_summary = f"""
 <div style="background:#0f172a;border:1.5px solid #334155;border-radius:10px;
      padding:14px 18px;margin-bottom:18px;color:#f8fafc;">
@@ -193,10 +240,13 @@ def generate_html(results: list, timestamp: str) -> str:
     <div>
       <div style="color:#94a3b8;font-weight:600;margin-bottom:4px;">CONFIDENCE</div>
       <div style="color:#22c55e">HIGH/MH: {', '.join(_high_syms) or '없음'}</div>
+      {_partial_html}
+      {_disabled_html}
       <div style="color:#f97316">LOW/VL:  {', '.join(_low_syms) or '없음'}</div>
       <div style="color:#94a3b8;margin-top:4px;font-size:10px;">
-        ⚠ FALLBACK GEX/Wall/Max Pain은 의사결정 제외
+        ⚠ FALLBACK/PARTIAL GEX·Wall·Max Pain은 의사결정 제외
       </div>
+      {_spx_stats_note_html}
     </div>
   </div>
 </div>"""
@@ -212,6 +262,55 @@ def generate_html(results: list, timestamp: str) -> str:
   SPX section is LOW/VERY_LOW confidence — Do not use for trading decisions.
 </div>"""
 
+    _ndx_overlay_html = ''
+    _ndx_r = next((x for x in results if x and x.get('sym') == 'NDX'), None)
+    _ndx_ov = (_ndx_r or {}).get('_ndx_overlay')
+    if _ndx_ov:
+        _spot = _ndx_ov.get('ndx_spot', {})
+        _chain = _ndx_ov.get('ndx_option_chain', {})
+        _derived = _ndx_ov.get('ndx_derived_metrics', {})
+        _spot_v = _spot.get('value')
+        _spot_txt = f"{_spot_v:,.2f}" if _spot_v else 'N/A'
+        _eq_html = ''.join(
+            f'<div>NDX {e["ndx"]:,.0f} ≈ QQQ {e["qqq"]:,.1f}</div>'
+            for e in _ndx_ov.get('qqq_equiv', [])
+        ) or '<div>NDX→QQQ 환산 N/A</div>'
+        _status = _chain.get('status', 'LOW/FALLBACK')
+        _conf = _chain.get('confidence', 0)
+        _disabled_msg = ''
+        if not _derived.get('enabled'):
+            if _status == 'LOW/FALLBACK':
+                _disabled_msg = (
+                    '<div style="margin-top:8px;color:#ef4444;font-weight:700;">'
+                    'NDX Chain: LOW/FALLBACK - NDX spot only. '
+                    'Do not use NDX-derived GEX/Wall/Max Pain. Use QQQ proxy.'
+                    '</div>'
+                )
+            else:
+                _disabled_msg = (
+                    '<div style="margin-top:8px;color:#7c4100;font-weight:700;">'
+                    'NDX Chain: REFERENCE_ONLY - NDX reference only. QQQ primary remains active.'
+                    '</div>'
+                )
+        else:
+            _disabled_msg = (
+                '<div style="margin-top:8px;color:#16a34a;font-weight:700;">'
+                'NDX Chain metrics are LIVE_DELAYED reference. QQQ primary remains active.'
+                '</div>'
+            )
+        _ndx_overlay_html = f"""
+<div style="background:#eef6ff;border:1.5px solid #60a5fa;border-radius:10px;
+     padding:12px 16px;margin-bottom:16px;color:#0f172a;font-size:11px;line-height:1.7;">
+  <div style="font-size:13px;font-weight:800;color:#1d4ed8;margin-bottom:6px;">
+    Nasdaq Overlay — QQQ primary + NDX overlay
+  </div>
+  <div>NDX spot: <strong>{_spot_txt}</strong> <span style="color:#64748b">({_spot.get('source','unknown')}, {_spot.get('timestamp','')})</span></div>
+  <div>NDX Chain: <strong>{_status}</strong> / confidence <strong>{_conf}</strong>
+       <span style="color:#64748b">(fetch: {_chain.get('timestamp','')})</span></div>
+  <div style="margin-top:5px;">{_eq_html}</div>
+  {_disabled_msg}
+</div>"""
+
     cards = ''
     for r in results:
         if not r:
@@ -224,9 +323,27 @@ def generate_html(results: list, timestamp: str) -> str:
         mp_diff = round((mp - curr) / curr * 100, 2) if mp else None
         mp_str = f"${mp:,.2f} ({mp_diff:+.1f}%)" if mp and mp_diff is not None else 'N/A'
 
+        # ─── 데이터 소스 상태 ─────────────────────────────────────
+        _ds_chain  = r.get('_data_source', {}).get('chain', 'UNKNOWN')
+        _ds_price  = r.get('_data_source', {}).get('price', 'UNKNOWN')
+        _chain_fb  = (_ds_chain == 'FALLBACK')   # 옵션체인 폴백 여부
+
+        # ─── SPX 역할 라벨 ────────────────────────────────────────
+        _spx_role = (_proxy_mode['proxies']['SP500'].get('spx_role', '')
+                     if sym == 'SPX' else '')
+
+        # ─── Max Pain mismatch 체크 ───────────────────────────────
+        # price LIVE + chain FALLBACK + |mp - spot| > 10% → 해석 금지
+        _mp_mm = validate_chain_price_mismatch(
+            spot=curr, max_pain=mp,
+            price_status=_ds_price, chain_status=_ds_chain,
+        )
+        if _mp_mm['mismatch']:
+            mp_str = 'N/A'   # 폴백 체인 mismatch → 숫자 표시 금지
+
         # Max Pain 긴급 지표 (7일 이내 만기)
         mp_urgency = ''
-        if mp and mp_diff is not None:
+        if not _mp_mm['mismatch'] and mp and mp_diff is not None:
             near_exp = next((row for row in r['exp_rows']
                              if row.get('max_pain') and row['days'] <= 7), None)
             if near_exp and near_exp['max_pain']:
@@ -235,7 +352,21 @@ def generate_html(results: list, timestamp: str) -> str:
                 if abs(mp_near_diff) >= 2:
                     direction = '하방' if mp_near_diff < 0 else '상방'
                     mp_urgency = (f"⚡ 주의: 이번주 만기 Max Pain {mp_near_diff:+.1f}% "
-                                  f"({direction} 당김)")
+                                  f"({direction} 편향)")
+
+        # Max Pain ssub 사전 계산 (f-string 내 백슬래시 방지)
+        if _mp_mm['mismatch']:
+            _mp_ssub = (
+                '<span style="color:#ef4444;font-weight:600;font-size:9px">'
+                f'⛔ {_mp_mm["warning"]}</span>'
+            )
+        elif mp_urgency:
+            _mp_ssub = (
+                f'옵션 포지션 분포 참고값 — 가격 예측 신호 아님 &nbsp;'
+                f'<span style="color:#e65100;font-size:9px">{mp_urgency}</span>'
+            )
+        else:
+            _mp_ssub = '옵션 포지션 분포 참고값 — 가격 예측 신호 아님'
 
         # ── 만기별 상세 테이블 ──────────────────────────────
         exp_rows_html = ''
@@ -498,6 +629,24 @@ def generate_html(results: list, timestamp: str) -> str:
         else:
             em_html = ''
 
+        # ─── Expected Move 유효성 검증 (chain mismatch) ──────────
+        # chain FALLBACK + spot이 기대범위 위쪽 10% 초과 → 해석 금지
+        if near_em_row and em_html:
+            _em_valid = validate_expected_move_validity(
+                spot=curr,
+                expected_low=near_em_row['lower_price'],
+                expected_high=near_em_row['upper_price'],
+                chain_status=_ds_chain,
+            )
+            if not _em_valid['valid']:
+                em_html = (
+                    f'<div style="padding:8px 20px;background:#fef2f2;'
+                    f'border-top:1px solid #fee2e2;border-bottom:1px solid #fee2e2;">'
+                    f'<span style="font-size:10px;color:#7f1d1d;font-weight:600;">'
+                    f'⛔ {_em_valid["warning"]}'
+                    f'</span></div>'
+                )
+
         # ─── ② Prediction Cone HTML ──────────────────────────────
         _cone_rows = r.get('cone_data', [])
         if len(_cone_rows) >= 2:
@@ -541,9 +690,9 @@ def generate_html(results: list, timestamp: str) -> str:
         vanna_cls = 'gex-pos' if vc['vanna'] >= 0 else 'gex-neg'
         charm_cls = 'gex-pos' if vc['charm'] >= 0 else 'gex-neg'
 
-        # IV Rank 소스 결정 (실현변동성 proxy vs implied IV)
-        _iv_src_label = ('INSUFFICIENT_HISTORY' if iv_rank_data.get('insufficient_history')
-                         else 'REALIZED_VOL_PROXY')   # yfinance는 항상 realized vol proxy
+        # IV Rank 소스 및 표시 라벨 결정
+        _iv_src_label  = iv_rank_data.get('source', 'REALIZED_VOL_PROXY')
+        _iv_disp_label = iv_rank_data.get('display_label', 'RV Rank Proxy')
         _iv_rank_map[sym] = {'rank': iv_rank_data.get('rank'), 'source': _iv_src_label}
 
         # IV Rank: None이면 insufficient_history 표시 (100% 강제 금지)
@@ -560,15 +709,29 @@ def generate_html(results: list, timestamp: str) -> str:
             rank_str   = f'{_iv_rank:.1f}%'
             pct_str    = f'{_iv_pct:.1f}%' if _iv_pct is not None else 'N/A'
             rank_color = '#26a69a' if _iv_rank <= 30 else ('#ef5350' if _iv_rank >= 70 else '#ffb300')
-            rank_desc  = ('IV 저렴 🟢' if _iv_rank <= 30
-                          else 'IV 고가 🔴' if _iv_rank >= 70 else 'IV 보통 🟡')
-            if iv_rank_data.get('new_high'):
-                rank_desc += ' <span style="font-size:10px;color:#d32f2f">⚠ 1년 신고IV</span>'
-            # REALIZED_VOL_PROXY 경고
+            _is_rv_proxy = (_iv_src_label == 'REALIZED_VOL_PROXY')
+            # RV Proxy일 때는 "IV 고가/보통/저렴" 금지 → "RV Proxy 고가/보통/낮음"
+            if _is_rv_proxy:
+                rank_desc = ('RV Proxy 낮음 🟢' if _iv_rank <= 30
+                             else 'RV Proxy 고가 🔴' if _iv_rank >= 70
+                             else 'RV Proxy 보통 🟡')
+                if iv_rank_data.get('new_high'):
+                    rank_desc += (
+                        ' <span style="font-size:10px;color:#d32f2f">'
+                        '⚠ 1년 변동성 프록시 고점</span>'
+                    )
+            else:
+                rank_desc = ('IV 저렴 🟢' if _iv_rank <= 30
+                             else 'IV 고가 🔴' if _iv_rank >= 70 else 'IV 보통 🟡')
+                if iv_rank_data.get('new_high'):
+                    rank_desc += (
+                        ' <span style="font-size:10px;color:#d32f2f">⚠ 1년 신고IV</span>'
+                    )
+            # 소스 레이블 (항상 표시)
             rank_desc += (
                 f' <span style="font-size:8px;color:#94a3b8;display:block;margin-top:2px;">'
                 f'소스: {_iv_src_label}'
-                f'{" ⚠ 옵션 IV 아님" if _iv_src_label == "REALIZED_VOL_PROXY" else ""}'
+                f'{" — 옵션 IV 아님" if _is_rv_proxy else ""}'
                 f'</span>'
             )
 
@@ -697,10 +860,161 @@ def generate_html(results: list, timestamp: str) -> str:
                 f'{_cgr["label"]}</div>'
             )
 
+        # ─── 가격 표시 처리 (N/A vs 실제 가격) ────────────────────
+        # _price_is_na=True이면 hardcoded fallback 숫자 표시 금지 → N/A
+        _price_is_na   = r.get('_price_is_na', False)
+        _display_curr  = r.get('_display_curr', curr)  # None이면 N/A
+        _price_str     = ('N/A <span style="font-size:10px;color:#f97316">'
+                          '(STALE/FALLBACK)</span>'
+                          if _price_is_na else f'${curr:,.2f}')
+
+        # N/A 시 confidence 추가 cap (max 25)
+        if _price_is_na and _conf.get('score', 100) > 25:
+            _conf = {**_conf, 'score': 25, 'label': 'VERY_LOW',
+                     'badge_color': '#ef4444',
+                     'display_note': '저신뢰 — 가격 N/A (실시간 조회 실패)'}
+
+        # ─── Stat box 비활성화 조건 ──────────────────────────────
+        # 가격 N/A | 체인 FALLBACK | 신뢰도 LOW/VERY_LOW
+        # → P/C OI, P/C Vol, Vanna, Charm, Max Pain, Expected Move 비활성화
+        _stat_disabled = (
+            _price_is_na
+            or _chain_fb
+            or _conf.get('label') in ('LOW', 'VERY_LOW')
+        )
+        _stat_proxy_hint = (', use SPY proxy'  if sym == 'SPX'
+                            else ', use QQQ proxy' if sym == 'NDX' else '')
+        _dis_sval = (
+            f'<span style="color:#94a3b8;font-weight:600;font-size:11px;">'
+            f'N/A — fallback data{_stat_proxy_hint}</span>'
+        )
+        _dis_ssub = (
+            '<span style="color:#94a3b8;font-size:9px;">'
+            'Disabled — stale/fallback chain</span>'
+        )
+        if _stat_disabled:
+            _sclr_pc_oi  = '#94a3b8'
+            _sval_pc_oi  = _dis_sval
+            _ssub_pc_oi  = _dis_ssub
+            _sval_pc_vol = _dis_sval
+            _ssub_pc_vol = _dis_ssub
+            _cls_vanna   = ''
+            _sval_vanna  = _dis_sval
+            _ssub_vanna  = _dis_ssub
+            _cls_charm   = ''
+            _sval_charm  = _dis_sval
+            _ssub_charm  = _dis_ssub
+            mp_str       = 'N/A'
+            _mp_ssub     = (
+                '<span style="color:#94a3b8;font-size:9px;">'
+                'Max Pain disabled — fallback/low confidence</span>'
+            )
+            # Expected Move 판정 문구 제거 (em_html이 이미 빌드된 경우 대체)
+            if em_html and '기대범위' in em_html:
+                em_html = (
+                    '<div style="padding:8px 20px;background:#f8f9fa;'
+                    'border-top:1px solid #dee2e6;border-bottom:1px solid #dee2e6;">'
+                    '<span style="font-size:10px;color:#94a3b8;font-weight:600;">'
+                    '📐 Expected Move disabled — '
+                    'fallback chain does not match live/reliable spot'
+                    '</span></div>'
+                )
+        else:
+            _sclr_pc_oi  = sig_color
+            _sval_pc_oi  = f'{pc_oi:.2f}'
+            _ssub_pc_oi  = sig
+            _sval_pc_vol = f'{r["pc_vol"]:.2f}'
+            _ssub_pc_vol = pc_signal(r['pc_vol'])[0]
+            _cls_vanna   = vanna_cls
+            _sval_vanna  = f'${vc["vanna"]:.3f}B'
+            _ssub_vanna  = (
+                ('VIX 하락시 상방 수급' if vc['vanna'] >= 0 else 'VIX 하락시 상승 제한 수급')
+                + ' <span style="opacity:0.5">⚠추정치</span>'
+            )
+            _cls_charm   = charm_cls
+            _sval_charm  = f'${vc["charm"]:.3f}B'
+            _ssub_charm  = (
+                ('시간경과시 상방' if vc['charm'] >= 0 else '시간경과시 하방')
+                + ' <span style="opacity:0.5">⚠추정치</span>'
+            )
+
         # GEX 저신뢰 강등 (폴백 자산의 GEX 섹션)
         _gex_low_conf = r.get('_gex_low_confidence', False)
 
-        # SPX LOW confidence 전용 배너
+        # SPX role 라벨 HTML (카드 헤더 내 표시)
+        _spx_role_html = ''
+        if sym == 'SPX' and _spx_role:
+            if _spx_role == 'PRICE_ONLY_SECONDARY':
+                _spx_role_html = (
+                    '<div style="margin-top:6px;padding:4px 10px;'
+                    'background:#fff3e0;border-left:3px solid #f97316;'
+                    'border-radius:3px;font-size:9px;color:#7c4100;font-weight:700;">'
+                    '📌 SPX role: PRICE_ONLY_SECONDARY — '
+                    'Use SPX for index level only. Use SPY for options positioning.'
+                    '</div>'
+                )
+            elif _spx_role == 'IGNORED':
+                _spx_role_html = (
+                    '<div style="margin-top:6px;padding:4px 10px;'
+                    'background:#fef2f2;border-left:3px solid #ef4444;'
+                    'border-radius:3px;font-size:9px;color:#7f1d1d;font-weight:700;">'
+                    '⛔ SPX role: IGNORED — price stale/fallback. Use SPY proxy.'
+                    '</div>'
+                )
+
+        # GEX 섹션 접힘 여부:
+        #   LOW/VERY_LOW 신뢰도 OR 옵션체인 FALLBACK → 기본 접힘
+        _gex_collapsed = (_conf.get('label') in ('LOW', 'VERY_LOW')) or _chain_fb
+        _option_details_disabled = (
+            not _debug
+            and (
+                (sym == 'SPX' and _price_is_na)
+                or (sym == 'NDX' and (_chain_fb or _conf.get('label') in ('LOW', 'VERY_LOW')))
+            )
+        )
+        _gex_toggle_id = f'gex-body-{sym}'
+
+        if _gex_collapsed:
+            if _chain_fb:
+                _toggle_lbl = f'▶ {sym} 옵션체인 폴백 섹션 펼치기 — 의사결정 제외'
+            else:
+                _toggle_lbl = f'▶ {sym} GEX 섹션 펼치기 (LOW 신뢰도 — 의사결정 제외)'
+            _gex_toggle_btn = (
+                f'<div style="margin:8px 0;text-align:center;">'
+                f'<button onclick="var el=document.getElementById(\'{_gex_toggle_id}\'),'
+                f'this;el.style.display=\'block\';this.style.display=\'none\';" '
+                f'style="font-size:10px;padding:5px 12px;border:1px solid #f97316;'
+                f'border-radius:4px;background:#fff8f0;color:#7c4100;cursor:pointer;">'
+                f'{_toggle_lbl}'
+                f'</button></div>'
+            )
+        else:
+            _gex_toggle_btn = ''
+
+        # 접힌 div 내부 최상단 경고문 (chain FALLBACK 전용)
+        _gex_fallback_warning = ''
+        if _chain_fb:
+            _fb_proxy_sym = 'SPY' if sym == 'SPX' else ('QQQ' if sym == 'NDX' else '')
+            _proxy_context = 'S&P options positioning' if sym == 'SPX' else 'Nasdaq options positioning'
+            _gex_fallback_warning = (
+                f'<div style="margin-bottom:10px;padding:10px 14px;'
+                f'background:#fef2f2;border:2px solid #ef4444;'
+                f'border-radius:6px;font-size:10px;color:#7f1d1d;font-weight:600;">'
+                f'⛔ {sym} option chain is FALLBACK. '
+                f'Do not use {sym}-derived GEX / Call Wall / Put Wall / Max Pain / Expected Move. '
+                + (f'Use <strong>{_fb_proxy_sym}</strong> proxy for {_proxy_context}.'
+                   if _fb_proxy_sym else '')
+                + '</div>'
+            )
+
+        # GEX 박스별 FALLBACK 배지 (chain FALLBACK 시 수치 옆 표시)
+        _fb_badge = (
+            ' <span style="font-size:8px;padding:1px 4px;background:#ef4444;'
+            'color:#fff;border-radius:2px;font-weight:700;vertical-align:middle;">'
+            'FALLBACK</span>'
+        ) if _chain_fb else ''
+
+        # SPX/NDX LOW confidence 전용 배너 (접힌 div 바깥에 표시)
         _gex_section_warning = ''
         if _conf.get('label') in ('LOW', 'VERY_LOW') and sym in ('SPX', 'NDX'):
             _proxy_sym = 'SPY' if sym == 'SPX' else 'QQQ'
@@ -714,10 +1028,32 @@ def generate_html(results: list, timestamp: str) -> str:
                 f'</div>'
             )
 
+        _rv_expiry_footnote_html = ''
+        if _iv_src_label == 'REALIZED_VOL_PROXY' and any((row.get('iv') or 0) > 0 for row in r['exp_rows']):
+            _rv_expiry_footnote_html = (
+                '<div style="margin:8px 20px 0;padding:6px 10px;background:#f8fafc;'
+                'border-left:3px solid #94a3b8;border-radius:3px;font-size:9px;color:#475569;">'
+                '상단 RV Rank Proxy는 실현변동성 기반이며, 만기별 IV는 옵션체인 IV입니다.'
+                '</div>'
+            )
+
+        _disabled_detail_placeholder = ''
+        if _option_details_disabled:
+            if sym == 'SPX':
+                _disabled_detail_text = 'SPX option data disabled — stale/fallback data. Use SPY proxy.'
+            else:
+                _disabled_detail_text = 'NDX option data disabled — fallback/low confidence data. Use QQQ proxy.'
+            _disabled_detail_placeholder = (
+                f'<div class="section" id="{sym}-option-data-disabled">'
+                '<div style="padding:12px 14px;background:#fef2f2;border:1.5px solid #ef4444;'
+                'border-radius:6px;font-size:11px;color:#7f1d1d;font-weight:700;">'
+                f'{_disabled_detail_text}</div></div>'
+            )
+
         # 0DTE 카드
         zdte = render_0dte_block(r)
         zdte_html = ''
-        if zdte:
+        if zdte and not _option_details_disabled:
             is_long = '롱감마' in zdte['gex_dir']
             zdte_cls = 'b-long-gamma' if is_long else 'b-short-gamma'
             zdte_html = f"""
@@ -757,7 +1093,7 @@ def generate_html(results: list, timestamp: str) -> str:
     <div class="title-row">
       <span class="sym">{sym}</span>
       <span class="lbl">{r['label']}</span>
-      <span class="price">${curr:,.2f}</span>
+      <span class="price">{_price_str}</span>
       {_conf_badge}
     </div>
     <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
@@ -765,6 +1101,7 @@ def generate_html(results: list, timestamp: str) -> str:
     {_watermark_html}
     {_mismatch_critical}
     {pair_ratio_html}
+    {_spx_role_html}
     {_occ_banner_html}
   </div>
 
@@ -772,37 +1109,37 @@ def generate_html(results: list, timestamp: str) -> str:
   <div class="stats-grid">
     <div class="sbox">
       <div class="slbl">전체 P/C OI</div>
-      <div class="sval" style="color:{sig_color}">{pc_oi:.2f}</div>
-      <div class="ssub" style="color:{sig_color}">{sig}</div>
+      <div class="sval" style="color:{_sclr_pc_oi}">{_sval_pc_oi}</div>
+      <div class="ssub" style="color:{_sclr_pc_oi}">{_ssub_pc_oi}</div>
       <div class="pc-note">※ P/C > 1.3: 기관 헤지/중립 가능성</div>
     </div>
     <div class="sbox">
       <div class="slbl">전체 P/C Volume</div>
-      <div class="sval">{r['pc_vol']:.2f}</div>
-      <div class="ssub">{pc_signal(r['pc_vol'])[0]}</div>
+      <div class="sval">{_sval_pc_vol}</div>
+      <div class="ssub">{_ssub_pc_vol}</div>
     </div>
     <div class="sbox" style="border-left: 3px solid {rank_color}">
-      <div class="slbl">IV RANK / PCT</div>
+      <div class="slbl">{_iv_disp_label} / PCT</div>
       <div class="sval" style="color:{rank_color}">{rank_str} / {pct_str}</div>
       <div class="ssub">{rank_desc}</div>
     </div>
     <div class="sbox">
       <div class="slbl">1개월 Max Pain</div>
       <div class="sval">{mp_str}</div>
-      <div class="ssub">옵션 매도자 유리 가격{f' &nbsp;<span style="color:#e65100;font-size:9px">{mp_urgency}</span>' if mp_urgency else ''}</div>
+      <div class="ssub">{_mp_ssub}</div>
     </div>
   </div>
 
   <div class="stats-grid" style="margin-top:10px; border-top:1px solid #eee; padding-top:10px;">
     <div class="sbox" title="Vanna: IV 변화 시 델타 변화 (Black-Scholes 추정)">
       <div class="slbl">⚡ Net VANNA</div>
-      <div class="sval {vanna_cls}">${vc['vanna']:.3f}B</div>
-      <div class="ssub" style="font-size:8px">{'VIX 하락시 매수' if vc['vanna']>=0 else 'VIX 하락시 매도'} <span style="opacity:0.5">⚠추정치</span></div>
+      <div class="sval {_cls_vanna}">{_sval_vanna}</div>
+      <div class="ssub" style="font-size:8px">{_ssub_vanna}</div>
     </div>
     <div class="sbox" title="Charm: 시간 경과 시 델타 변화 (Black-Scholes 추정)">
       <div class="slbl">⏱ Net CHARM</div>
-      <div class="sval {charm_cls}">${vc['charm']:.3f}B</div>
-      <div class="ssub" style="font-size:8px">{'시간경과시 상방' if vc['charm']>=0 else '시간경과시 하방'} <span style="opacity:0.5">⚠추정치</span></div>
+      <div class="sval {_cls_charm}">{_sval_charm}</div>
+      <div class="ssub" style="font-size:8px">{_ssub_charm}</div>
     </div>
     <div class="sbox">
       <div class="slbl">콜 OI / 풋 OI</div>
@@ -820,39 +1157,45 @@ def generate_html(results: list, timestamp: str) -> str:
 
   <!-- GEX 요약 -->
   {_gex_section_warning}
+  {_gex_toggle_btn}
+  <div id="{_gex_toggle_id}" style="{'display:none' if _gex_collapsed else ''}">
+  {_gex_fallback_warning}
   {_cgr_html}
   {'<div style="margin-bottom:6px;padding:4px 10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:3px;font-size:9px;color:#78350f;font-weight:600;">⚠ GEX/Call Wall/Put Wall/Max Pain — 폴백 데이터 기반, 저신뢰. 원자료 확인 필요.</div>' if _gex_low_conf else ''}
   <div class="gex-grid"{_gex_grid_style}>
     <div class="gex-box">
       <div class="gex-lbl">⚡ Net GEX (1개월이내)</div>
       <div class="gex-val {ngb_cls}">{ngb_str}</div>
-      <div class="gex-sub">{gex_regime}</div>
+      <div class="gex-sub">{gex_regime}{_fb_badge}</div>
       <div class="gex-delta" style="color:{_delta_color};margin-top:5px;font-size:10px;font-weight:600">{_delta_str}</div>
     </div>
     <div class="gex-box">
       <div class="gex-lbl">🔄 Gamma Flip</div>
       <div class="gex-val {gflip_cls}">{gflip_str}</div>
-      <div class="gex-sub">{gflip_label}</div>
+      <div class="gex-sub">{gflip_label}{_fb_badge}</div>
       {_gflip_dist_html}
     </div>
     <div class="gex-box">
       <div class="gex-lbl">🟢 Call Wall</div>
       <div class="gex-val gex-pos">{cwall_str}</div>
-      <div class="gex-sub">{cwall_label}</div>
+      <div class="gex-sub">{cwall_label}{_fb_badge}</div>
     </div>
     <div class="gex-box">
       <div class="gex-lbl">🔴 Put Wall</div>
       <div class="gex-val gex-neg">{pwall_str}</div>
-      <div class="gex-sub">{pwall_label}</div>
+      <div class="gex-sub">{pwall_label}{_fb_badge}</div>
     </div>
   </div>
   {_box_strip_html}
   <div class="gex-note">
     GEX: G-Flip 위(안정)/아래(증폭) | Call Wall(저항) | Put Wall(지지) | BS기반 추정
   </div>
+  </div><!-- /#gex-body-{sym} collapse wrapper end -->
 
   {zdte_html}
+  {_rv_expiry_footnote_html}
 
+  {_disabled_detail_placeholder if _option_details_disabled else f'''
   <!-- GEX by Strike 차트 -->
   <div class="section">
     <div class="section-title">⚡ GEX (Gamma Exposure) by Strike — 현재가±18% · 1개월이내 &nbsp;
@@ -877,7 +1220,7 @@ def generate_html(results: list, timestamp: str) -> str:
             <th>만기일</th>
             <th>잔존</th>
             <th title="마우스 올리면 원본 수량 표시">P/C<br><span style="font-weight:400;font-size:9px;color:#aaa">Vol / OI</span></th>
-            <th>IV</th>
+            <th>Expiry IV<br><span style="font-weight:400;font-size:9px;color:#aaa">옵션체인 IV</span></th>
             <th>기대변동<br><span style="font-weight:400;font-size:9px;color:#aaa">±% · ±$ · 범위</span></th>
             <th>Max Pain<br><span style="font-weight:400;font-size:9px;color:#aaa">현재가대비</span></th>
             <th>해설</th>
@@ -938,7 +1281,7 @@ def generate_html(results: list, timestamp: str) -> str:
       <tbody>{top_p_rows}</tbody></table>
     </div>
   </div>
-
+  '''}
 </div>"""
 
     _css = """
@@ -1129,6 +1472,7 @@ a{color:inherit;}
 <div class="page">
 {_spx_stale_banner}
 {_dashboard_summary}
+{_ndx_overlay_html}
 {cards}
 </div>
 

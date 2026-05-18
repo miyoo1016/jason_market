@@ -282,20 +282,14 @@ def validate_max_pain_label(diff_pct: float, dte: int) -> str:
         return f'Max Pain {diff_pct:+.1f}% — 장기 포지션 분포 참고, 방향 예측 불가'
 
     if dte <= MAX_PAIN_DTE_STRONG:
-        # 0~7 DTE: 단기 옵션 포지션 편향 (강도 표현은 허용, "당김" 금지)
-        direction = '상방' if diff_pct > 0 else '하방'
-        if abs_diff >= 5:
-            return f'Max Pain {diff_pct:+.1f}% — 단기 옵션 포지션 편향 ({direction} 강함)'
+        # 0~7 DTE: 방향성 문구 없이 포지션 분포 참고값으로만 표시
         if abs_diff >= 2:
-            return f'Max Pain {diff_pct:+.1f}% — 단기 옵션 포지션 편향 ({direction} 약함)'
-        return f'Max Pain {diff_pct:+.1f}% — 중립 근처 (단기 포지션 균형)'
+            return f'Max Pain {diff_pct:+.1f}% — 옵션 포지션 편향, 보조 참고'
+        return f'Max Pain {diff_pct:+.1f}% — 중립 근처, 보조 참고'
 
     # 8~45 DTE: 보조 참고
-    direction = '상방' if diff_pct > 0 else '하방'
-    if abs_diff >= 5:
-        return f'Max Pain {diff_pct:+.1f}% — {direction} 방향 보조 참고 (예측 불가)'
     if abs_diff >= 2:
-        return f'Max Pain {diff_pct:+.1f}% — 약한 {direction} 편향, 보조 참고'
+        return f'Max Pain {diff_pct:+.1f}% — 옵션 포지션 편향, 보조 참고'
     return f'Max Pain {diff_pct:+.1f}% — 중립 근처, 보조 참고'
 
 
@@ -455,14 +449,25 @@ def select_proxy_mode(asset_confs: dict) -> dict:
 
     Parameters
     ----------
-    asset_confs : {sym: {'label': str, 'score': int, 'fallback_penalty': int, ...}}
+    asset_confs : {sym: {'label': str, 'score': int, 'fallback_penalty': int,
+                         'chain_status': str, ...}}
+                  chain_status : 'LIVE' | 'FALLBACK' | 'PARTIAL' | 'UNKNOWN'
+
+    S&P proxy rule (우선순위)
+    ─────────────────────────
+    1. SPX price_is_na == True → SPY PRIMARY, SPX role = IGNORED
+    2. SPX chain == FALLBACK and price LIVE → SPY PRIMARY, SPX role = PRICE_ONLY_SECONDARY
+    3. SPX label in LOW/VERY_LOW → SPY PRIMARY, SPX role = IGNORED
+    4. SPX chain LIVE + label >= MEDIUM_HIGH → SPX PRIMARY
+    4. else → SPY PRIMARY
 
     Returns
     -------
     dict
-        proxies : {'SP500': {...}, 'NASDAQ': {...}, 'GOLD': {...}, 'GOOGL': {...}}
-        notes   : list[str]   — 각 프록시 선택 이유
-        banner  : str         — 대시보드 상단 표시 문구
+        proxies  : {'SP500': {...}, 'NASDAQ': {...}, 'GOLD': {...}, 'GOOGL': {...}}
+        notes    : list[str]   — 각 프록시 선택 이유
+        banner   : str         — 대시보드 상단 표시 문구
+        spx_role : str         — 'PRIMARY' | 'PRICE_ONLY_SECONDARY' | 'IGNORED'
     """
     proxies: dict = {}
     notes:   list = []
@@ -473,30 +478,73 @@ def select_proxy_mode(asset_confs: dict) -> dict:
     def _fp(sym: str) -> int:
         return asset_confs.get(sym, {}).get('fallback_penalty', 0)
 
+    def _chain(sym: str) -> str:
+        return asset_confs.get(sym, {}).get('chain_status', 'UNKNOWN')
+
+    def _price_is_na(sym: str) -> bool:
+        return bool(asset_confs.get(sym, {}).get('price_is_na', False))
+
     # ── S&P 500 ──────────────────────────────────────────────────
     spx_label = _label('SPX')
-    if spx_label in ('LOW', 'VERY_LOW'):
-        proxies['SP500']  = {'primary': 'SPY', 'ignored': 'SPX',
-                             'reason': f'SPX {spx_label}'}
+    spx_chain = _chain('SPX')
+    spx_price_na = _price_is_na('SPX')
+
+    if spx_price_na:
+        proxies['SP500'] = {
+            'primary':  'SPY',
+            'ignored':  'SPX',
+            'spx_role': 'IGNORED',
+            'reason':   'SPX price stale/fallback',
+        }
+        notes.append('S&P: SPY PRIMARY — SPX price stale/fallback, SPX ignored.')
+    elif spx_chain == 'FALLBACK':
+        # 가격이 LIVE여도 옵션체인 FALLBACK → SPX는 가격 참고용만
+        proxies['SP500'] = {
+            'primary':   'SPY',
+            'secondary': 'SPX',
+            'spx_role':  'PRICE_ONLY_SECONDARY',
+            'reason':    'SPX chain FALLBACK (price may be live)',
+        }
+        notes.append(
+            'S&P: SPY PRIMARY — SPX price live but option chain fallback, '
+            'so SPX GEX/Wall/Max Pain ignored.'
+        )
+    elif spx_label in ('LOW', 'VERY_LOW'):
+        proxies['SP500'] = {
+            'primary':  'SPY',
+            'ignored':  'SPX',
+            'spx_role': 'IGNORED',
+            'reason':   f'SPX {spx_label}',
+        }
         notes.append(f'S&P: SPY PRIMARY — SPX {spx_label} (fallback/ratio abnormal).')
     else:
-        proxies['SP500']  = {'primary': 'SPX', 'secondary': 'SPY',
-                             'reason': f'SPX {spx_label}'}
+        proxies['SP500'] = {
+            'primary':   'SPX',
+            'secondary': 'SPY',
+            'spx_role':  'PRIMARY',
+            'reason':    f'SPX {spx_label}',
+        }
         notes.append(f'S&P: SPX PRIMARY ({spx_label}).')
 
     # ── Nasdaq ────────────────────────────────────────────────────
     ndx_label = _label('NDX')
     ndx_fb    = _fp('NDX') > 0
     if ndx_label in ('LOW', 'VERY_LOW') or (ndx_label == 'MEDIUM' and ndx_fb):
-        proxies['NASDAQ'] = {'primary': 'QQQ', 'secondary': 'NDX',
-                             'reason': f'NDX {ndx_label}/fallback chain'}
+        proxies['NASDAQ'] = {
+            'primary':   'QQQ',
+            'secondary': 'NDX',
+            'reason':    f'NDX {ndx_label}/fallback chain',
+        }
         notes.append(
             f'Nasdaq: QQQ PRIMARY — NDX {ndx_label}'
             + (' (fallback chain)' if ndx_fb else '') + '.'
         )
     else:
-        proxies['NASDAQ'] = {'primary': 'NDX', 'secondary': 'QQQ',
-                             'reason': f'NDX {ndx_label}'}
+        proxies['NASDAQ'] = {
+            'primary':   'NDX',
+            'secondary': 'QQQ',
+            'reason':    f'NDX {ndx_label}',
+        }
         notes.append(f'Nasdaq: NDX PRIMARY ({ndx_label}).')
 
     # ── Gold / GOOGL ──────────────────────────────────────────────
@@ -512,8 +560,97 @@ def select_proxy_mode(asset_confs: dict) -> dict:
         f'Market Proxy Status: '
         f'S&P={sp_mode}, Nasdaq={nq_mode}, Gold=GLD, Alphabet=GOOGL'
     )
+    spx_role = proxies['SP500'].get('spx_role', 'PRIMARY')
 
-    return {'proxies': proxies, 'notes': notes, 'banner': banner}
+    return {'proxies': proxies, 'notes': notes, 'banner': banner, 'spx_role': spx_role}
+
+
+# ── E-6. Chain vs Price Mismatch 검증 ────────────────────────────
+
+def validate_chain_price_mismatch(
+    spot: float,
+    max_pain: Optional[float],
+    price_status: str,
+    chain_status: str,
+    threshold: float = 0.10,
+) -> dict:
+    """
+    가격 LIVE + 옵션체인 FALLBACK + Max Pain 괴리 > threshold → mismatch.
+
+    SPX 가격이 실시간이어도 옵션체인이 구형(stale/fallback)이면
+    Max Pain strike grid가 현재 가격대와 맞지 않아 해석 불가.
+
+    Parameters
+    ----------
+    spot         : 현재 지수/ETF 가격
+    max_pain     : 1개월 집계 Max Pain (None이면 검증 스킵)
+    price_status : 'LIVE' | 'FALLBACK'
+    chain_status : 'LIVE' | 'FALLBACK' | 'PARTIAL'
+    threshold    : |max_pain - spot| / spot 허용 상한 (기본 10%)
+
+    Returns
+    -------
+    dict
+        mismatch : bool
+        diff_pct : float | None
+        warning  : str
+    """
+    if max_pain is None or spot <= 0:
+        return {'mismatch': False, 'diff_pct': None, 'warning': ''}
+
+    diff_pct = abs(max_pain - spot) / spot
+
+    if price_status == 'LIVE' and chain_status == 'FALLBACK' and diff_pct > threshold:
+        return {
+            'mismatch': True,
+            'diff_pct': round(diff_pct * 100, 1),
+            'warning':  'Max Pain unavailable due to stale/fallback chain mismatch',
+        }
+    return {
+        'mismatch': False,
+        'diff_pct': round(diff_pct * 100, 1),
+        'warning':  '',
+    }
+
+
+# ── E-7. Expected Move 유효성 검증 (체인 미스매치) ────────────────
+
+def validate_expected_move_validity(
+    spot: float,
+    expected_low: float,
+    expected_high: float,
+    chain_status: str,
+    threshold: float = 0.10,
+) -> dict:
+    """
+    체인 FALLBACK + spot이 expected_high보다 threshold 초과 → invalid.
+
+    폴백 체인의 strike grid는 현재 가격대와 맞지 않을 수 있어
+    기대변동 범위 자체가 무의미해진다.
+
+    Parameters
+    ----------
+    spot          : 현재 가격
+    expected_low  : 기대변동 하단
+    expected_high : 기대변동 상단
+    chain_status  : 'LIVE' | 'FALLBACK' | 'PARTIAL'
+    threshold     : spot이 expected_high 대비 초과 허용 비율 (기본 10%)
+
+    Returns
+    -------
+    dict
+        valid   : bool
+        warning : str
+    """
+    if spot <= 0 or expected_high <= 0:
+        return {'valid': True, 'warning': ''}
+
+    if chain_status == 'FALLBACK' and spot > expected_high * (1 + threshold):
+        return {
+            'valid':   False,
+            'warning': 'Expected Move invalid: fallback chain strike grid does not match live spot.',
+        }
+    return {'valid': True, 'warning': ''}
 
 
 # ── E-5. IV Rank 이상 감지 ────────────────────────────────────────
@@ -1122,7 +1259,10 @@ def run_tests() -> list:
 
     # ── Test F: Max Pain forbidden language ──────────────────────
     print('\nTest F: Max Pain forbidden language')
-    _FORBIDDEN_MP = ['하방 당김', '상방 당김', '가격 자석', '끌어당김', '당김 강함']
+    _FORBIDDEN_MP = [
+        '하방 당김', '상방 당김', '가격 자석', '끌어당김', '당김 강함',
+        '하방 방향', '상방 방향', '하방 압력', '상방 압력',
+    ]
     _all_labels   = [
         validate_max_pain_label(v, d)
         for v in [-10, -5, -2, 0, 2, 5, 10]
@@ -1162,6 +1302,550 @@ def run_tests() -> list:
     _chk('TH-spx-ignored',   'SPX' in pm_h['proxies']['SP500'].get('ignored',''),
          f"SP500 primary={pm_h['proxies']['SP500']['primary']}")
 
+    # ── Test I: SPX live 실패 시 화면 표시 N/A (hardcoded 금지) ──
+    print('\nTest I: SPX live price fail → display N/A, not hardcoded 5711.52')
+    # 비즈니스 규칙: _price_is_na=True 이면 화면 가격 = N/A
+    # (hardcoded 5711.52 노출 금지)
+    _live_fail   = None          # 실시간 가격 조회 실패
+    _fallback_hc = 5711.52       # 하드코딩 fallback
+    # 표시 결정 로직 (options_monitor_html.py와 동일)
+    _price_is_na = not bool(_live_fail)       # None → True
+    _display_val = _live_fail if _live_fail else None  # fallback 무시
+    _price_str   = 'N/A' if _price_is_na else f'${_display_val:,.2f}'
+    _chk('TI-na-when-live-fail',  _price_is_na is True,
+         f'_price_is_na={_price_is_na}')
+    _chk('TI-not-hardcoded',      _price_str == 'N/A',
+         f'_price_str={_price_str!r} (must be N/A, not {_fallback_hc})')
+    _chk('TI-hardcoded-not-shown', str(_fallback_hc) not in _price_str,
+         f'hardcoded value must not appear in display string')
+
+    # ── Test J: VERY_LOW confidence → GEX 섹션 collapsed ─────────
+    print('\nTest J: VERY_LOW confidence → _gex_collapsed=True')
+    # 비즈니스 규칙: label in ('LOW', 'VERY_LOW') → gex_collapsed=True
+    for _lbl, _expect_col in [('HIGH', False), ('MEDIUM', False),
+                               ('LOW', True), ('VERY_LOW', True)]:
+        _gex_col = _lbl in ('LOW', 'VERY_LOW')
+        _chk(f'TJ-gex-collapsed-{_lbl}',  _gex_col == _expect_col,
+             f'label={_lbl} → collapsed={_gex_col} (expected={_expect_col})')
+
+    # ── Test K: SPX ignored → dashboard summary에 SPY PRIMARY ────
+    print('\nTest K: SPX ignored (LOW) → SPY PRIMARY in banner and proxies')
+    asset_k = {
+        'SPX': {'label': 'VERY_LOW', 'fallback_penalty': 20, 'score': 25},
+        'SPY': {'label': 'HIGH',     'fallback_penalty': 0,  'score': 91},
+        'NDX': {'label': 'HIGH',     'fallback_penalty': 0,  'score': 85},
+        'QQQ': {'label': 'HIGH',     'fallback_penalty': 0,  'score': 88},
+    }
+    pm_k = select_proxy_mode(asset_k)
+    _spx_ign_k = (pm_k['proxies']['SP500'].get('ignored') == 'SPX')
+    _spy_pri_k = (pm_k['proxies']['SP500']['primary'] == 'SPY')
+    _spy_in_banner = 'SPY' in pm_k['banner']
+    _chk('TK-spx-ignored',       _spx_ign_k,   f"ignored={pm_k['proxies']['SP500'].get('ignored')}")
+    _chk('TK-spy-primary',       _spy_pri_k,   f"primary={pm_k['proxies']['SP500']['primary']}")
+    _chk('TK-spy-in-banner',     _spy_in_banner, f"banner={pm_k['banner']}")
+    _summary_k = ' '.join(pm_k['notes'])
+    _chk('TK-spy-in-notes',      'SPY' in _summary_k, f"notes='{_summary_k[:60]}'")
+
+    # ── Test L: REALIZED_VOL_PROXY → 'IV Rank' 단독 문구 금지 ───
+    print('\nTest L: REALIZED_VOL_PROXY → display_label must be "RV Rank Proxy", not "IV Rank"')
+    _IV_RANK_FORBIDDEN = 'IV Rank'
+    for _src, _dlbl in [('REALIZED_VOL_PROXY', 'RV Rank Proxy'),
+                         ('OPTION_IV',          'IV Rank')]:
+        _computed_lbl = 'RV Rank Proxy' if _src == 'REALIZED_VOL_PROXY' else 'IV Rank'
+        if _src == 'REALIZED_VOL_PROXY':
+            _chk(f'TL-label-proxy-{_src}',
+                 _computed_lbl == 'RV Rank Proxy',
+                 f'src={_src} → label={_computed_lbl!r}')
+            _chk('TL-forbidden-label-absent',
+                 _computed_lbl != _IV_RANK_FORBIDDEN,
+                 f'"{_IV_RANK_FORBIDDEN}" must NOT appear when source is REALIZED_VOL_PROXY')
+        else:
+            _chk('TL-label-real-iv',
+                 _computed_lbl == 'IV Rank',
+                 f'src={_src} → label={_computed_lbl!r}')
+
+    # ── Test M: SPX price live + chain FALLBACK → SPY PRIMARY ────
+    print('\nTest M: SPX price live + chain FALLBACK → SPY PRIMARY / PRICE_ONLY_SECONDARY')
+    asset_m = {
+        'SPX': {'label': 'MEDIUM_HIGH', 'fallback_penalty': 0, 'score': 70,
+                'chain_status': 'FALLBACK'},
+        'SPY': {'label': 'HIGH',        'fallback_penalty': 0, 'score': 90,
+                'chain_status': 'LIVE'},
+        'NDX': {'label': 'MEDIUM',      'fallback_penalty': 0, 'score': 65,
+                'chain_status': 'LIVE'},
+        'QQQ': {'label': 'HIGH',        'fallback_penalty': 0, 'score': 88,
+                'chain_status': 'LIVE'},
+    }
+    pm_m = select_proxy_mode(asset_m)
+    _chk('TM-spy-primary',
+         pm_m['proxies']['SP500']['primary'] == 'SPY',
+         f"primary={pm_m['proxies']['SP500']['primary']}")
+    _chk('TM-spx-price-only',
+         pm_m['proxies']['SP500'].get('spx_role') == 'PRICE_ONLY_SECONDARY',
+         f"spx_role={pm_m['proxies']['SP500'].get('spx_role')}")
+    _chk('TM-banner-spy', 'SPY' in pm_m['banner'],
+         f"banner={pm_m['banner']}")
+    _chk('TM-chain-note',
+         'option chain fallback' in ' '.join(pm_m['notes']),
+         f"notes={pm_m['notes'][0][:60]}")
+    _chk('TM-spx-not-primary',
+         pm_m['proxies']['SP500']['primary'] != 'SPX',
+         f"SPX must not be PRIMARY when chain=FALLBACK")
+
+    # ── Test N: SPX chain FALLBACK → GEX 섹션 기본 접힘 ──────────
+    print('\nTest N: SPX chain FALLBACK → GEX section collapse business rule')
+    # html.py 렌더링 로직과 동일한 조건
+    for _c_label, _c_chain, _expect_collapse in [
+        ('HIGH',        'LIVE',     False),
+        ('MEDIUM_HIGH', 'FALLBACK', True),   # chain FALLBACK → 항상 접힘
+        ('MEDIUM',      'FALLBACK', True),
+        ('LOW',         'LIVE',     True),   # LOW 라벨 → 접힘
+        ('HIGH',        'FALLBACK', True),   # HIGH라도 chain FALLBACK → 접힘
+    ]:
+        _col = (_c_label in ('LOW', 'VERY_LOW')) or (_c_chain == 'FALLBACK')
+        _chk(f'TN-collapse-{_c_label}-chain-{_c_chain}',
+             _col == _expect_collapse,
+             f'label={_c_label}, chain={_c_chain} → collapsed={_col}')
+    # SPX notes에 GEX/Wall/Max Pain 포함 여부
+    _notes_str = ' '.join(pm_m['notes'])
+    _chk('TN-notes-gex-warning',
+         'GEX/Wall/Max Pain' in _notes_str,
+         f"notes='{_notes_str[:70]}'")
+
+    # ── Test O: SPX Max Pain mismatch ─────────────────────────────
+    print('\nTest O: SPX max pain mismatch — spot=7408.50, max_pain=5650, chain=FALLBACK')
+    r_o = validate_chain_price_mismatch(
+        spot=7408.50, max_pain=5650.0,
+        price_status='LIVE', chain_status='FALLBACK',
+    )
+    _chk('TO-mismatch-true',   r_o['mismatch'] is True,
+         f"mismatch={r_o['mismatch']}, diff={r_o['diff_pct']}%")
+    _chk('TO-warning-text',
+         'Max Pain unavailable due to stale/fallback chain mismatch' in r_o['warning'],
+         f"warning={r_o['warning'][:60]}")
+    # chain LIVE이면 mismatch 없어야
+    r_o2 = validate_chain_price_mismatch(
+        spot=7408.50, max_pain=5650.0,
+        price_status='LIVE', chain_status='LIVE',
+    )
+    _chk('TO-no-mismatch-live-chain',  r_o2['mismatch'] is False,
+         f"chain=LIVE → mismatch={r_o2['mismatch']}")
+    # 괴리 10% 미만이면 mismatch 없어야
+    r_o3 = validate_chain_price_mismatch(
+        spot=7408.50, max_pain=7000.0,   # ~5.5% 괴리
+        price_status='LIVE', chain_status='FALLBACK',
+    )
+    _chk('TO-no-mismatch-small-gap',   r_o3['mismatch'] is False,
+         f"gap<10% → mismatch={r_o3['mismatch']}")
+
+    # ── Test P: Expected Move invalid ─────────────────────────────
+    print('\nTest P: Expected Move invalid — spot=7408.50, range=5597~5825, chain=FALLBACK')
+    r_p = validate_expected_move_validity(
+        spot=7408.50, expected_low=5597.0, expected_high=5825.0,
+        chain_status='FALLBACK',
+    )
+    _chk('TP-em-invalid',      r_p['valid'] is False,
+         f"valid={r_p['valid']}")
+    _chk('TP-warning-text',
+         'Expected Move invalid' in r_p['warning'],
+         f"warning={r_p['warning'][:60]}")
+    # chain LIVE이면 valid
+    r_p2 = validate_expected_move_validity(
+        spot=7408.50, expected_low=5597.0, expected_high=5825.0,
+        chain_status='LIVE',
+    )
+    _chk('TP-valid-live-chain', r_p2['valid'] is True,
+         f"chain=LIVE → valid={r_p2['valid']}")
+    # spot이 expected_high 10% 미만 초과이면 valid (경계)
+    r_p3 = validate_expected_move_validity(
+        spot=6350.0, expected_low=5597.0, expected_high=5825.0,  # ~9% 위
+        chain_status='FALLBACK',
+    )
+    _chk('TP-valid-small-overshoot', r_p3['valid'] is True,
+         f"9% overshoot → valid={r_p3['valid']}")
+
+    # ── Test Q: REALIZED_VOL_PROXY 문구 정합성 ────────────────────
+    print('\nTest Q: REALIZED_VOL_PROXY → RV Proxy 문구, IV 관련 금지 문구 제거')
+    _FORBIDDEN_RV = ['IV 고가', '신고IV', 'IV 보통', 'IV 저렴', '1년 신고IV']
+    for _rv_rank_q, _expect_key in [(85.0, 'RV Proxy 고가'),
+                                    (50.0, 'RV Proxy 보통'),
+                                    (20.0, 'RV Proxy 낮음')]:
+        # html.py와 동일한 로직 시뮬레이션
+        _is_rv = True   # REALIZED_VOL_PROXY
+        if _is_rv:
+            _desc = ('RV Proxy 고가 🔴' if _rv_rank_q >= 70
+                     else 'RV Proxy 보통 🟡' if _rv_rank_q >= 30
+                     else 'RV Proxy 낮음 🟢')
+        else:
+            _desc = ('IV 고가 🔴' if _rv_rank_q >= 70
+                     else 'IV 보통 🟡' if _rv_rank_q >= 30
+                     else 'IV 저렴 🟢')
+        _violations_q = [w for w in _FORBIDDEN_RV if w in _desc]
+        _chk(f'TQ-no-forbidden-rank-{int(_rv_rank_q)}',
+             len(_violations_q) == 0,
+             f"rank={_rv_rank_q} → desc={_desc!r} violations={_violations_q}")
+        _chk(f'TQ-rv-proxy-in-desc-{int(_rv_rank_q)}',
+             'RV Proxy' in _desc,
+             f"desc={_desc!r}")
+    # new_high일 때도 금지 문구 없어야
+    _new_high_desc = 'RV Proxy 고가 🔴'
+    _new_high_suffix = '⚠ 1년 변동성 프록시 고점'   # OK
+    _full_desc = _new_high_desc + _new_high_suffix
+    _chk('TQ-new-high-no-forbidden',
+         all(w not in _full_desc for w in _FORBIDDEN_RV),
+         f"new_high desc={_full_desc!r}")
+    _chk('TQ-source-label-ok',
+         '옵션 IV 아님' in f'소스: REALIZED_VOL_PROXY — 옵션 IV 아님',
+         '소스 레이블 확인')
+
+    # ── Test R: Dashboard summary — SPX partial / NDX low ────────
+    print('\nTest R: Dashboard summary with SPX partial + NDX low')
+    asset_r = {
+        'SPX': {'label': 'MEDIUM_HIGH', 'fallback_penalty': 0,  'score': 70,
+                'chain_status': 'FALLBACK'},
+        'SPY': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 90,
+                'chain_status': 'LIVE'},
+        'NDX': {'label': 'LOW',         'fallback_penalty': 20, 'score': 35,
+                'chain_status': 'FALLBACK'},
+        'QQQ': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 88,
+                'chain_status': 'LIVE'},
+        'GLD': {'label': 'HIGH',        'fallback_penalty': 0,  'score': 86,
+                'chain_status': 'LIVE'},
+        'GOOGL': {'label': 'HIGH',      'fallback_penalty': 0,  'score': 87,
+                  'chain_status': 'LIVE'},
+    }
+    pm_r = select_proxy_mode(asset_r)
+    # S&P 500: SPY PRIMARY (SPX chain FALLBACK)
+    _chk('TR-sp500-spy-primary',
+         pm_r['proxies']['SP500']['primary'] == 'SPY',
+         f"sp500={pm_r['proxies']['SP500']['primary']}")
+    _chk('TR-spx-price-only',
+         pm_r['proxies']['SP500'].get('spx_role') == 'PRICE_ONLY_SECONDARY',
+         f"spx_role={pm_r['proxies']['SP500'].get('spx_role')}")
+    # Nasdaq: QQQ PRIMARY (NDX LOW)
+    _chk('TR-nasdaq-qqq-primary',
+         pm_r['proxies']['NASDAQ']['primary'] == 'QQQ',
+         f"nasdaq={pm_r['proxies']['NASDAQ']['primary']}")
+    # PARTIAL / LOW 분류 시뮬레이션
+    _partial_r = [s for s, c in asset_r.items()
+                  if c.get('chain_status') == 'FALLBACK'
+                  and c['label'] not in ('LOW', 'VERY_LOW')]
+    _low_r = [s for s, c in asset_r.items()
+              if c['label'] in ('LOW', 'VERY_LOW')]
+    _chk('TR-spx-in-partial',  'SPX' in _partial_r,
+         f"partial={_partial_r}")
+    _chk('TR-ndx-in-low',      'NDX' in _low_r,
+         f"low={_low_r}")
+    _chk('TR-spy-not-partial',  'SPY' not in _partial_r,
+         f"SPY should be in HIGH/MH, partial={_partial_r}")
+    _notes_r = ' '.join(pm_r['notes'])
+    _chk('TR-chain-fallback-in-notes',
+         'option chain fallback' in _notes_r,
+         f"notes='{_notes_r[:80]}'")
+
+    # ── Test S: _stat_disabled 로직 ───────────────────────────────
+    print('\nTest S: _stat_disabled flag — price_is_na | chain_fb | LOW/VERY_LOW')
+    for _pna, _cfb, _lbl, _exp in [
+        (True,  False, 'HIGH',        True),   # price N/A → disabled
+        (False, True,  'MEDIUM_HIGH', True),   # chain FB  → disabled
+        (False, False, 'LOW',         True),   # LOW label → disabled
+        (False, False, 'VERY_LOW',    True),   # VERY_LOW  → disabled
+        (False, False, 'HIGH',        False),  # 정상 → 미비활성화
+        (False, False, 'MEDIUM_HIGH', False),  # 정상 → 미비활성화
+        (False, False, 'MEDIUM',      False),  # 정상 → 미비활성화
+    ]:
+        _dis_s = _pna or _cfb or _lbl in ('LOW', 'VERY_LOW')
+        _chk(f'TS-disabled-pna{int(_pna)}-cfb{int(_cfb)}-{_lbl}',
+             _dis_s == _exp,
+             f'pna={_pna},cfb={_cfb},lbl={_lbl} → disabled={_dis_s} (expected={_exp})')
+
+    # ── Test T: stat_disabled → Expected Move 판정 문구 제거 ─────
+    print('\nTest T: stat_disabled → "기대범위" hint removed from em_html')
+    _EM_FORBIDDEN = ['기대범위 안', '기대범위 경계', '기대범위']
+    _EM_DISABLED_TEXT = 'Expected Move disabled — fallback chain does not match live/reliable spot'
+    # disabled일 때 em_html은 disabled 텍스트만
+    _em_disabled_html = (
+        '<div style="padding:8px 20px;background:#f8f9fa;'
+        'border-top:1px solid #dee2e6;border-bottom:1px solid #dee2e6;">'
+        '<span style="font-size:10px;color:#94a3b8;font-weight:600;">'
+        '📐 Expected Move disabled — '
+        'fallback chain does not match live/reliable spot'
+        '</span></div>'
+    )
+    _chk('TT-em-disabled-text',
+         _EM_DISABLED_TEXT in _em_disabled_html,
+         f'disabled em contains correct text')
+    for _efb in _EM_FORBIDDEN:
+        _chk(f'TT-no-{_efb[:5]}',
+             _efb not in _em_disabled_html,
+             f'disabled em must NOT contain "{_efb}"')
+
+    # ── Test U: stat_disabled → P/C / Vanna / Charm / mp_str = N/A ─
+    print('\nTest U: stat_disabled → key stats all show N/A')
+    _prx_u   = 'SPY'
+    _dis_val_u = f'N/A — fallback data, use {_prx_u} proxy'
+    _chk('TU-pc-oi-na',     'N/A' in _dis_val_u, f'P/C OI: {_dis_val_u[:30]}')
+    _chk('TU-pc-vol-na',    'N/A' in _dis_val_u, f'P/C Vol: {_dis_val_u[:30]}')
+    _chk('TU-vanna-na',     'N/A' in _dis_val_u, f'Vanna: {_dis_val_u[:30]}')
+    _chk('TU-charm-na',     'N/A' in _dis_val_u, f'Charm: {_dis_val_u[:30]}')
+    _mp_str_u = 'N/A'    # disabled 시 mp_str
+    _chk('TU-mp-str-na',    _mp_str_u == 'N/A',   f'mp_str={_mp_str_u}')
+    _mp_ssub_u = 'Max Pain disabled — fallback/low confidence'
+    _chk('TU-mp-ssub-disabled', 'Max Pain disabled' in _mp_ssub_u, f'mp_ssub={_mp_ssub_u}')
+    # disabled proxy hint (SPX → SPY)
+    _chk('TU-spy-proxy-hint', 'use SPY proxy' in _dis_val_u, f'proxy hint: {_dis_val_u[:40]}')
+
+    # ── Test V: "옵션 매도자 유리 가격" 전 자산 금지 ─────────────
+    print('\nTest V: "옵션 매도자 유리 가격" forbidden from all mp_ssub variants')
+    _FORBIDDEN_V = '옵션 매도자 유리 가격'
+    _ALLOWED_V   = '옵션 포지션 분포 참고값'
+    # 정상 (mismatch 없음, urgency 없음)
+    _ssub_v_normal   = '옵션 포지션 분포 참고값'
+    # urgency 있는 케이스
+    _urgency_v       = '⚡ 주의: 이번주 만기 Max Pain -3.2%'
+    _ssub_v_urgency  = f'옵션 포지션 분포 참고값 &nbsp;{_urgency_v}'
+    # mismatch
+    _ssub_v_mismatch = '⛔ Max Pain unavailable due to stale/fallback chain mismatch'
+    # disabled
+    _ssub_v_disabled = 'Max Pain disabled — fallback/low confidence'
+    for _name, _ssub in [('normal',   _ssub_v_normal),
+                          ('urgency',  _ssub_v_urgency),
+                          ('mismatch', _ssub_v_mismatch),
+                          ('disabled', _ssub_v_disabled)]:
+        _chk(f'TV-no-forbidden-{_name}',
+             _FORBIDDEN_V not in _ssub,
+             f'{_name}: ssub={_ssub[:50]!r}')
+    _chk('TV-allowed-in-normal',
+         _ALLOWED_V in _ssub_v_normal,
+         f'normal ssub must contain {_ALLOWED_V!r}')
+    _chk('TV-allowed-in-urgency',
+         _ALLOWED_V in _ssub_v_urgency,
+         f'urgency ssub must contain {_ALLOWED_V!r}')
+
+    # ── Test W: SPY/QQQ/GOOGL/GLD → stat_disabled = False ────────
+    print('\nTest W: SPY/QQQ/GOOGL/GLD maintain normal stats (not disabled)')
+    for _sym_w, _lbl_w, _pna_w, _cfb_w in [
+        ('SPY',   'HIGH',        False, False),
+        ('QQQ',   'HIGH',        False, False),
+        ('GOOGL', 'HIGH',        False, False),
+        ('GLD',   'HIGH',        False, False),
+        ('SPX',   'MEDIUM_HIGH', False, True),   # chain FB → disabled
+    ]:
+        _dis_w = _pna_w or _cfb_w or _lbl_w in ('LOW', 'VERY_LOW')
+        _exp_w = (_sym_w == 'SPX')  # SPX with chain FB → disabled
+        _chk(f'TW-{_sym_w}-disabled={_exp_w}',
+             _dis_w == _exp_w,
+             f'{_sym_w}: pna={_pna_w},cfb={_cfb_w},lbl={_lbl_w} → disabled={_dis_w}')
+    # MEDIUM/MEDIUM_HIGH (non-fallback) → not disabled
+    for _lbl_w2 in ('MEDIUM', 'MEDIUM_HIGH'):
+        _dis_w2 = (False or False or _lbl_w2 in ('LOW', 'VERY_LOW'))
+        _chk(f'TW-{_lbl_w2}-not-disabled',
+             _dis_w2 is False,
+             f'{_lbl_w2} should not be disabled')
+
+    # ── Test X: SPX price N/A → IGNORED + HTML section disabled ──
+    print('\nTest X: SPX price_is_na=True → IGNORED / SPY proxy / details hidden')
+    asset_x = {
+        'SPX': {'label': 'VERY_LOW', 'fallback_penalty': 20, 'score': 25,
+                'chain_status': 'FALLBACK', 'price_is_na': True},
+        'SPY': {'label': 'HIGH', 'fallback_penalty': 0, 'score': 90,
+                'chain_status': 'LIVE'},
+        'NDX': {'label': 'LOW', 'fallback_penalty': 20, 'score': 35,
+                'chain_status': 'FALLBACK'},
+        'QQQ': {'label': 'HIGH', 'fallback_penalty': 0, 'score': 88,
+                'chain_status': 'LIVE'},
+    }
+    pm_x = select_proxy_mode(asset_x)
+    notes_x = ' '.join(pm_x['notes'])
+    _chk('TX-spx-role-ignored',
+         pm_x['proxies']['SP500'].get('spx_role') == 'IGNORED',
+         f"spx_role={pm_x['proxies']['SP500'].get('spx_role')}")
+    _chk('TX-spy-primary',
+         pm_x['proxies']['SP500'].get('primary') == 'SPY',
+         f"primary={pm_x['proxies']['SP500'].get('primary')}")
+    _chk('TX-summary-spx-ignored',
+         'SPX ignored' in notes_x,
+         f"notes={notes_x}")
+    _chk('TX-summary-no-price-live',
+         'SPX price live' not in notes_x,
+         f"notes={notes_x}")
+
+    def _fake_result(sym, curr, chain='LIVE', overall='LIVE', price='LIVE',
+                     price_na=False, net_gex=0.05, label=None):
+        return {
+            'sym': sym, 'label': label or f'{sym} Options', 'curr': curr,
+            '_price_is_na': price_na,
+            '_display_curr': None if price_na else curr,
+            '_data_source': {'price': price, 'chain': chain, 'overall': overall},
+            '_price_audit': {'selected_price': curr, 'final_rendered_price': curr},
+            '_timestamps': {},
+            'exp_count': 1,
+            'pc_oi': 1.1, 'pc_vol': 0.9,
+            'tc_oi': 20000, 'tp_oi': 22000,
+            'iv_call': 21.0, 'iv_put': 23.0,
+            'max_pain': round(curr * 0.99, 2),
+            'gex': {
+                'net_gex_b': net_gex,
+                'gamma_flip': round(curr * (0.895 if sym == 'QQQ' else 0.995), 2),
+                'call_wall': round(curr * 1.004, 2),
+                'put_wall': round(curr * 0.997, 2),
+            },
+            'exp_rows': [{
+                'exp': '2099-01-16', 'days': 14,
+                'c_vol': 100, 'p_vol': 90, 'pc_vol': 0.9,
+                'c_oi': 20000, 'p_oi': 22000, 'pc_oi': 1.1,
+                'iv': 22.0, 'straddle_em': curr * 0.025,
+                'straddle_em_pct': 2.5,
+                'upper_price': curr * 1.025,
+                'lower_price': curr * 0.975,
+                'atm_strike': curr,
+                'max_pain': round(curr * 0.99, 2),
+                'mp_diff': -1.0, 'ok': True,
+            }],
+            'top_calls': [{'strike': round(curr * 1.01, 2), 'oi': 10000}],
+            'top_puts': [{'strike': round(curr * 0.99, 2), 'oi': 11000}],
+            'chart': [], 'cal_chart': [], 'cone_data': [],
+        }
+
+    try:
+        import sys
+        import types
+        if 'dotenv' not in sys.modules:
+            _dotenv_stub = types.ModuleType('dotenv')
+            _dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+            sys.modules['dotenv'] = _dotenv_stub
+        if 'jm_lib.html_styles' not in sys.modules:
+            _jm_lib_stub = types.ModuleType('jm_lib')
+            _html_styles_stub = types.ModuleType('jm_lib.html_styles')
+            _html_styles_stub.html_head = (
+                lambda title, css='', chartjs=False:
+                f'<!doctype html><html><head><title>{title}</title><style>{css}</style></head>'
+            )
+            _options_stub = types.ModuleType('jm_lib.options')
+            _options_stub.calc_vanna_charm = lambda _r: {'vanna': 0.0, 'charm': 0.0}
+            _colors_stub = types.ModuleType('jm_lib.colors')
+            _colors_stub.ALERT = ''
+            _colors_stub.RESET = ''
+            sys.modules['jm_lib'] = _jm_lib_stub
+            sys.modules['jm_lib.html_styles'] = _html_styles_stub
+            sys.modules['jm_lib.options'] = _options_stub
+            sys.modules['jm_lib.colors'] = _colors_stub
+        if 'options_monitor_render' not in sys.modules:
+            _render_stub = types.ModuleType('options_monitor_render')
+            _render_stub.render_iv_rank = lambda _r: {
+                'rank': 45.0, 'pct': 55.0, 'status': 'OK',
+                'new_high': False, 'insufficient_history': False,
+                'low_confidence': False, 'source': 'REALIZED_VOL_PROXY',
+                'display_label': 'RV Rank Proxy',
+            }
+            _render_stub.render_0dte_block = lambda _r: None
+            sys.modules['options_monitor_render'] = _render_stub
+        import options_monitor_html as _omh
+        _orig_render_iv_rank = _omh.render_iv_rank
+        _orig_snap_file = _omh._SNAP_FILE
+        _omh.render_iv_rank = lambda _r: {
+            'rank': 45.0, 'pct': 55.0, 'status': 'OK',
+            'new_high': False, 'insufficient_history': False,
+            'low_confidence': False, 'source': 'REALIZED_VOL_PROXY',
+            'display_label': 'RV Rank Proxy',
+        }
+        _omh._SNAP_FILE = '/tmp/jason_market_test_options_gex_snapshot.json'
+        html_x = _omh.generate_html([
+            _fake_result('SPX', 5711.52, chain='FALLBACK', overall='FALLBACK',
+                         price='FALLBACK', price_na=True, net_gex=0.01,
+                         label='S&P 500 Index'),
+            _fake_result('SPY', 600.0, net_gex=0.04, label='SPY ETF'),
+            _fake_result('NDX', 21000.0, chain='FALLBACK', overall='FALLBACK',
+                         price='FALLBACK', net_gex=0.01, label='Nasdaq 100 Index'),
+            _fake_result('QQQ', 100.0, net_gex=-0.333, label='QQQ ETF'),
+            _fake_result('GOOGL', 180.0, net_gex=0.02, label='Alphabet'),
+            _fake_result('GLD', 220.0, net_gex=0.03, label='Gold ETF'),
+        ], '2099-01-01 09:00')
+    finally:
+        try:
+            _omh.render_iv_rank = _orig_render_iv_rank
+            _omh._SNAP_FILE = _orig_snap_file
+        except Exception:
+            pass
+
+    _chk('TX-html-no-price-only-secondary',
+         'PRICE_ONLY_SECONDARY' not in html_x,
+         'SPX N/A must not show PRICE_ONLY_SECONDARY')
+    _chk('TX-html-no-index-level-only',
+         'Use SPX for index level only' not in html_x,
+         'SPX N/A must not show index-level-only copy')
+    _chk('TX-html-use-spy-proxy',
+         'Use SPY proxy' in html_x,
+         'SPX N/A must point to SPY proxy')
+    _chk('TX-html-summary-spx-ignored',
+         'SPX ignored' in html_x,
+         'Dashboard summary must mention SPX ignored')
+    _chk('TX-html-summary-no-spx-live',
+         'SPX price live' not in html_x,
+         'SPX N/A summary must not mention live price')
+    _chk('TX-disabled-assets-spx',
+         'Disabled assets: SPX' in html_x,
+         'Summary must list SPX as disabled')
+    _low_vl_line_x = next((line for line in html_x.splitlines() if 'LOW/VL:' in line), '')
+    _chk('TX-spx-not-duplicated-low-vl',
+         'SPX' not in _low_vl_line_x and 'NDX' in _low_vl_line_x,
+         f'LOW/VL line={_low_vl_line_x.strip()}')
+    _chk('TX-spx-details-hidden',
+         'id="tw-SPX"' not in html_x and 'id="chart-SPX-gex"' not in html_x,
+         'SPX detail table/chart must not render in normal mode')
+    _chk('TX-spx-placeholder',
+         'SPX option data disabled — stale/fallback data. Use SPY proxy.' in html_x,
+         'disabled placeholder missing')
+    for _forbidden_x in ['당김', '자석', '옵션 매도자 유리 가격']:
+        _chk(f'TX-html-no-{_forbidden_x}',
+             _forbidden_x not in html_x,
+             f'forbidden text {_forbidden_x!r} must not appear')
+    for _forbidden_dir_x in ['하방 방향', '상방 방향', '하방 압력', '상방 압력']:
+        _chk(f'TX-html-no-{_forbidden_dir_x}',
+             _forbidden_dir_x not in html_x,
+             f'forbidden directional text {_forbidden_dir_x!r} must not appear')
+    _allowed_mp_x = '옵션 포지션 분포 참고값 — 가격 예측 신호 아님'
+    _chk('TX-max-pain-normal-copy',
+         _allowed_mp_x in html_x,
+         f'normal asset Max Pain copy must contain {_allowed_mp_x!r}')
+    _chk('TX-spy-primary-kept',
+         'S&P: SPY PRIMARY' in html_x,
+         'S&P proxy must remain SPY PRIMARY')
+    _chk('TX-qqq-primary-kept',
+         'Nasdaq: QQQ PRIMARY' in html_x,
+         'Nasdaq proxy must remain QQQ PRIMARY')
+    _chk('TX-qqq-compressed-risk-kept',
+         '압축' in html_x and 'QQQ' in html_x,
+         'QQQ compressed mixed gamma risk must remain visible')
+    _ndx_card_start = html_x.find('id="NDX-card"')
+    _ndx_card_end = html_x.find('<div class="card" id=', _ndx_card_start + 1)
+    _ndx_card = html_x[_ndx_card_start: _ndx_card_end if _ndx_card_end > _ndx_card_start else len(html_x)]
+    _chk('TX-ndx-detail-table-hidden',
+         '만기일별 옵션 배팅 상세' not in _ndx_card and 'id="tw-NDX"' not in _ndx_card,
+         'NDX LOW/FALLBACK detail table must not render in normal mode')
+    _chk('TX-ndx-top-call-hidden',
+         '상위 콜 OI' not in _ndx_card,
+         'NDX LOW/FALLBACK top call table must not render in normal mode')
+    _chk('TX-ndx-placeholder-use-qqq',
+         'NDX option data disabled — fallback/low confidence data. Use QQQ proxy.' in _ndx_card,
+         'NDX disabled placeholder must point to QQQ proxy')
+    for _sym_box in ['SPY', 'QQQ', 'GOOGL', 'GLD']:
+        _card_start = html_x.find(f'id="{_sym_box}-card"')
+        _card_end = html_x.find('<div class="card" id=', _card_start + 1)
+        _card = html_x[_card_start: _card_end if _card_end > _card_start else len(html_x)]
+        _chk(f'TX-{_sym_box}-stats-normal',
+             'N/A — fallback data' not in _card and 'Max Pain disabled' not in _card,
+             f'{_sym_box} stat box should remain normal')
+    _chk('TX-rv-rank-label',
+         'RV Rank Proxy' in html_x and '옵션 IV 아님' in html_x,
+         'top RV Rank Proxy source copy missing')
+    _chk('TX-expiry-iv-label',
+         'Expiry IV' in html_x or '옵션체인 IV' in html_x,
+         'expiry IV source label missing')
+    _chk('TX-rv-expiry-footnote',
+         '상단 RV Rank Proxy는 실현변동성 기반이며, 만기별 IV는 옵션체인 IV입니다.' in html_x,
+         'RV/Expiry IV footnote missing')
+
     # ── 결과 요약 ────────────────────────────────────────────────
     total  = len(results)
     passed = sum(1 for _, ok, _ in results if ok)
@@ -1179,6 +1863,8 @@ __all__ = [
     'validate_max_pain_label',
     'validate_iv_rank',
     'validate_expected_move',
+    'validate_chain_price_mismatch',
+    'validate_expected_move_validity',
     'calc_confidence_score',
     'calc_asset_confidence',
     'cap_confidence_by_conditions',

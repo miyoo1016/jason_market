@@ -7,6 +7,10 @@ import webbrowser
 from datetime import datetime
 
 from jm_lib.html_styles import html_head
+from technical_analysis_indicators import (
+    bb_label, momentum_label, rsi_label, stoch_label,
+    obv_label, pivot_position_label,
+)
 
 
 def generate_html(results, ai_text=""):
@@ -52,7 +56,9 @@ def generate_html(results, ai_text=""):
 
     def c_bb(v):
         """볼린저밴드 색상"""
-        return '#c62828' if v > 80 else '#00838f' if v < 20 else '#1565c0'
+        if v is None:
+            return '#888'
+        return '#c62828' if v >= 85 else '#00838f' if v <= 15 else '#1565c0'
 
     def c_obv(v):
         """OBV 추세 색상"""
@@ -77,7 +83,7 @@ def generate_html(results, ai_text=""):
 
         return f"""<div class="pivot-row">
           {pc('S2',pivot['S2'])}{pc('S1',pivot['S1'])}{pc('P',pivot['P'])}{pc('R1',pivot['R1'])}{pc('R2',pivot['R2'])}
-        </div>"""
+        </div><div class="pivot-pos">{pivot_position_label(pivot, curr)}</div>"""
 
     def vol_profile_bars(vp, curr, poc_price=None):
         """매물대 시각화"""
@@ -104,6 +110,51 @@ def generate_html(results, ai_text=""):
 
     all_chart_data = {r['name']: r['chart'] for r in results}
 
+    def _macro_burden(r):
+        if r['ticker'] == 'USDKRW=X':
+            return '환율 부담 / 원화 약세 압력' if r['pct'] > 0 else '환율 부담 완화'
+        if r['ticker'] == '^TNX':
+            return '금리 부담' if r['pct'] > 0 else '금리 부담 완화'
+        if r['ticker'] == '^VIX':
+            return '변동성 부담' if r['pct'] > 0 else '변동성 부담 완화'
+        return ''
+
+    def _summary_lines():
+        warned = [r for r in results if r.get('data_warnings')]
+        clean = [r for r in results if not r.get('data_warnings')]
+        macro_types = {'macro_fx', 'macro_rate', 'volatility_index', 'cash_like'}
+        top_hi_pool = [r for r in clean if r.get('asset_type') not in macro_types]
+        top_lo_pool = [
+            r for r in clean
+            if r.get('asset_type') != 'cash_like'
+            and bb_label(r.get('pct_b')) in ('중립 하단', '하단권', '하단 이탈')
+        ]
+        top_hi = sorted(top_hi_pool, key=lambda x: (x.get('pct_b') or 50), reverse=True)[:5]
+        top_lo = sorted(top_lo_pool, key=lambda x: (x.get('pct_b') or 50))[:5]
+        top_atr = sorted(clean, key=lambda x: (x.get('atr_pct') or 0), reverse=True)[:5]
+        macro = [r for r in results if r['ticker'] in ('USDKRW=X', '^TNX', '^VIX')]
+        limited = [r for r in results if r.get('asset_type') == 'cash_like']
+        return {
+            'warnings': ', '.join(r['name'] for r in warned) + ' — 원천 가격 이상으로 기술지표 해석 제외' if warned else '없음',
+            'top_hi': ', '.join(f"{r['name']} {bb_label(r.get('pct_b'))}" for r in top_hi) or '없음',
+            'top_lo': ', '.join(f"{r['name']} {bb_label(r.get('pct_b'))}" for r in top_lo) or '뚜렷한 침체권 없음',
+            'top_atr': ', '.join(f"{r['name']} {r.get('atr_pct'):.1f}%" for r in top_atr if r.get('atr_pct') is not None) or '없음',
+            'macro': ', '.join(f"{r['ticker']} {_macro_burden(r)}" for r in macro) or '없음',
+            'limited': ', '.join(r['name'] for r in limited) or '없음',
+        }
+
+    summary = _summary_lines()
+    summary_html = f"""
+<div class="summary-box">
+  <div class="summary-title">요약</div>
+  <div>데이터 경고: {summary['warnings']}</div>
+  <div>과열/상단권 TOP 5: {summary['top_hi']}</div>
+  <div>하방/침체 TOP 5: {summary['top_lo']}</div>
+  <div>변동성 ATR 상위 TOP 5: {summary['top_atr']}</div>
+  <div>매크로 부담: {summary['macro']}</div>
+  <div>기술지표 해석 제한: {summary['limited']}</div>
+</div>"""
+
     cards = ""
     for idx, r in enumerate(results):
         cid = f"chart_{idx}"
@@ -122,7 +173,17 @@ def generate_html(results, ai_text=""):
         vol_sc = score.get('volume_score', 0)
         obv_div = r.get('obv_div')
         div_warn = (f'<span style="color:#e65100;font-weight:600">{obv_div}</span>'
-                   if obv_div else '')
+                   if obv_div and r.get('volume_reliable') else '')
+        asset_type = r.get('asset_type', 'equity_or_etf')
+        is_cash_like = asset_type == 'cash_like'
+        is_data_limited = bool(r.get('data_warnings'))
+        macd_lbl = momentum_label(r.get('macd'), r.get('macd_sig'), r.get('macd_hist'))
+        obv_lbl = obv_label(r.get('obv_trend'), r.get('volume_reliable'))
+        warning_html = ''.join(
+            f'<div class="data-warn">⚠ {w}</div>' for w in r.get('data_warnings', [])
+        )
+        macro_note = _macro_burden(r)
+        macro_html = f'<div class="macro-note">{macro_note}</div>' if macro_note else ''
 
         # ADX 해석
         adx_val = r.get('adx_val')
@@ -144,6 +205,87 @@ def generate_html(results, ai_text=""):
 
         poc_fmt = f"{r['poc_price']:,.2f}" if r.get('poc_price') else 'N/A'
 
+        if is_data_limited:
+            score_color = '#90a4ae'
+            score_label = '신뢰 제한'
+            score_total = 0
+            bar_pct = 50
+            trend_sc = mom_sc = vol_sc = 0
+            indicator_html = """
+      <div class="limit-box">
+        기술지표: 신뢰 제한 — 원천 가격 데이터 이상으로 RSI/MACD/스토캐스틱 해석 제외
+      </div>
+      <div class="row3">
+        <div class="mini-box">
+          <div class="mini-title">MACD</div>
+          <div class="mini-val">N/A</div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">OBV 추세</div>
+          <div class="mini-val">N/A</div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">피봇위치</div>
+          <div class="mini-val">N/A</div>
+        </div>
+      </div>"""
+            pivot_html = '<div class="pivot-pos">N/A</div>'
+        elif is_cash_like:
+            indicator_html = f"""
+      <div class="limit-box">
+        기술지표: 해석 제한 — 현금성/금리형 상품은 RSI/MACD 과열 판단 부적합
+      </div>
+      <div class="row3">
+        <div class="mini-box">
+          <div class="mini-title">ATR (변동성)</div>
+          <div class="mini-val">{f"{r['atr_pct']:.2f}%" if r['atr_pct'] else 'N/A'}</div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">OBV 추세</div>
+          <div class="mini-val">N/A — 거래량 신뢰도 낮음</div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">해석 범위</div>
+          <div class="mini-val" style="font-size:11px;color:#555">가격 안정성 중심 확인</div>
+        </div>
+      </div>"""
+            pivot_html = '<div class="pivot-pos">N/A — 현금성/금리형 상품은 피봇 해석 부적합</div>'
+        else:
+            indicator_html = f"""
+      <!-- RSI -->
+      <div class="ind-label">RSI <b style="color:{c_rsi(r['rsi'])}">{f"{r['rsi']:.1f}" if r['rsi'] else 'N/A'} {rsi_label(r.get('rsi'), asset_type)}</b></div>
+      <div class="track"><div class="zone z-buy" style="left:0;width:30%"></div><div class="zone z-sell" style="left:70%;width:30%"></div><div class="needle" style="left:{rsi}%;background:{c_rsi(r['rsi'])}"></div><span class="tick" style="left:30%">30</span><span class="tick" style="left:70%">70</span></div>
+
+      <!-- 스토캐스틱 -->
+      <div class="ind-label">스토캐스틱 <b style="color:{c_rsi(sk)}">%K {sk:.1f} {stoch_label(r.get('stoch_k'), asset_type)}</b> / <b style="color:#aaa">%D {sd:.1f}</b></div>
+      <div class="track"><div class="zone z-buy" style="left:0;width:20%"></div><div class="zone z-sell" style="left:80%;width:20%"></div><div class="needle" style="left:{max(0,min(100,sk))}%;background:{c_rsi(sk)}"></div><div class="needle2" style="left:{max(0,min(100,sd))}%"></div><span class="tick" style="left:20%">20</span><span class="tick" style="left:80%">80</span></div>
+
+      <!-- 볼린저 밴드 -->
+      <div class="ind-label">볼린저밴드 <b style="color:{c_bb(r.get('pct_b'))}">{bb_label(r.get('pct_b'))} ({r['pct_b']:.0f}%)</b></div>
+      <div class="bb-track"><div class="bb-fill" style="width:{pct_b}%;background:{c_bb(r.get('pct_b'))}"></div></div>
+      <div class="bb-lbl"><span>하단권</span><span>중간</span><span>상단권</span></div>
+
+      <!-- MACD -->
+      <div class="ind-label">MACD <b style="color:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828' if r['macd']<r['macd_sig'] else '#90a4ae'}">{macd_lbl}</b> <small style="color:#888">히스토그램 {r['macd_hist']:+.4f}</small></div>
+      <div class="macd-bar"><div style="width:{min(100,abs(r['macd_hist'])/(abs(r['macd_hist'])+1e-9)*100):.0f}%;height:100%;background:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828' if r['macd']<r['macd_sig'] else '#90a4ae'};border-radius:3px;opacity:0.8"></div></div>
+
+      <!-- ATR / OBV / ADX -->
+      <div class="row3">
+        <div class="mini-box">
+          <div class="mini-title">ATR (변동성)</div>
+          <div class="mini-val">{f"{r['atr_pct']:.2f}%" if r['atr_pct'] else 'N/A'} <small style="color:#888">일일리스크</small></div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">OBV 추세</div>
+          <div class="mini-val" style="color:{c_obv(r['obv_trend'])}">{obv_lbl}</div>
+        </div>
+        <div class="mini-box">
+          <div class="mini-title">ADX (추세강도)</div>
+          <div class="mini-val" style="font-size:11px;color:#333">{adx_str}</div>
+        </div>
+      </div>"""
+            pivot_html = pivot_row(r['pivot'], r['curr'])
+
         cards += f"""
     <div class="card">
       <div class="card-header">
@@ -154,6 +296,8 @@ def generate_html(results, ai_text=""):
         <span class="price">{price_fmt(r)}</span>
         <span style="color:{c_chg(r['pct'])};font-weight:600">{r['pct']:+.2f}% {'▲' if r['pct']>=0 else '▼'}</span>
       </div>
+      {warning_html}
+      {macro_html}
 
       <!-- 종합신호 스코어 바 -->
       <div class="score-section">
@@ -199,42 +343,11 @@ def generate_html(results, ai_text=""):
         {ma_badge(r['curr'],r['ma200'],'MA200')}
       </div>
 
-      <!-- RSI -->
-      <div class="ind-label">RSI <b style="color:{c_rsi(r['rsi'])}">{f"{r['rsi']:.1f}" if r['rsi'] else 'N/A'} {'과매수' if rsi>=70 else '과매도' if rsi<=30 else '중립'}</b></div>
-      <div class="track"><div class="zone z-buy" style="left:0;width:30%"></div><div class="zone z-sell" style="left:70%;width:30%"></div><div class="needle" style="left:{rsi}%;background:{c_rsi(r['rsi'])}"></div><span class="tick" style="left:30%">30</span><span class="tick" style="left:70%">70</span></div>
-
-      <!-- 스토캐스틱 -->
-      <div class="ind-label">스토캐스틱 <b style="color:{c_rsi(sk)}">%K {sk:.1f}</b> / <b style="color:#aaa">%D {sd:.1f}</b></div>
-      <div class="track"><div class="zone z-buy" style="left:0;width:20%"></div><div class="zone z-sell" style="left:80%;width:20%"></div><div class="needle" style="left:{max(0,min(100,sk))}%;background:{c_rsi(sk)}"></div><div class="needle2" style="left:{max(0,min(100,sd))}%"></div><span class="tick" style="left:20%">20</span><span class="tick" style="left:80%">80</span></div>
-
-      <!-- 볼린저 밴드 -->
-      <div class="ind-label">볼린저밴드 <b style="color:{c_bb(pct_b)}">{'상단과열' if pct_b>80 else '하단침체' if pct_b<20 else f'{pct_b:.0f}%'}</b></div>
-      <div class="bb-track"><div class="bb-fill" style="width:{pct_b}%;background:{c_bb(pct_b)}"></div></div>
-      <div class="bb-lbl"><span>하단매수</span><span>중간</span><span>상단과열</span></div>
-
-      <!-- MACD -->
-      <div class="ind-label">MACD <b style="color:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828'}">{'▲ 매수' if r['macd']>r['macd_sig'] else '▼ 매도'}</b> <small style="color:#888">히스토그램 {r['macd_hist']:+.4f}</small></div>
-      <div class="macd-bar"><div style="width:{min(100,abs(r['macd_hist'])/(abs(r['macd_hist'])+1e-9)*100):.0f}%;height:100%;background:{'#00838f' if r['macd']>r['macd_sig'] else '#c62828'};border-radius:3px;opacity:0.8"></div></div>
-
-      <!-- ATR / OBV / ADX -->
-      <div class="row3">
-        <div class="mini-box">
-          <div class="mini-title">ATR (변동성)</div>
-          <div class="mini-val">{f"{r['atr_pct']:.2f}%" if r['atr_pct'] else 'N/A'} <small style="color:#888">일일리스크</small></div>
-        </div>
-        <div class="mini-box">
-          <div class="mini-title">OBV 추세</div>
-          <div class="mini-val" style="color:{c_obv(r['obv_trend'])}">{'↑ 매집' if r['obv_trend']=='up' else '↓ 분산' if r['obv_trend']=='down' else '→ 중립'}</div>
-        </div>
-        <div class="mini-box">
-          <div class="mini-title">ADX (추세강도)</div>
-          <div class="mini-val" style="font-size:11px;color:#333">{adx_str}</div>
-        </div>
-      </div>
+      {indicator_html}
 
       <!-- 주간 피봇 포인트 -->
       <div class="section-title">📌 주간 피봇 포인트</div>
-      {pivot_row(r['pivot'], r['curr'])}
+      {pivot_html}
     </div>"""
 
     ai_section = ""
@@ -258,20 +371,57 @@ def generate_html(results, ai_text=""):
             return '없음'
         return f"S2={pv['S2']:,.2f} / S1={pv['S1']:,.2f} / P={pv['P']:,.2f} / R1={pv['R1']:,.2f} / R2={pv['R2']:,.2f}"
 
-    text_lines = [f"=== Jason Market 기술분석 보고서 ===", f"기준시각: {ts}", ""]
+    text_lines = [
+        f"=== Jason Market 기술분석 보고서 ===",
+        f"기준시각: {ts}",
+        "",
+        "[요약]",
+        f"- 데이터 경고: {summary['warnings']}",
+        f"- 과열/상단권 TOP 5: {summary['top_hi']}",
+        f"- 하방/침체 TOP 5: {summary['top_lo']}",
+        f"- 변동성 ATR 상위 TOP 5: {summary['top_atr']}",
+        f"- 매크로 부담: {summary['macro']}",
+        f"- 기술지표 해석 제한: {summary['limited']}",
+        "",
+    ]
     for r in results:
-        rsi_lbl = '과매수' if (r['rsi'] or 0) >= 70 else '과매도' if (r['rsi'] or 100) <= 30 else '중립'
-        stk_lbl = '과매수' if (r['stoch_k'] or 0) >= 80 else '과매도' if (r['stoch_k'] or 100) <= 20 else '중립'
-        bb_lbl = '상단과열' if r['pct_b'] > 80 else '하단침체' if r['pct_b'] < 20 else '중간'
-        macd_lbl = '▲매수' if r['macd'] > r['macd_sig'] else '▼매도'
-        obv_lbl = '↑매집' if r.get('obv_trend') == 'up' else '↓분산' if r.get('obv_trend') == 'down' else '→중립'
+        asset_type = r.get('asset_type', 'equity_or_etf')
+        rsi_lbl = rsi_label(r.get('rsi'), asset_type)
+        stk_lbl = stoch_label(r.get('stoch_k'), asset_type)
+        bb_lbl = bb_label(r.get('pct_b'))
+        macd_lbl = momentum_label(r.get('macd'), r.get('macd_sig'), r.get('macd_hist'))
+        obv_lbl = obv_label(r.get('obv_trend'), r.get('volume_reliable'))
         rsi_s = f"{r['rsi']:.1f}" if r['rsi'] else 'N/A'
         sk_s = f"{r['stoch_k']:.0f}" if r['stoch_k'] else 'N/A'
         sd_s = f"{r['stoch_d']:.0f}" if r['stoch_d'] else 'N/A'
         atr_s = f"{r['atr_pct']:.2f}%" if r['atr_pct'] else 'N/A'
+        warn_s = '; '.join(r.get('data_warnings', [])) or '없음'
+        if r.get('data_warnings'):
+            text_lines += [
+                f"[{r['name']} / {r['ticker']}]",
+                f"현재가: {price_fmt(r)}  등락: {r['pct']:+.2f}%",
+                f"데이터 상태: {warn_s}",
+                "기술지표: 신뢰 제한 — 원천 가격 데이터 이상으로 RSI/MACD/스토캐스틱 해석 제외",
+                "피봇위치: N/A",
+                "",
+            ]
+            continue
+        if asset_type == 'cash_like':
+            text_lines += [
+                f"[{r['name']} / {r['ticker']}]",
+                f"현재가: {price_fmt(r)}  등락: {r['pct']:+.2f}%",
+                f"데이터 경고: {warn_s}",
+                "기술지표: 해석 제한 — 현금성/금리형 상품은 RSI/MACD 과열 판단 부적합",
+                f"ATR(변동성): {atr_s}",
+                "피봇포인트: 해석 제한",
+                "피봇위치: N/A — 현금성/금리형 상품은 피봇 해석 부적합",
+                "",
+            ]
+            continue
         text_lines += [
             f"[{r['name']} / {r['ticker']}]",
             f"현재가: {price_fmt(r)}  등락: {r['pct']:+.2f}%",
+            f"데이터 경고: {warn_s}",
             f"RSI: {rsi_s} → {rsi_lbl}",
             f"스토캐스틱: %K={sk_s} / %D={sd_s} → {stk_lbl}",
             f"볼린저밴드: {r['pct_b']:.0f}% → {bb_lbl}",
@@ -280,6 +430,7 @@ def generate_html(results, ai_text=""):
             f"OBV: {obv_lbl}",
             f"이동평균: {_ma_status(r)}",
             f"피봇포인트: {_pivot_text(r['pivot'])}",
+            f"피봇위치: {pivot_position_label(r.get('pivot'), r.get('curr'))}",
             "",
         ]
     if ai_text:
@@ -338,6 +489,12 @@ h1{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}
 .pivot-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
 .pvt{font-size:11px;border:1px solid;border-radius:5px;padding:3px 8px;text-align:center;line-height:1.5}
 .pvt small{font-size:10px;display:block}
+.pivot-pos{font-size:11px;color:#555;margin:3px 0 6px}
+.summary-box{background:#fff;border:1px solid #dde3f0;border-radius:8px;padding:14px 16px;margin-bottom:16px;line-height:1.7;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.summary-title{font-size:14px;font-weight:700;color:#1a237e;margin-bottom:5px}
+.data-warn{font-size:11px;color:#c62828;background:#fff5f5;border-left:3px solid #c62828;padding:4px 8px;margin:3px 0;border-radius:3px}
+.macro-note{font-size:11px;color:#7c4100;background:#fff8e1;border-left:3px solid #e65100;padding:4px 8px;margin:3px 0;border-radius:3px}
+.limit-box{font-size:12px;color:#555;background:#f8f9fa;border-left:3px solid #90a4ae;padding:8px 10px;margin:10px 0;border-radius:4px}
 .copy-bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;padding:12px 16px;background:#fff;border-radius:8px;border:1px solid #dde3f0;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .copy-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;white-space:nowrap}
 .btn-copy{background:#3498db;color:#fff}
@@ -359,6 +516,7 @@ h1{font-size:19px;font-weight:700;color:#1a237e;margin-bottom:3px}
 <body>
 <h1>📊 기술분석 대시보드 — Jason Market</h1>
 <div class="ts">{ts} &nbsp;|&nbsp; 이동평균 5·20·60·120·200일 &nbsp;|&nbsp; 매물대 &nbsp;|&nbsp; 스토캐스틱 &nbsp;|&nbsp; ATR &nbsp;|&nbsp; OBV &nbsp;|&nbsp; 피봇포인트</div>
+{summary_html}
 
 <!-- 공유 버튼 바 -->
 <div class="copy-bar">

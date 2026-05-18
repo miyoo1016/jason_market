@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Alpha Hunter — 데이터 수집 모듈
 RSS 피드 수집, HTTP 요청, Reddit/블로그 파싱"""
 

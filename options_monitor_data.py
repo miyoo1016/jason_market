@@ -11,10 +11,23 @@ from calendar import monthcalendar
 from jm_lib.options import bs_gamma, calc_max_pain
 from options_monitor_base import CBOE_URL, HEADERS, parse_opt_sym
 
+# ═══ SPX 가격 캐시 (CBOE 요청과 독립, YF 전용 세션) ═══
+
+_SPX_CACHE: dict = {
+    'price':  None, 'source': 'none', 'status': 'UNCACHED',
+    'ts':     None, 'audit':  {},
+}
+_SPX_CACHE_TTL     = 600     # 초 (10분)
+_FALLBACK_MAX_AGE  = 86400   # 초 (24시간) — 이상이면 N/A 처리
+
+# Yahoo Finance 전용 독립 Session (CBOE 세션과 완전 분리)
+_YF_SESSION = requests.Session()
+_YF_SESSION.headers.update({'User-Agent': HEADERS['User-Agent'], 'Accept': 'application/json'})
+
 
 # ═══ SPX 실시간 가격 대체 소스 (3단계 Failover) ═══
 
-def _fetch_spx_price_live() -> tuple:
+def _fetch_spx_price_live(session=None) -> tuple:
     """
     SPX 실시간 가격 3단계 failover — 각 단계별 audit_trail 반환.
 
@@ -40,8 +53,7 @@ def _fetch_spx_price_live() -> tuple:
     try:
         import yfinance as yf
         tk = yf.Ticker('^GSPC')
-        p  = (tk.fast_info.get('last_price')
-              or tk.fast_info.get('regularMarketPrice'))
+        p  = getattr(tk.fast_info, 'last_price', None) or getattr(tk.fast_info, 'lastPrice', None)
         audit['yfinance']['result'] = float(p) if p else None
         if p and float(p) > 1000:
             return float(p), 'yfinance ^GSPC', 'LIVE', audit
@@ -50,11 +62,12 @@ def _fetch_spx_price_live() -> tuple:
         audit['yfinance']['error'] = str(e)[:60]
 
     # ── Priority 2: Yahoo Finance v8 API ─────────────────────────
+    _http = session or requests
     audit['yahoo_api']['tried'] = True
     try:
         url  = ('https://query1.finance.yahoo.com/v8/finance/chart/'
                 '%5EGSPC?interval=1d&range=1d')
-        resp = requests.get(url, headers=HEADERS, timeout=8)
+        resp = _http.get(url, headers=HEADERS, timeout=8)
         if resp.status_code == 200:
             p = (resp.json().get('chart', {})
                             .get('result', [{}])[0]
@@ -73,7 +86,7 @@ def _fetch_spx_price_live() -> tuple:
     audit['cboe_delayed']['tried'] = True
     try:
         url  = 'https://cdn.cboe.com/api/global/delayed_quotes/quotes/%5ESPX.json'
-        resp = requests.get(url, headers=HEADERS, timeout=8)
+        resp = (_http if session else requests).get(url, headers=HEADERS, timeout=8)
         if resp.status_code == 200:
             p = resp.json().get('data', {}).get('current_price')
             audit['cboe_delayed']['result'] = float(p) if p else None
@@ -86,6 +99,33 @@ def _fetch_spx_price_live() -> tuple:
         audit['cboe_delayed']['error'] = str(e)[:60]
 
     return None, 'none', 'FALLBACK', audit
+
+
+def prefetch_spx_price() -> None:
+    """SPX 가격을 CBOE 요청 전 독립 YF 세션으로 prefetch → 모듈 캐시 저장.
+
+    - CBOE session 경합과 완전 독립
+    - TTL 이내이면 skip (중복 호출 방지)
+    - process('SPX', ...) 시작 시 자동 호출됨
+    """
+    global _SPX_CACHE
+    if _SPX_CACHE.get('ts') and _SPX_CACHE.get('price'):
+        age = (datetime.utcnow() - _SPX_CACHE['ts']).total_seconds()
+        if age < _SPX_CACHE_TTL:
+            return  # 캐시 유효 — skip
+
+    price, source, status, audit = _fetch_spx_price_live(session=_YF_SESSION)
+    _SPX_CACHE = {
+        'price':  price,
+        'source': source,
+        'status': status,
+        'ts':     datetime.utcnow() if price else None,
+        'audit':  audit,
+    }
+    if price:
+        print(f"  SPX prefetch 성공: ${price:,.2f} [{source}]")
+    else:
+        print(f"  SPX prefetch 실패 — 모든 소스 응답 없음 (N/A 표시 예정)")
 
 
 # ═══ 폴백용 동적 날짜 헬퍼 ═══
@@ -118,52 +158,64 @@ def _spx_fallback(label: str) -> dict:
     """
     _exp, _days = _next_monthly_expiry()
 
-    # ── 실시간 가격 시도 (audit trail 포함) ──────────────────────
-    _HARDCODED_FALLBACK = 5711.52
-    _live_price, _price_src, _price_status, _audit = _fetch_spx_price_live()
+    # ── 캐시 우선 사용 (prefetch 결과) ──────────────────────────
+    _HARDCODED_DEBUG = 5711.52   # audit/debug 전용 — 화면 표시 금지
 
-    # LIVE price가 있으면 반드시 그것을 사용 (fallback이 덮어쓰지 못함)
-    _selected_price  = _live_price if _live_price else _HARDCODED_FALLBACK
-    _selected_source = _price_src  if _live_price else 'hardcoded_fallback'
-    _render_mismatch = False  # live price ≠ rendered price 플래그
+    _cached = _SPX_CACHE
+    _use_cache = (
+        _cached.get('price') and _cached.get('ts') and
+        (datetime.utcnow() - _cached['ts']).total_seconds() < _SPX_CACHE_TTL
+    )
+    if _use_cache:
+        _live_price, _price_src, _price_status = (
+            _cached['price'], _cached['source'], _cached['status'])
+        _audit = _cached.get('audit', {})
+    else:
+        # 캐시 없거나 만료 → 직접 fetch (독립 세션)
+        _live_price, _price_src, _price_status, _audit = _fetch_spx_price_live(session=_YF_SESSION)
+
+    # ── N/A 처리: live 실패 시 5711.52를 현재가처럼 표시 금지 ────
+    _price_is_na   = not bool(_live_price)     # True → 화면에 "N/A" 표시
+    _display_curr  = _live_price               # None이면 N/A 표시
+    _selected_price = _live_price if _live_price else _HARDCODED_DEBUG
+    _selected_source = _price_src if _live_price else 'hardcoded_debug_only'
 
     _now_ts   = datetime.utcnow().isoformat() + 'Z'
     _price_ts = _now_ts if _live_price else None
     _overall  = 'PARTIAL' if _live_price else 'FALLBACK'
-
-    # Render mismatch guard: selected_price와 final render price 동일성 보장
-    # (이후 HTML 단계에서 curr이 교체되면 CRITICAL warning 발생)
-    _final_rendered = _selected_price   # 이 값이 HTML에 표시되어야 함
 
     _price_audit = {
         'raw_source_prices': {
             src: _audit.get(src, {}).get('result')
             for src in ('yfinance', 'yahoo_api', 'cboe_delayed')
         },
-        'audit_trail':         _audit,
-        'selected_price':      _selected_price,
-        'selected_price_source': _selected_source,
-        'selected_price_status': _price_status,
+        'audit_trail':            _audit,
+        'selected_price':         _selected_price,
+        'selected_price_source':  _selected_source,
+        'selected_price_status':  _price_status,
         'selected_price_timestamp': _price_ts,
-        'fallback_price':      _HARDCODED_FALLBACK,
-        'is_live':             bool(_live_price),
-        'render_mismatch':     _render_mismatch,
-        'final_rendered_price': _final_rendered,
+        'hardcoded_debug_price':  _HARDCODED_DEBUG,   # debug만, 화면 표시 금지
+        'is_live':                bool(_live_price),
+        'price_is_na':            _price_is_na,
+        'final_rendered_price':   _display_curr,       # None = N/A
     }
 
-    _curr = _selected_price  # ← 이 값이 dict['curr']로 설정됨
+    # curr: 내부 GEX 계산용 (fallback 숫자 사용), HTML 표시는 _display_curr
+    _curr = _selected_price
 
-    print(f"  SPX 가격: {_curr:,.2f}  소스: {_selected_source} [{_price_status}]"
-          + ("" if _live_price else
-             f"  ⚠ FALLBACK — audit: "
-             + str({k: v['error'] for k, v in _audit.items() if v['tried']})[:80]))
+    if _price_is_na:
+        print(f"  SPX 가격: N/A — 모든 실시간 소스 실패. 5711.52는 debug 전용.")
+    else:
+        print(f"  SPX 가격: ${_curr:,.2f}  소스: {_selected_source} [{_price_status}]")
 
     return {
         'sym': 'SPX', 'label': label, 'curr': _curr,
-        '_is_fallback': True,           # 옵션 체인은 폴백
+        '_is_fallback': True,             # 옵션 체인은 폴백
         '_price_source': _selected_source,
-        '_gex_low_confidence': True,    # 체인 폴백 → GEX/Wall/MaxPain 저신뢰
-        '_price_audit': _price_audit,   # 가격 선택 audit trail
+        '_gex_low_confidence': True,     # 체인 폴백 → GEX/Wall/MaxPain 저신뢰
+        '_price_is_na': _price_is_na,    # True → 화면 "N/A" 표시
+        '_display_curr': _display_curr,  # None이면 N/A 표시, 아니면 float
+        '_price_audit': _price_audit,    # 가격 선택 audit trail
         '_timestamps': {
             'price_timestamp':        _price_ts,
             'option_chain_timestamp': None,   # CBOE 폴백 = 타임스탬프 없음
@@ -312,6 +364,9 @@ def _ndx_empty_fallback(label: str) -> dict:
 
 def process(sym: str, label: str) -> dict | None:
     """CBOE에서 옵션 체인 수집 → 만기별 집계 + GEX 계산"""
+    # SPX 가격 prefetch: CBOE 요청 전, 독립 YF 세션으로 캐시
+    if sym == 'SPX':
+        prefetch_spx_price()
     print(f"  {sym} 수집 중 (CBOE)...", end='\r')
     try:
         resp = requests.get(CBOE_URL.format(sym=sym), headers=HEADERS, timeout=25)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Alpha Hunter — 마크다운 생성 + 필터링 유틸리티
 텍스트 파싱, 필터링, 마크다운 생성"""
 

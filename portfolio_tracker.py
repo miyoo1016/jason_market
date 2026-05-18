@@ -8,6 +8,7 @@ import webbrowser
 import tempfile
 from datetime import datetime
 
+import xlsx_sync
 from xlsx_sync import update_xlsx_live_fx, load_portfolio
 
 from portfolio_tracker_base import save_cash_tracker
@@ -48,7 +49,7 @@ def main():
     # 현금 추적값 저장 (다음 실행 시 일일손익 계산용)
     save_cash_tracker(new_cash_tracker)
 
-    print_terminal(accounts_data, usdkrw, timestamp)
+    print_terminal(accounts_data, usdkrw, timestamp, xlsx_sync.PORTFOLIO_SOURCE)
 
     html = generate_html(accounts_data, usdkrw_tuple, timestamp)
     tmp = tempfile.NamedTemporaryFile(

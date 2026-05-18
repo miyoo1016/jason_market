@@ -84,7 +84,7 @@ print(f"  {HEAD}[yfinance 조회 테스트]{RST}")
 try:
     import yfinance as yf
     ticker = yf.Ticker("SPY")
-    price = ticker.fast_info.get("last_price") or ticker.fast_info.get("regularMarketPrice")
+    price = getattr(ticker.fast_info, 'last_price', None) or getattr(ticker.fast_info, 'lastPrice', None)
     chk("  SPY 시세 조회", bool(price), f"현재가: ${price:.2f}" if price else "조회 실패")
 except Exception as e:
     chk("  SPY 시세 조회", False, str(e)[:60])
