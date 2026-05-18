@@ -165,6 +165,17 @@ def generate_html(results: list, timestamp: str) -> str:
 
     # ─── ⑨ Proxy Priority Engine ─────────────────────────────────────
     _proxy_mode = select_proxy_mode(_pre_confs)
+    _ndx_r_summary = next((x for x in results if x and x.get('sym') == 'NDX'), None)
+    _ndx_ov_summary = (_ndx_r_summary or {}).get('_ndx_overlay') or {}
+    _ndx_spot_state = 'SPOT_OK' if ((_ndx_ov_summary.get('ndx_spot') or {}).get('value')) else 'SPOT_NA'
+    _ndx_derived_state = (_ndx_ov_summary.get('ndx_derived_metrics') or {}).get('enabled', False)
+    _ndx_chain_state = 'CHAIN_REFERENCE' if _ndx_derived_state else 'CHAIN_DISABLED'
+    _summary_notes = [
+        n for n in _proxy_mode['notes']
+        if not str(n).startswith('Nasdaq:')
+    ]
+    _summary_notes.append('Nasdaq: QQQ PRIMARY + NDX OVERLAY')
+    _summary_notes.append(f'NDX overlay: {_ndx_spot_state} / {_ndx_chain_state}')
 
     # ─── ⑩ IV Rank 이상 감지 (루프 후 집계) ─────────────────────────
     # (루프 내에서 수집 후 루프 뒤에서 사용)
@@ -197,7 +208,7 @@ def generate_html(results: list, timestamp: str) -> str:
         _partial_details.append(f'{_ps}: price live / chain {_pcs} ({_pl})')
 
     _summary_notes_html = ''.join(
-        f'<li style="margin:2px 0">{n}</li>' for n in _proxy_mode['notes']
+        f'<li style="margin:2px 0">{n}</li>' for n in _summary_notes
     )
     _partial_html = ''
     if _partial_syms:
@@ -279,19 +290,15 @@ def generate_html(results: list, timestamp: str) -> str:
         _conf = _chain.get('confidence', 0)
         _disabled_msg = ''
         if not _derived.get('enabled'):
-            if _status == 'LOW/FALLBACK':
-                _disabled_msg = (
-                    '<div style="margin-top:8px;color:#ef4444;font-weight:700;">'
-                    'NDX Chain: LOW/FALLBACK - NDX spot only. '
-                    'Do not use NDX-derived GEX/Wall/Max Pain. Use QQQ proxy.'
-                    '</div>'
-                )
-            else:
-                _disabled_msg = (
-                    '<div style="margin-top:8px;color:#7c4100;font-weight:700;">'
-                    'NDX Chain: REFERENCE_ONLY - NDX reference only. QQQ primary remains active.'
-                    '</div>'
-                )
+            _disabled_reason = (
+                _derived.get('reason')
+                or 'NDX-derived GEX/Wall/Max Pain disabled — sparse/invalid OI or zero expected move. Use QQQ primary.'
+            )
+            _disabled_msg = (
+                '<div style="margin-top:8px;color:#ef4444;font-weight:700;">'
+                f'{_disabled_reason}'
+                '</div>'
+            )
         else:
             _disabled_msg = (
                 '<div style="margin-top:8px;color:#16a34a;font-weight:700;">'
@@ -771,6 +778,32 @@ def generate_html(results: list, timestamp: str) -> str:
                      'score': _capped_s, 'label': _forced_label,
                      '_cap_reason': _cap_reason}
 
+        _ndx_reference_only = False
+        _ndx_reference_note = ''
+        if sym == 'NDX' and r.get('_ndx_overlay'):
+            _ndx_derived = r['_ndx_overlay'].get('ndx_derived_metrics', {})
+            _ndx_chain = r['_ndx_overlay'].get('ndx_option_chain', {})
+            if not _ndx_derived.get('enabled'):
+                _ndx_reference_only = True
+                _ndx_score = int(_ndx_chain.get('confidence') or min(_conf.get('score', 59), 59))
+                _conf = {
+                    **_conf,
+                    'score': _ndx_score,
+                    'label': 'REFERENCE_ONLY',
+                    'badge_color': '#f97316',
+                    'display_note': 'NDX spot/reference only — option-derived metrics disabled; use QQQ primary',
+                    'stale_penalty': _conf.get('stale_penalty', 0),
+                    'fallback_penalty': max(_conf.get('fallback_penalty', 0), 20),
+                }
+                _ndx_reference_note = (
+                    '<div style="margin-top:6px;padding:6px 10px;'
+                    'background:#fff7ed;border:1.5px solid #f97316;'
+                    'border-radius:4px;font-size:10px;color:#7c2d12;font-weight:700;">'
+                    'NDX option-derived metrics disabled. Use QQQ primary.<br>'
+                    '<span style="font-weight:600;">NDX spot only / QQQ conversion only · reference only / 의사결정 제외</span>'
+                    '</div>'
+                )
+
         try:
             record_confidence_history(sym, _conf)
         except Exception:
@@ -834,6 +867,8 @@ def generate_html(results: list, timestamp: str) -> str:
                 '⏱ STALE 데이터 — 30분 이상 경과 · 신뢰도 제한'
                 '</div>'
             )
+        if _ndx_reference_only:
+            _watermark_html += _ndx_reference_note
 
         # ─── Compressed Mixed Gamma Risk ───────────────────────────
         _cgr = detect_compressed_gamma_risk(
@@ -1096,7 +1131,7 @@ def generate_html(results: list, timestamp: str) -> str:
       <span class="price">{_price_str}</span>
       {_conf_badge}
     </div>
-    <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM</div>
+    <div class="meta-sub">{r['exp_count']} 만기 | 소스: CBOE, Straddle EM{' · reference only / 의사결정 제외' if _ndx_reference_only else ''}</div>
     {_conf_note}
     {_watermark_html}
     {_mismatch_critical}

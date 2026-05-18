@@ -128,11 +128,20 @@ def _build_ndx_overlay(ndx_result: dict | None, qqq_spot: float) -> dict:
     except Exception as e:
         reasons.append(f'chain fetch failed: {str(e)[:60]}')
 
+    quality_ok, quality_reasons = _validate_ndx_derived_metrics(derived_metrics, spot)
+    if quality_reasons:
+        reasons.extend(quality_reasons)
+
     confidence = max(0, min(100, int(confidence)))
     if confidence >= 75 and not derived_metrics:
         confidence = 74
         reasons.append('derived metrics unavailable')
-    if confidence >= 75 and derived_metrics:
+    if not quality_ok and spot:
+        chain_status = 'REFERENCE_ONLY'
+        derived_enabled = False
+        confidence = min(confidence, 59)
+        derived_reason = 'NDX-derived GEX/Wall/Max Pain disabled — sparse/invalid OI or zero expected move. Use QQQ primary.'
+    elif confidence >= 75 and derived_metrics:
         chain_status = 'LIVE_DELAYED'
         derived_enabled = True
         derived_reason = 'NDX option metrics derived from validated Yahoo delayed chain'
@@ -161,6 +170,62 @@ def _build_ndx_overlay(ndx_result: dict | None, qqq_spot: float) -> dict:
         'derived_metrics': derived_metrics,
         'qqq_equiv': equiv_levels,
     }
+
+
+def _validate_ndx_derived_metrics(metrics: dict | None, spot: float | None) -> tuple[bool, list[str]]:
+    """NDX option-derived metrics가 sparse/invalid이면 overlay 참고용으로만 둔다."""
+    if not metrics:
+        return False, ['derived metrics unavailable']
+
+    reasons: list[str] = []
+    exp_rows = metrics.get('exp_rows') or []
+    total_oi_1m = sum(
+        (row.get('c_oi') or 0) + (row.get('p_oi') or 0)
+        for row in exp_rows
+        if (row.get('days') or 0) <= 31
+    )
+    put_oi_sum = sum((row.get('p_oi') or 0) for row in exp_rows if (row.get('days') or 0) <= 31)
+    if put_oi_sum <= 0:
+        reasons.append('put OI sum is zero')
+    if total_oi_1m < 1000:
+        reasons.append(f'1m total OI too small ({total_oi_1m})')
+
+    gex = metrics.get('gex') or {}
+    net_gex = gex.get('net_gex_b')
+    net_vanna = metrics.get('net_vanna')
+    net_charm = metrics.get('net_charm')
+    if all(v in (None, 0, 0.0) for v in (net_gex, net_vanna, net_charm)):
+        reasons.append('NET GEX/Vanna/Charm all zero or unavailable')
+
+    expected_moves = [row.get('straddle_em') for row in exp_rows if row.get('straddle_em') is not None]
+    if not expected_moves or all((em or 0) <= 0 for em in expected_moves):
+        reasons.append('expected move is zero or unavailable')
+
+    call_wall = gex.get('call_wall')
+    put_wall = gex.get('put_wall')
+    if call_wall and put_wall and call_wall < put_wall:
+        reasons.append('call wall below put wall creates invalid box')
+
+    mp_values = [row.get('max_pain') for row in exp_rows if row.get('max_pain')]
+    if spot and len(mp_values) >= 2 and len(set(round(float(v), 2) for v in mp_values)) == 1:
+        mp = float(mp_values[0])
+        if abs(mp / spot - 1) >= 0.07:
+            reasons.append('max pain repeated and far from spot')
+
+    top_puts = metrics.get('top_puts') or []
+    if top_puts and all((row.get('oi') or 0) <= 0 for row in top_puts):
+        reasons.append('top put OI all zero')
+
+    if spot:
+        for row in exp_rows:
+            if (row.get('days') or 0) == 0:
+                upper = row.get('upper_price')
+                lower = row.get('lower_price')
+                if upper == spot and lower == spot:
+                    reasons.append('0DTE expected range equals spot')
+                break
+
+    return not reasons, reasons
 
 
 def _derive_ndx_metrics_from_yf_chain(calls, puts, expirations: list[str], spot: float) -> dict | None:
@@ -313,10 +378,7 @@ def _print_index_detail(sym: str, label: str, r: dict, spy_price: float):
         for eq in ov.get('qqq_equiv', []):
             print(f"  NDX {eq['ndx']:,.0f} ≈ QQQ {eq['qqq']:,.1f}")
         if not derived.get('enabled'):
-            if chain.get('status') == 'LOW/FALLBACK':
-                print("NDX Chain: LOW/FALLBACK - NDX spot only. Do not use NDX-derived GEX/Wall/Max Pain. Use QQQ proxy.")
-            else:
-                print("NDX Chain: REFERENCE_ONLY - NDX reference only. QQQ primary remains active.")
+            print(derived.get('reason') or "NDX-derived GEX/Wall/Max Pain disabled — sparse/invalid OI or zero expected move. Use QQQ primary.")
             print("──────────────────────────────────")
             return
 
@@ -511,10 +573,7 @@ def main():
             for eq in overlay.get('qqq_equiv', []):
                 print(f"  NDX {eq['ndx']:,.0f} ≈ QQQ {eq['qqq']:,.1f}")
             if not overlay['ndx_derived_metrics']['enabled']:
-                if overlay['ndx_option_chain']['status'] == 'LOW/FALLBACK':
-                    print("  NDX Chain: LOW/FALLBACK - NDX spot only. Do not use NDX-derived GEX/Wall/Max Pain. Use QQQ proxy.")
-                else:
-                    print("  NDX Chain: REFERENCE_ONLY - NDX reference only. QQQ primary remains active.")
+                print(f"  {overlay['ndx_derived_metrics']['reason']}")
             print()
             _print_index_detail('NDX', r.get('label', 'Nasdaq 100 Index'), r, spy_price)
 
