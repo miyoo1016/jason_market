@@ -47,20 +47,153 @@ def classify_ticker(ticker: str, custom_equity_set: set = None) -> dict:
 
 # ═══ 내부 API 호출 ═══
 
-def _chart(ticker: str, interval: str = '1d', range_: str = '5d') -> dict | None:
+def _chart(ticker: str, interval: str = '1d', range_: str = '5d',
+           include_prepost: bool = False) -> dict | None:
     """Yahoo Finance v8 chart API (curl) → result[0] 딕셔너리 반환"""
+    import time
+    for attempt in range(3):
+        try:
+            url = f'{_BASE}/{ticker}?interval={interval}&range={range_}'
+            if include_prepost:
+                url += '&includePrePost=true'
+            r = subprocess.run(
+                ['curl', '-s', '-A', _UA, url],
+                capture_output=True, timeout=12
+            )
+            data = json.loads(r.stdout.decode('utf-8', errors='replace'))
+            results = data.get('chart', {}).get('result', None)
+            if results:
+                return results[0]
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return None
+
+
+def _quote(ticker: str) -> dict:
+    """Yahoo Finance v7 quote API 단일 티커 메타 반환"""
+    import time
+    for attempt in range(3):
+        try:
+            url = f'https://query1.finance.yahoo.com/v7/finance/quote?symbols={ticker}'
+            r = subprocess.run(
+                ['curl', '-s', '-A', _UA, url],
+                capture_output=True, timeout=12
+            )
+            data = json.loads(r.stdout.decode('utf-8', errors='replace'))
+            results = data.get('quoteResponse', {}).get('result') or []
+            if results:
+                return results[0]
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return {}
+
+
+def _positive_float(value) -> float | None:
     try:
-        url = f'{_BASE}/{ticker}?interval={interval}&range={range_}'
-        r = subprocess.run(
-            ['curl', '-s', '-A', _UA, url],
-            capture_output=True, timeout=12
-        )
-        data = json.loads(r.stdout.decode('utf-8', errors='replace'))
-        results = data.get('chart', {}).get('result', None)
-        if results:
-            return results[0]
+        f = float(value)
+        if f > 0:
+            return f
     except Exception:
         pass
+    return None
+
+
+def _fmt_quote_time(value) -> str | None:
+    try:
+        if value:
+            return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+    except Exception:
+        pass
+    return None
+
+
+def _latest_prepost_chart_price(ticker: str) -> tuple[float | None, str | None]:
+    """Yahoo chart includePrePost=true 최신 1분 가격 반환"""
+    result = _chart(ticker, interval='1m', range_='1d', include_prepost=True)
+    if not result:
+        return None, None
+    try:
+        timestamps = result.get('timestamp') or []
+        closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+        for ts, close in reversed(list(zip(timestamps, closes))):
+            price = _positive_float(close)
+            if price is not None:
+                return price, _fmt_quote_time(ts)
+    except Exception:
+        pass
+    return None, None
+
+
+def _market_state_from_chart_meta(meta: dict) -> str | None:
+    """chart currentTradingPeriod 기준으로 PRE/REGULAR/POST/CLOSED 추정"""
+    try:
+        now = datetime.now(timezone.utc).timestamp()
+        periods = meta.get('currentTradingPeriod') or {}
+        pre = periods.get('pre') or {}
+        regular = periods.get('regular') or {}
+        post = periods.get('post') or {}
+        if pre.get('start') <= now < pre.get('end'):
+            return 'PRE'
+        if regular.get('start') <= now < regular.get('end'):
+            return 'REGULAR'
+        if post.get('start') <= now < post.get('end'):
+            return 'POST'
+        return 'CLOSED'
+    except Exception:
+        return None
+
+
+def _select_us_equity_price(ticker: str, quote: dict, chart_meta: dict) -> dict | None:
+    """미국 주식/ETF selected price resolver.
+
+    Yahoo quote의 marketState와 extended fields를 우선하며, extended
+    quote가 비어 있으면 includePrePost chart 최신 1분 가격으로 보강한다.
+    """
+    market_state = str(
+        quote.get('marketState')
+        or chart_meta.get('marketState')
+        or _market_state_from_chart_meta(chart_meta)
+        or ''
+    ).upper()
+    regular = _positive_float(quote.get('regularMarketPrice'))
+    if regular is None:
+        regular = _positive_float(chart_meta.get('regularMarketPrice'))
+    pre = _positive_float(quote.get('preMarketPrice'))
+    post = _positive_float(quote.get('postMarketPrice'))
+
+    def _selected(price, field, source, quote_time=None):
+        return {
+            'symbol': ticker,
+            'selected_price': price,
+            'selected_field': field,
+            'market_state': market_state or None,
+            'source': source,
+            'quote_time': quote_time,
+        }
+
+    if market_state.startswith('PRE') and pre is not None:
+        return _selected(pre, 'preMarketPrice', 'yahoo_quote',
+                         _fmt_quote_time(quote.get('preMarketTime')))
+
+    if market_state.startswith('POST') and post is not None:
+        return _selected(post, 'postMarketPrice', 'yahoo_quote',
+                         _fmt_quote_time(quote.get('postMarketTime')))
+
+    if market_state == 'REGULAR' and regular is not None:
+        return _selected(regular, 'regularMarketPrice', 'yahoo_quote',
+                         _fmt_quote_time(quote.get('regularMarketTime')))
+
+    if market_state.startswith(('PRE', 'POST')):
+        chart_price, chart_time = _latest_prepost_chart_price(ticker)
+        if chart_price is not None:
+            return _selected(chart_price, 'chart_prepost_1m', 'yahoo_chart', chart_time)
+
+    if regular is not None:
+        return _selected(regular, 'regularMarketPrice', 'yahoo_quote',
+                         _fmt_quote_time(quote.get('regularMarketTime')))
+
     return None
 
 
@@ -193,80 +326,45 @@ def _pyth_curr(ticker: str, session: str, session_only: bool = True,
 
 
 def _us_equity_price_data(ticker: str) -> dict | None:
-    """미국 직투 종목 전용: range=2d 역사 종가로 정확한 전일 종가 계산
+    """미국 직투 종목 전용: Yahoo selected price + 정확한 전일 종가 계산
 
     - chartPreviousClose 메타값은 range에 따라 변하는 잘못된 값 → 사용 안 함
     - range=2d 일봉 closes[0]=어제, closes[1]=오늘 → _resolve_prev로 전일 종가 정확 추출
 
-    세션별 curr/prev 로직:
-    - 정규장 (22:30~05:00 KST): Yahoo regularMarketPrice 실시간 / prev = 전일 종가
-    - 블루오션 (09:00~17:00 KST): 미국 장 완전 마감 상태 → Yahoo 마감가를 curr로 사용
-                                   prev = 그 전날 종가 / 선물 추정 없음 (Yahoo Finance 일치)
-    - 프리마켓 (17:00~22:30 KST): Pyth PRE MARKET → 선물 추정 → Yahoo / prev = 마지막 종가
-    - 애프터마켓 (05:00~09:00 KST): Pyth POST MARKET → 선물 추정 → Yahoo / prev = 마지막 종가
+    가격 선택:
+    - PRE 계열: preMarketPrice 우선
+    - POST 계열: postMarketPrice 우선
+    - REGULAR: regularMarketPrice
+    - extended 값이 없으면 chart includePrePost=true 최신 1m 가격 보강
+    - 그래도 없으면 regularMarketPrice fallback
     """
     # Yahoo에서 curr + closes 준비
     result = _chart(ticker, interval='1d', range_='2d')
     if not result:
         return None
 
-    meta       = result.get('meta', {})
-    yahoo_curr = meta.get('regularMarketPrice')
-    if not yahoo_curr:
+    meta = result.get('meta', {})
+    selected = _select_us_equity_price(ticker, _quote(ticker), meta)
+    if not selected:
         return None
-    yahoo_curr = float(yahoo_curr)
+    curr = float(selected['selected_price'])
 
     closes = _daily_closes(result)
     if not closes:
         return None
 
-    session = _kst_session()
-
-    # ── 블루오션 전용 경로 ────────────────────────────────────────────
-    # 미국 장 완전 마감(한국 낮 시간) → QQQM 거래 없음
-    # Yahoo regularMarketPrice = 가장 최근 정규장 종가 → 그대로 curr로 사용
-    # prev = _resolve_prev: curr ≈ closes[-1] → closes[-2] (하루 전 종가) 반환
-    # 결과: Yahoo Finance 앱 표시와 동일한 종가·등락률
-    if session == 'blue_ocean':
-        prev = _resolve_prev(yahoo_curr, closes)
-        if not prev:
-            return None
-        pct = (yahoo_curr - prev) / prev * 100
-        return {'curr': yahoo_curr, 'prev': prev, 'pct': pct}
-
-    # ── prev 결정 (정규장 / 프리·애프터) ─────────────────────────────
-    # 정규장: _resolve_prev 로 "오늘 장 중 vs 어제 종가" 정확 판단
-    # 프리·애프터마켓: closes[-1] = 가장 최근 정규장 종가 (= 비교 기준점)
-    if session == 'regular':
-        prev = _resolve_prev(yahoo_curr, closes)
+    market_state = selected.get('market_state') or ''
+    if market_state.startswith(('PRE', 'POST')):
+        prev = closes[-1]
     else:
-        prev = closes[-1]   # 가장 최근 정규장 종가 = pre/post 비교 기준
+        prev = _resolve_prev(curr, closes)
 
     if not prev:
         return None
 
-    # ── curr 결정 (프리·애프터마켓만) ────────────────────────────────
-    # 실제 거래가 이뤄지는 세션에서만 Pyth/선물 추정으로 현재가 보정
-    curr = yahoo_curr
-    if session != 'regular':
-        # 1순위: Pyth 세션 특화 피드 (신선도 30분 이내만 사용)
-        pyth = _pyth_curr(ticker, session, session_only=True, max_age_min=30)
-        if pyth:
-            curr = pyth
-        else:
-            # 2순위: 연관 선물 등락률 기반 추정 (QQQM→NQ=F, SPY→ES=F 등)
-            est = _futures_estimate(ticker, prev)
-            if est:
-                curr = est
-            else:
-                # 3순위: Pyth 일반 피드 (staleness 관계없이 최후 수단)
-                pyth_reg = _pyth_curr(ticker, session, session_only=False, max_age_min=120)
-                if pyth_reg:
-                    curr = pyth_reg
-                # 4순위: yahoo_curr (정규장 종가) 그대로
-
     pct = (curr - prev) / prev * 100
-    return {'curr': curr, 'prev': prev, 'pct': pct}
+    selected.update({'curr': curr, 'prev': prev, 'pct': pct})
+    return selected
 
 
 # ETF → 추종 선물 매핑 (Pyth overnight 피드 없는 종목용)
@@ -321,6 +419,13 @@ def _futures_estimate(etf_ticker: str, last_close: float) -> float | None:
 
 def get_current_price(ticker: str, is_equity: bool = None) -> float | None:
     """현재가 조회"""
+    cls = classify_ticker(ticker)
+    if is_equity is None:
+        is_equity = cls['is_equity']
+    if is_equity and not cls['is_kr']:
+        data = get_price_data(ticker, is_equity=True)
+        return float(data['curr']) if data and data.get('curr') else None
+
     result = _chart(ticker)
     if not result:
         return None
