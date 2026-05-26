@@ -6,6 +6,7 @@ import threading
 import subprocess
 import json
 import logging
+import os
 
 from jm_lib.yf_helpers import get_price_data, _chart
 
@@ -81,18 +82,38 @@ def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
     cache = {}  # ticker -> {'curr': float, 'prev': float}
     lock = threading.Lock()
 
-    def _store(t, curr, prev):
+    def _store(t, curr, prev, meta=None):
         if curr is None:
             return
         with lock:
             cache[t] = {'curr': float(curr), 'prev': float(prev) if prev else float(curr)}
+            if meta:
+                cache[t]['price_diag'] = meta
 
     def _fetch_one(t):
         try:
             is_kr = t.endswith('.KS') or t.startswith('^KS')
             data = get_price_data(t, is_global=False)
             if data and data.get('curr'):
-                _store(t, data['curr'], data.get('prev'))
+                diag = {
+                    'symbol': data.get('symbol', t),
+                    'selected_price': data.get('selected_price', data.get('curr')),
+                    'selected_field': data.get('selected_field'),
+                    'market_state': data.get('market_state'),
+                    'source': data.get('source'),
+                    'quote_time': data.get('quote_time'),
+                }
+                _store(t, data['curr'], data.get('prev'), diag)
+                if os.environ.get('JM_DEBUG_PRICE') == '1':
+                    print(
+                        "PRICE_DIAG "
+                        f"symbol={diag['symbol']} "
+                        f"selected_price={diag['selected_price']} "
+                        f"selected_field={diag['selected_field']} "
+                        f"market_state={diag['market_state']} "
+                        f"source={diag['source']} "
+                        f"quote_time={diag['quote_time']}"
+                    )
         except Exception:
             pass
 
