@@ -32,6 +32,13 @@ def get_usdkrw() -> tuple:
 def _fetch_gold_krx(usdkrw: float) -> dict:
     """KRX 금현물 — 네이버 증권 API (M04020000, 한국거래소 공식)"""
     res = {'curr': None, 'prev': None}
+
+    def _num(v):
+        try:
+            return float(str(v).replace(',', '').strip())
+        except Exception:
+            return None
+
     try:
         r = subprocess.run(
             ['curl', '-s', '-A', 'Mozilla/5.0',
@@ -40,13 +47,25 @@ def _fetch_gold_krx(usdkrw: float) -> dict:
         )
         d = json.loads(r.stdout.decode('utf-8', errors='replace'))
         price_str = d.get('closePrice') or d.get('currentPrice') or ''
-        price = float(price_str.replace(',', ''))
-        if price > 0:
+        price = _num(price_str)
+        if price and price > 0:
             res['curr'] = price
-            diff = float(str(d.get('compareToPreviousPrice', '0')).replace(',', ''))
-            code = d.get('fluctuationCode', '3')
-            sign = 1 if code in ('1', '2') else (-1 if code in ('4', '5') else 0)
-            res['prev'] = price - (diff * sign)
+            prev = None
+            for item in d.get('marketIndexTotalInfos') or []:
+                if item.get('code') == 'lastClosePrice':
+                    prev = _num(item.get('value'))
+                    break
+            if not prev:
+                diff = _num(d.get('fluctuations')) or 0
+                prev = price - diff
+            if prev and prev > 0:
+                res['prev'] = prev
+            if os.environ.get('JM_DEBUG_PRICE') == '1':
+                print(
+                    "PRICE_DIAG "
+                    f"symbol=GOLD_KRX selected_price={res['curr']} "
+                    f"prev_close={res['prev']} source=naver_krx_gold"
+                )
             return res
     except Exception:
         pass
