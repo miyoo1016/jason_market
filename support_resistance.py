@@ -818,7 +818,78 @@ def _svg_ladder(r):
             f'xmlns="http://www.w3.org/2000/svg">{"".join(items)}</svg>')
 
 
-# ── HTML 생성 ─────────────────────────────────────────────
+# ── 요약/HTML 생성 ────────────────────────────────────────
+
+def build_summary_lines(all_results):
+    """9번 종합 분석이 읽을 6번 요약 라인."""
+    def _normal_results():
+        return [
+            r for r in all_results
+            if r and not r.get('data_warnings')
+            and not _is_limited_asset(r.get('asset_type'))
+            and not _is_macro(r.get('asset_type'))
+        ]
+
+    def _nearest_upper_pct(r):
+        vals = [d['price'] for d in r.get('res_data', [])]
+        vals += [x['price'] for x in r.get('near_upper', [])]
+        vals = [v for v in vals if v and v > r['curr']]
+        return min([nearest_pct(r['curr'], v) for v in vals], default=None)
+
+    def _nearest_support_pct(r):
+        vals = [d['price'] for d in r.get('sup_data', [])]
+        vals = [v for v in vals if v and v < r['curr']]
+        return max([nearest_pct(r['curr'], v) for v in vals], default=None)
+
+    clean = _normal_results()
+    warned = [r for r in all_results if r and r.get('data_warnings')]
+    high_near = [
+        r for r in clean
+        if r.get('high_52w') and r['high_52w'] > r['curr']
+        and nearest_pct(r['curr'], r['high_52w']) <= 5
+    ]
+    near_res = [(r, _nearest_upper_pct(r)) for r in clean]
+    near_res = [(r, p) for r, p in near_res if p is not None and 0 <= p <= 5]
+    near_sup = [(r, _nearest_support_pct(r)) for r in clean]
+    near_sup = [(r, p) for r, p in near_sup if p is not None and -5 <= p <= 0]
+    support_gap = [(r, _nearest_support_pct(r)) for r in clean]
+    support_gap = [(r, p) for r, p in support_gap if p is None or p < -10]
+    macro = [r for r in all_results if r and _is_macro(r.get('asset_type'))]
+    limited = [r for r in all_results if r and _is_limited_asset(r.get('asset_type'))]
+    uptrend = [r for r in clean if r.get('trend', {}).get('status') == '상승추세']
+    box_upper = [
+        r for r in clean
+        if r.get('box', {}).get('status') in ('상단 근접', '박스 상단 돌파 관찰')
+    ]
+    prev_high_watch = [
+        r for r in clean
+        if r.get('previous_high', {}).get('status') in ('전고점 근접', '신고가 관찰')
+    ]
+    down_or_reversal = [
+        r for r in clean
+        if r.get('trend', {}).get('status') in ('하락추세', '반전 시도')
+    ]
+    volume_breakout = [
+        r for r in clean
+        if r.get('breakout', {}).get('long_candle') and r.get('breakout', {}).get('volume_spike')
+    ]
+    series_check = [r for r in clean if r.get('series_scale_check')]
+    return [
+        f"데이터 경고: {', '.join(r['name'] for r in warned) + ' — 원천 가격 이상으로 계산 제외' if warned else '없음'}",
+        f"시계열 점검: {', '.join(r['name'] for r in series_check) or '없음'}",
+        f"52주 고점 근접 종목: {', '.join(f'{r['name']} {nearest_pct(r['curr'], r['high_52w']):+.1f}%' for r in high_near[:5]) or '없음'}",
+        f"근접 저항 5% 이내 종목: {', '.join(f'{r['name']} +{p:.1f}%' for r, p in near_res[:5]) or '없음'}",
+        f"근접 지지 5% 이내 종목: {', '.join(f'{r['name']} {p:.1f}%' for r, p in near_sup[:5]) or '없음'}",
+        f"지지 공백: {', '.join(f'{r['name']}({p:.1f}%)' if p is not None else f'{r['name']}(N/A)' for r, p in support_gap[:5]) or '없음'}",
+        f"매크로 관찰: {', '.join(f'{r['ticker']} 관찰선' for r in macro) or '없음'}",
+        f"해석 제한: {', '.join(r['name'] for r in limited) or '없음'}",
+        f"상승추세 종목: {', '.join(r['name'] for r in uptrend[:5]) or '없음'}",
+        f"박스 상단 근접: {', '.join(f'{r['name']}({r.get('box', {}).get('status')})' for r in box_upper[:5]) or '없음'}",
+        f"전고점/52주 고점 근접: {', '.join(f'{r['name']}({r.get('previous_high', {}).get('status')})' for r in prev_high_watch[:5]) or '없음'}",
+        f"하락추세/반전 시도: {', '.join(f'{r['name']}({r.get('trend', {}).get('status')})' for r in down_or_reversal[:5]) or '없음'}",
+        f"거래량 동반 돌파 관찰: {', '.join(r['name'] for r in volume_breakout[:5]) or '없음'}",
+    ]
+
 
 def generate_html(all_results, timestamp):
     def _normal_results():
@@ -1463,6 +1534,15 @@ def main():
 
     # HTML 저장 및 브라우저 오픈
     html = generate_html(all_results, timestamp)
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs')
+    os.makedirs(out_dir, exist_ok=True)
+    latest_html = os.path.join(out_dir, 'support_resistance_latest.html')
+    latest_txt = os.path.join(out_dir, 'support_resistance_latest_summary.txt')
+    with open(latest_html, 'w', encoding='utf-8') as f:
+        f.write(html)
+    with open(latest_txt, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(build_summary_lines(all_results)) + '\n')
+
     tmp = tempfile.NamedTemporaryFile(
         mode='w', suffix='.html', delete=False,
         prefix='support_resistance_', encoding='utf-8'
@@ -1470,6 +1550,7 @@ def main():
     tmp.write(html)
     tmp.close()
     print(f"  HTML 저장: {tmp.name}")
+    print(f"  최신 요약 저장: {latest_txt}")
     webbrowser.open(f'file://{tmp.name}')
     print("  브라우저 오픈 완료\n")
 

@@ -168,40 +168,67 @@ SUPPORT_KEYS = [
     '데이터 경고', '시계열 점검', '해석 제한', '52주 고점 근접 종목',
     '근접 저항 5% 이내 종목', '근접 지지 5% 이내 종목', '지지 공백',
     '박스 상단 근접', '전고점/52주 고점 근접', '하락추세/반전 시도',
-    '매크로 관찰',
+    '매크로 관찰', '거래량 동반 돌파 관찰',
 ]
+
+def _extract_support_lines(raw: str) -> list:
+    text = re.sub(r'<script\b.*?</script>', '', raw, flags=re.S)
+    text = re.sub(r'<style\b.*?</style>', '', text, flags=re.S)
+    text = re.sub(r'<[^>]+>', '\n', text)
+    text = html_lib.unescape(text)
+    compact = []
+    for line in text.splitlines():
+        line = re.sub(r'\s+', ' ', line).strip()
+        line = re.sub(r'^[-•]\s*', '', line)
+        if line:
+            compact.append(line)
+    lines = []
+    for key in SUPPORT_KEYS:
+        hit = next((line for line in compact if line.startswith(f'{key}:')), None)
+        if hit:
+            lines.append(hit)
+    return lines
 
 def get_latest_support_summary():
     """6번 지지·저항선이 최근 생성한 HTML에서 요약 키워드만 읽는다.
     9번에서 지지·저항/박스/추세를 새로 계산하지 않기 위한 얇은 입력 파서다."""
     try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        out_dir = os.path.join(base_dir, 'outputs')
+        txt_candidates = [
+            os.path.join(out_dir, 'support_resistance_latest_summary.txt'),
+            os.path.join(out_dir, 'support_resistance_latest.txt'),
+        ]
+        for path in txt_candidates:
+            if os.path.isfile(path):
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = _extract_support_lines(f.read())
+                if lines:
+                    return {'source': path, 'lines': lines, 'available': True}
+
+        latest_html = os.path.join(out_dir, 'support_resistance_latest.html')
+        if os.path.isfile(latest_html):
+            with open(latest_html, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = _extract_support_lines(f.read())
+            if lines:
+                return {'source': latest_html, 'lines': lines, 'available': True}
+
         pattern = os.path.join(tempfile.gettempdir(), '**', 'support_resistance_*.html')
         files = glob.glob(pattern, recursive=True)
         files = [p for p in files if os.path.isfile(p)]
-        if not files:
-            return {'source': '없음', 'lines': ['6번 최신 요약 없음']}
-        latest = max(files, key=os.path.getmtime)
-        with open(latest, 'r', encoding='utf-8', errors='ignore') as f:
-            raw = f.read()
-        text = re.sub(r'<script\b.*?</script>', '', raw, flags=re.S)
-        text = re.sub(r'<style\b.*?</style>', '', text, flags=re.S)
-        text = re.sub(r'<[^>]+>', '\n', text)
-        text = html_lib.unescape(text)
-        compact = []
-        for line in text.splitlines():
-            line = re.sub(r'\s+', ' ', line).strip()
-            if line:
-                compact.append(line)
-        lines = []
-        for key in SUPPORT_KEYS:
-            hit = next((line for line in compact if line.startswith(f'{key}:')), None)
-            if hit:
-                lines.append(hit)
-        if not lines:
-            lines = ['6번 최신 요약 파싱 불가']
-        return {'source': latest, 'lines': lines}
+        if files:
+            latest = max(files, key=os.path.getmtime)
+            with open(latest, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = _extract_support_lines(f.read())
+            if lines:
+                return {'source': latest, 'lines': lines, 'available': True}
+        return {
+            'source': '없음',
+            'lines': ['지지·저항 미평가: 6번 지지·저항 미실행 또는 요약 없음'],
+            'available': False,
+        }
     except Exception as e:
-        return {'source': '오류', 'lines': [f'6번 최신 요약 읽기 실패: {e}']}
+        return {'source': '오류', 'lines': [f'6번 최신 요약 읽기 실패: {e}'], 'available': False}
 
 # ── Groq 무료 API ─────────────────────────────────────────
 
@@ -266,18 +293,38 @@ def _line_value(lines, key, default='없음'):
             return line.split(':', 1)[1].strip() or default
     return default
 
-def _names_with_high_rsi(results):
-    return ', '.join(r['name'] for r in results if r.get('rsi') and r['rsi'] >= 70) or '없음'
+def _split_summary_names(value: str) -> set:
+    if not value or value == '없음':
+        return set()
+    return {x.strip() for x in re.split(r'[,/]', value) if x.strip()}
+
+def _names_with_high_rsi(results, excluded_names=None):
+    excluded_names = excluded_names or set()
+    names = [r['name'] for r in results
+             if r.get('rsi') and r['rsi'] >= 70 and r['name'] not in excluded_names]
+    return ', '.join(names) or '없음'
+
+def _format_limited_assets(limited: str, series_check: str) -> str:
+    parts = []
+    if limited != '없음':
+        parts.append(f"{limited}: 기술지표 해석 부적합")
+    if series_check != '없음':
+        parts.append(f"{series_check}: 시계열 스케일 점검으로 장기 지지선 신뢰 제한")
+    return ' / '.join(parts) or '없음'
 
 def algo_analysis(results, macro, support_summary=None):
     """LLM이 없을 때도 0~8 고정 구조를 지키는 해석형 폴백."""
     support_lines = (support_summary or {}).get('lines', [])
+    support_available = (support_summary or {}).get('available', True)
     data_warn = _line_value(support_lines, '데이터 경고')
     series_check = _line_value(support_lines, '시계열 점검')
+    if series_check != '없음' and data_warn == '없음':
+        data_warn = f'부분 경고 / 시계열 스케일 점검: {series_check}'
     limited = _line_value(support_lines, '해석 제한')
+    limited_assets = _format_limited_assets(limited, series_check)
     high_near = _line_value(support_lines, '52주 고점 근접 종목')
     near_res = _line_value(support_lines, '근접 저항 5% 이내 종목')
-    support_gap = _line_value(support_lines, '지지 공백')
+    support_gap = _line_value(support_lines, '지지 공백') if support_available else '지지·저항 미평가'
     box_upper = _line_value(support_lines, '박스 상단 근접')
     prev_high = _line_value(support_lines, '전고점/52주 고점 근접')
     reversal = _line_value(support_lines, '하락추세/반전 시도')
@@ -287,7 +334,9 @@ def algo_analysis(results, macro, support_summary=None):
     us10y = macro.get('US10Y', {}).get('val')
     usdkrw = macro.get('USDKRW', {}).get('val')
     dxy = macro.get('DXY', {}).get('val')
-    overheated = _names_with_high_rsi(results)
+    series_names = _split_summary_names(series_check)
+    overheated = _names_with_high_rsi(results, series_names)
+    rsi_limited = ', '.join(series_names) if series_names else '없음'
     risk_state = '경계' if support_gap != '없음' or series_check != '없음' else '중립'
 
     def asset_line(label):
@@ -296,7 +345,7 @@ def algo_analysis(results, macro, support_summary=None):
             return f"- {label}: 데이터 없음 → 의미 제한 → 관찰 제외"
         pos = _fmt_nan(r.get('pos52'), "{:.1f}%")
         rsi = _fmt_nan(r.get('rsi'), "{:.1f}")
-        return f"- {label}: 52주 위치 {pos} / RSI {rsi} → 기존 요약과 함께 관찰 → 지지 공백·전고점 근접 여부 확인"
+        return f"- {label}: 52주 위치 {pos} / RSI {rsi} → 현재 위치 확인 → 의미 있는 지지선까지의 거리와 전고점 근접 여부 관찰"
 
     lines = [
         "# Jason 종합 AI 분석",
@@ -304,12 +353,12 @@ def algo_analysis(results, macro, support_summary=None):
         "## 0. 데이터 신뢰도",
         f"- 데이터 경고: {data_warn}",
         f"- 시계열 점검: {series_check}",
-        f"- 해석 제한 자산: {limited}",
+        f"- 해석 제한 자산: {limited_assets}",
         "- 숫자는 제공된 DATA FACTS만 사용",
         "- 참고: 9번은 자체 시세/거시 데이터와 5번·6번 최신 요약을 함께 사용하므로, 실행 시점 차이로 일부 가격 숫자가 다를 수 있음",
         "",
         "## 1. 시장 상태 한 줄 요약",
-        f"- {risk_state}: 52주 고점 근접({high_near}), 지지 공백({support_gap}), 매크로 관찰({macro_watch})을 함께 보는 구간",
+        f"- {risk_state}: 52주 고점 근접({high_near}), 의미 있는 지지선까지의 거리({support_gap}), 매크로 관찰({macro_watch})을 함께 보는 구간",
         "",
         "## 2. 내 자산 영향",
         asset_line('QQQM'),
@@ -318,25 +367,26 @@ def algo_analysis(results, macro, support_summary=None):
         asset_line('KODEX 나스닥100'),
         asset_line('KODEX S&P500'),
         asset_line('KODEX 미국반도체'),
-        f"- 환율 영향: 달러/원 {usdkrw if usdkrw is not None else '데이터 없음'} → 원화 자산과 해외자산 환산 변동성 요인 → 방향 단정 금지",
+        f"- 환율 영향: 달러/원 {usdkrw if usdkrw is not None else '데이터 없음'} → 기존 달러자산 원화 평가액에는 완충 요인 / 신규 환전·추가 편입과 향후 환율 하락에는 부담 요인",
         "",
         "## 3. 기술적 위치 종합",
         f"- 5번 기술지표: RSI 과열권 자산은 {overheated}",
-        f"- 6번 지지·저항: 근접 저항 5% 이내는 {near_res}",
+        f"- RSI 해석 신뢰 제한: {rsi_limited}",
+        f"- 6번 지지·저항: {'근접 저항 5% 이내는 ' + near_res if support_available else '지지·저항 미평가'}",
         f"- 박스 상단 근접: {box_upper}",
         f"- 전고점/52주 고점 근접: {prev_high}",
-        f"- 지지 공백: {support_gap}",
+        f"- {'지지 공백' if support_available else '지지·저항 미평가'}: {support_gap} — 하락 예상이 아니라 의미 있는 지지선까지의 거리",
         f"- 금선물(COMEX), Bitcoin 반전 시도: {reversal}",
         "",
         "## 4. 거시 부담",
         f"- VIX: {vix if vix is not None else '데이터 없음'} → 변동성 부담/완충 요인",
         f"- 미국10년물: {us10y if us10y is not None else '데이터 없음'} → 성장주 할인율 부담 요인",
-        f"- 달러/원: {usdkrw if usdkrw is not None else '데이터 없음'} → 원화 약세/환산 변동 요인",
+        f"- 달러/원: {usdkrw if usdkrw is not None else '데이터 없음'} → 기존 달러자산에는 원화 평가액 완충, 신규 환전·추가 편입에는 부담",
         f"- DXY: {dxy if dxy is not None else '데이터 없음'} → 달러 강도 관찰 요인",
         "",
         "## 5. 리스크 체크",
         f"- 전고점 근접 후 단기 피로: {prev_high}",
-        f"- 지지 공백: {support_gap}",
+        f"- {'지지 공백' if support_available else '지지·저항 미평가'}: {support_gap} — 의미 있는 지지선까지의 거리이며 하락 예상 신호 아님",
         f"- 금리/환율/VIX 부담: US10Y {us10y if us10y is not None else 'N/A'}, USDKRW {usdkrw if usdkrw is not None else 'N/A'}, VIX {vix if vix is not None else 'N/A'}",
         f"- 삼성전자/코스피 시계열 스케일 점검: {series_check}",
         f"- 기술지표 과열: {overheated}",
@@ -348,11 +398,12 @@ def algo_analysis(results, macro, support_summary=None):
         "- 삼성전자/코스피의 먼 장기 지지선은 신뢰 제한",
         "- 외부 뉴스 추측 금지",
         "",
-        "## 7. 오늘 관찰할 것",
-        "- QQQM/GOOGL/KODEX ETF가 52주 고점 부근에서 돌파 실패하는지",
-        "- 금리/환율/VIX가 추가 상승하는지",
-        "- 지지 공백 종목의 단기 눌림 폭",
-        "- 금선물(COMEX), Bitcoin 반전 시도 유지 여부",
+        "## 7. 오늘 행동",
+        "- 보유: 기존 보유자산은 전고점·박스 상단 반응을 관찰",
+        "- 추가매수: 정기 DCA 외 공격적 추가매수 보류",
+        "- 방어: 현금·금·CD성 자산은 유지",
+        "- 관찰: QQQM/GOOGL/KODEX ETF의 52주 고점 부근 반응, 금리/환율/VIX 변화",
+        "- 하지 말아야 할 행동: 지지 공백 수치를 하락 예상으로 단정하거나 시계열 점검 자산의 장기 지지선을 강한 기준으로 쓰지 않기",
         "",
         "## 8. 한 줄 판정",
         f"- {risk_state}: 공격적 판단보다 관찰 모드가 적합한 구간",
@@ -379,7 +430,13 @@ _OLLAMA_SYSTEM = """너는 Jason의 5번 기술지표, 6번 지지·저항선, �
 - 데이터에 없는 뉴스, 원인, 외부 평균, 역사적 기준은 추측하지 않는다.
 - 5번/6번 결과와 충돌하지 않는다.
 - RSI/MACD/지지선/박스/전고점은 행동 지시가 아니라 관찰 정보로만 설명한다.
+- "지지 공백"은 하락 예상이 아니라 현재가에서 의미 있는 지지선까지의 거리라고 명확히 설명한다.
+- 지지선은 가능하면 단기(근접 관찰선), 중기(박스/피봇), 장기(52주/먼 지지선)로 구분한다.
+- 삼성전자/코스피처럼 DATA_CHECK 또는 시계열 스케일 점검 대상은 장기 지지선/지지 공백 수치를 참고 제한으로 표시한다.
+- 코스피가 시계열 점검 종목이면 RSI 과열 목록에 강하게 넣지 말고 "코스피는 시계열 점검 대상으로 RSI 해석 신뢰 제한"이라고 표시한다.
+- 해석 제한 자산은 TIGER CD금리(합성)=기술지표 해석 부적합, 삼성전자/코스피=시계열 스케일 점검으로 장기 지지선 신뢰 제한처럼 구분한다.
 - VIX, DXY, 미국10년물, 달러/원은 일반 지지·저항이 아니라 부담/완충 요인으로만 해석한다.
+- 환율은 기존 달러자산 원화 평가액에는 완충 요인, 신규 환전/추가 편입 및 향후 환율 하락에는 부담 요인으로 분리한다.
 - KRX gold spot wording을 쓰지 말고 GC=F는 항상 "금선물(COMEX)"로 쓴다.
 - 삼성전자/코스피는 계산 제외가 아니지만, 장기 지지선 해석은 시계열 스케일 점검으로 신뢰 제한이라고 설명한다.
 - 거래 행동을 지시하는 단어, 성과 보장 표현, 확정적 방향 표현은 쓰지 않는다.
@@ -391,7 +448,7 @@ _OLLAMA_SYSTEM = """너는 Jason의 5번 기술지표, 6번 지지·저항선, �
 ## 0. 데이터 신뢰도
 - DATA_CHECK/데이터 경고 여부
 - 시계열 점검 종목
-- 해석 제한 자산
+- 해석 제한 자산: 기술지표 해석 부적합과 시계열 스케일 점검을 구분
 - 숫자는 제공된 데이터만 사용
 - 참고: 9번은 자체 시세/거시 데이터와 5번·6번 최신 요약을 함께 사용하므로, 실행 시점 차이로 일부 가격 숫자가 다를 수 있음
 
@@ -411,21 +468,22 @@ _OLLAMA_SYSTEM = """너는 Jason의 5번 기술지표, 6번 지지·저항선, �
 
 ## 3. 기술적 위치 종합
 - 5번 기술지표 요약 반영
+- 코스피가 시계열 점검 대상이면 RSI는 해석 신뢰 제한으로 표시
 - 6번 지지·저항 요약 반영
 - 박스 상단 근접
 - 전고점/52주 고점 근접
-- 지지 공백
+- 지지 공백은 "의미 있는 지지선까지의 거리"로 설명
 - 금선물(COMEX), Bitcoin 반전 시도
 
 ## 4. 거시 부담
 - VIX
 - 미국10년물
-- 달러/원
+- 달러/원: 기존 달러자산 완충 vs 신규 환전/추가 편입 부담을 분리
 - DXY
 
 ## 5. 리스크 체크
 - 전고점 근접 후 단기 피로
-- 지지 공백
+- 지지 공백: 하락 예상이 아니라 지지선까지의 거리
 - 금리/환율/VIX 부담
 - 삼성전자/코스피 시계열 스케일 점검
 - 기술지표 과열
@@ -437,11 +495,12 @@ _OLLAMA_SYSTEM = """너는 Jason의 5번 기술지표, 6번 지지·저항선, �
 - 삼성전자/코스피의 먼 장기 지지선은 신뢰 제한
 - 외부 뉴스 추측 금지
 
-## 7. 오늘 관찰할 것
-- QQQM/GOOGL/KODEX ETF가 52주 고점 부근에서 돌파 실패하는지
-- 금리/환율/VIX가 추가 상승하는지
-- 지지 공백 종목의 단기 눌림 폭
-- 금선물(COMEX), Bitcoin 반전 시도 유지 여부
+## 7. 오늘 행동
+- 보유
+- 추가매수: 정기 DCA 외 공격적 추가매수 보류
+- 방어: 현금·금·CD성 자산은 유지
+- 관찰
+- 하지 말아야 할 행동
 
 ## 8. 한 줄 판정
 - 공격 / 중립 / 경계 중 하나
@@ -500,13 +559,30 @@ def build_data_facts(results, macro, support_summary=None, portfolio_text="") ->
         )
 
     # ── 표 3: 6번 지지·저항선 요약 ─────────────────────────
-    support_summary = support_summary or {'source': '없음', 'lines': ['6번 최신 요약 없음']}
+    support_summary = support_summary or {
+        'source': '없음',
+        'lines': ['지지·저항 미평가: 6번 지지·저항 미실행 또는 요약 없음'],
+        'available': False,
+    }
     lines += [
         "",
         "[6번 지지·저항선 요약]",
     ]
-    for line in support_summary.get('lines', []):
-        lines.append(f"- {line}")
+    support_lines = list(support_summary.get('lines', []))
+    if not support_summary.get('available', True):
+        lines.append("- 지지·저항 미평가: 6번 지지·저항 미실행 또는 요약 없음")
+    else:
+        series_check = _line_value(support_lines, '시계열 점검')
+        data_warn = _line_value(support_lines, '데이터 경고')
+        limited = _line_value(support_lines, '해석 제한')
+        for line in support_lines:
+            if line.startswith('데이터 경고:') and data_warn == '없음' and series_check != '없음':
+                lines.append(f"- DATA_CHECK: 부분 경고 / 시계열 스케일 점검: {series_check}")
+            else:
+                lines.append(f"- {line}")
+        lines.append(f"- 해석 제한 구분: {_format_limited_assets(limited, series_check)}")
+        if '코스피' in _split_summary_names(series_check):
+            lines.append("- 코스피 RSI: 시계열 점검 대상으로 RSI 해석 신뢰 제한")
 
     # ── 표 4: 거시지표 ────────────────────────────────────
     lines += [
@@ -542,7 +618,12 @@ def _build_ollama_prompt(data_facts: str, model: str) -> str:
 # compact prompt — 기본 프롬프트 실패/빈응답 시 1회만 사용
 _OLLAMA_COMPACT_SYSTEM = """너는 Jason의 5번/6번/거시/포트폴리오 요약을 해석하는 분석 보조자다.
 DATA FACTS의 숫자만 사용. 외부 기준·역사적 평균·뉴스 추측 금지.
-거래 행동을 지시하는 단어, 성과 보장 표현, 확정적 방향 표현은 쓰지 않는다."""
+거래 행동을 지시하는 단어, 성과 보장 표현, 확정적 방향 표현은 쓰지 않는다.
+지지 공백은 하락 예상이 아니라 의미 있는 지지선까지의 거리로 설명한다.
+삼성전자/코스피의 장기 지지선은 시계열 점검으로 참고 제한 처리한다.
+코스피가 시계열 점검 대상이면 RSI 해석 신뢰 제한으로 표시한다.
+해석 제한 자산은 기술지표 해석 부적합과 시계열 스케일 점검을 구분한다.
+환율은 기존 달러자산 완충과 신규 환전/추가 편입 부담을 분리한다."""
 
 
 def _build_compact_prompt(data_facts: str) -> str:
@@ -559,9 +640,11 @@ def _build_compact_prompt(data_facts: str) -> str:
         "## 4. 거시 부담\n"
         "## 5. 리스크 체크\n"
         "## 6. 오늘 하지 말아야 할 것\n"
-        "## 7. 오늘 관찰할 것\n"
+        "## 7. 오늘 행동\n"
         "## 8. 한 줄 판정\n"
-        "공격/중립/경계 중 하나 + 관찰 모드 설명"
+        "7번에는 보유/추가매수/방어/관찰/하지 말아야 할 행동을 나눠 쓴다.\n"
+        "추가매수에는 정기 DCA 외 공격적 추가매수 보류를, 방어에는 현금·금·CD성 자산 유지를 포함한다.\n"
+        "8번에는 공격/중립/경계 중 하나 + 관찰 모드 설명"
     )
 
 
@@ -604,6 +687,8 @@ def sanitize_analysis_text(text: str) -> str:
     """LLM 산출물의 금지/혼동 표현을 리포트용 관찰 표현으로 완화한다."""
     if not text:
         return text
+    protected_extra_buy = '__JM_EXTRA_BUY_LABEL__'
+    text = text.replace('추가매수', protected_extra_buy)
     replacements = [
         ('금' + '현물', '금선물(COMEX)'),
         ('S&P500)', 'KODEX S&P500)'),
@@ -624,6 +709,9 @@ def sanitize_analysis_text(text: str) -> str:
     ]
     for old, new in replacements:
         text = text.replace(old, new)
+    text = text.replace(protected_extra_buy, '추가매수')
+    text = text.replace('공격적인 추가 추가 행동', '공격적인 신규 편입/추가매수')
+    text = text.replace('공격적 추가 추가 행동', '공격적 신규 편입/추가매수')
     text = re.sub(r'\$?\\+rightarrow\$?', '→', text)
     text = text.replace('KODEX KODEX S&P500', 'KODEX S&P500')
     return text
