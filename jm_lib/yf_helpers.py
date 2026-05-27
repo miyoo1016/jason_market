@@ -126,6 +126,33 @@ def _latest_prepost_chart_price(ticker: str) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _latest_prepost_chart_diag(ticker: str) -> dict:
+    """Yahoo pre/post chart의 마지막 가격 시각 진단."""
+    diag = {
+        'last_extended_price': None,
+        'last_extended_timestamp': None,
+        'last_extended_age_sec': None,
+    }
+    result = _chart(ticker, interval='1m', range_='1d', include_prepost=True)
+    if not result:
+        return diag
+    try:
+        timestamps = result.get('timestamp') or []
+        closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+        for ts, close in reversed(list(zip(timestamps, closes))):
+            price = _positive_float(close)
+            if price is not None:
+                diag['last_extended_price'] = price
+                diag['last_extended_timestamp'] = _fmt_quote_time(ts)
+                diag['last_extended_age_sec'] = round(
+                    datetime.now(timezone.utc).timestamp() - int(ts), 1
+                )
+                break
+    except Exception:
+        pass
+    return diag
+
+
 def _market_state_from_chart_meta(meta: dict) -> str | None:
     """chart currentTradingPeriod 기준으로 PRE/REGULAR/POST/CLOSED 추정"""
     try:
@@ -143,6 +170,36 @@ def _market_state_from_chart_meta(meta: dict) -> str | None:
         return 'CLOSED'
     except Exception:
         return None
+
+
+def _has_overnight_field(quote: dict, chart_meta: dict) -> bool:
+    """Yahoo 표준 응답 안에 overnight/24h 계열 필드가 있는지만 확인."""
+    try:
+        blob = json.dumps({'quote': quote, 'chart_meta': chart_meta}, ensure_ascii=False).lower()
+        return any(k in blob for k in ('overnight', 'twentyfourhour', '24h', 'blue'))
+    except Exception:
+        return False
+
+
+def _overnight_price_diag(ticker: str, quote: dict, chart_meta: dict,
+                          selected: dict) -> dict:
+    """가격 선택을 바꾸지 않는 overnight/24h 지원 여부 진단."""
+    market_state = str(
+        selected.get('market_state') or quote.get('marketState') or ''
+    ).upper()
+    if not (market_state.startswith('PREPRE') or market_state in ('CLOSED', 'PRE')):
+        return {}
+
+    diag = _latest_prepost_chart_diag(ticker)
+    has_overnight = _has_overnight_field(quote, chart_meta)
+    age = diag.get('last_extended_age_sec')
+    if (not has_overnight) and (age is None or age > 1800):
+        diag.update({
+            'overnight_price_supported': False,
+            'overnight_warning': 'Yahoo 표준 응답에 24h/Blue Ocean 가격 없음',
+        })
+        return diag
+    return {}
 
 
 def _select_us_equity_price(ticker: str, quote: dict, chart_meta: dict) -> dict | None:
@@ -344,7 +401,8 @@ def _us_equity_price_data(ticker: str) -> dict | None:
         return None
 
     meta = result.get('meta', {})
-    selected = _select_us_equity_price(ticker, _quote(ticker), meta)
+    quote = _quote(ticker)
+    selected = _select_us_equity_price(ticker, quote, meta)
     if not selected:
         return None
     curr = float(selected['selected_price'])
@@ -364,6 +422,7 @@ def _us_equity_price_data(ticker: str) -> dict | None:
 
     pct = (curr - prev) / prev * 100
     selected.update({'curr': curr, 'prev': prev, 'pct': pct})
+    selected.update(_overnight_price_diag(ticker, quote, meta, selected))
     return selected
 
 

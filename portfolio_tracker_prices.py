@@ -121,6 +121,11 @@ def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
                     'market_state': data.get('market_state'),
                     'source': data.get('source'),
                     'quote_time': data.get('quote_time'),
+                    'overnight_price_supported': data.get('overnight_price_supported'),
+                    'overnight_warning': data.get('overnight_warning'),
+                    'last_extended_price': data.get('last_extended_price'),
+                    'last_extended_timestamp': data.get('last_extended_timestamp'),
+                    'last_extended_age_sec': data.get('last_extended_age_sec'),
                 }
                 _store(t, data['curr'], data.get('prev'), diag)
                 if os.environ.get('JM_DEBUG_PRICE') == '1':
@@ -131,7 +136,12 @@ def fetch_all_prices(holdings: list, usdkrw: float) -> dict:
                         f"selected_field={diag['selected_field']} "
                         f"market_state={diag['market_state']} "
                         f"source={diag['source']} "
-                        f"quote_time={diag['quote_time']}"
+                        f"quote_time={diag['quote_time']} "
+                        f"overnight_price_supported={diag['overnight_price_supported']} "
+                        f"overnight_warning={diag['overnight_warning']} "
+                        f"last_extended_price={diag['last_extended_price']} "
+                        f"last_extended_timestamp={diag['last_extended_timestamp']} "
+                        f"last_extended_age_sec={diag['last_extended_age_sec']}"
                     )
         except Exception:
             pass
