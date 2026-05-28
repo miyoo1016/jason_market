@@ -143,6 +143,10 @@ TICKER_MAP = {
     "QQQ":                         "QQQ",
     # ── 국내 주식 / ETF (yfinance KS 티커) ───────────────────
     "삼성전자":                      "005930.KS",
+    "SK하이닉스":                    "000660.KS",
+    "하이닉스":                      "000660.KS",
+    "000660":                       "000660.KS",
+    "000660.KS":                    "000660.KS",
     "TIGER CD금리(합성)":           "357870.KS",   # TIGER CD금리투자KIS(합성)
     "TIGER CD금리투자KIS(합성)":    "357870.KS",
     # ── 국내 ETF (KS 티커 — 시세 자동 업데이트) ──────────────
@@ -272,7 +276,7 @@ def read_xlsx():
 
     current_owner = None  # 현재 섹션 소유자 (와이프 / Jason)
 
-    for _, row in df.iterrows():
+    for source_row, (_, row) in enumerate(df.iterrows(), start=1):
         asset_type = str(row[1]).strip() if pd.notna(row[1]) else ""
         name       = str(row[2]).strip() if pd.notna(row[2]) else ""
         account    = str(row[3]).strip() if pd.notna(row[3]) else ""
@@ -317,6 +321,8 @@ def read_xlsx():
                 "currency":   currency,
                 "asset_type": asset_type,
                 "is_cash":    True,
+                "source_sheet": SHEET_NAME,
+                "source_row":   source_row,
             })
             continue
 
@@ -362,6 +368,13 @@ def read_xlsx():
         # XLSX_PRICE 플레이스홀더 → 실제 yfinance KS 티커로 교체
         if ticker == "XLSX_PRICE":
             ticker = KS_TICKER_MAP.get(name, "XLSX_PRICE")
+        if not ticker:
+            print(
+                "  ⚠ PORTFOLIO_PARSE_WARNING "
+                f"source_sheet={SHEET_NAME} source_row={source_row} "
+                f"asset_type={asset_type} name={name} account={account} "
+                f"quantity_raw={qty_raw} drop_reason=missing_ticker_mapping"
+            )
 
         holdings.append({
             "name":        name,
@@ -375,6 +388,8 @@ def read_xlsx():
             "is_cash":     False,
             "base_usdkrw": base_usdkrw,  # 기준 환율 추가
             "precision_cost_krw": precision_cost_krw, # [NEW] 정밀 원화 매수 원가
+            "source_sheet": SHEET_NAME,
+            "source_row":   source_row,
         })
 
     return holdings
@@ -396,6 +411,8 @@ def sync_to_json(holdings):
             "is_cash":    h.get("is_cash", False),
             "base_usdkrw": h.get("base_usdkrw"),
             "precision_cost_krw": h.get("precision_cost_krw"),
+            "source_sheet": h.get("source_sheet"),
+            "source_row": h.get("source_row"),
         })
 
     with open(PORTFOLIO_JSON, "w", encoding="utf-8") as f:
@@ -532,7 +549,7 @@ def read_gsheet():
     holdings      = []
     current_owner = None
 
-    for row in rows:
+    for source_row, row in enumerate(rows, start=1):
         asset_type = cell(row, 1)
         name       = cell(row, 2)
         account    = cell(row, 3)
@@ -566,6 +583,8 @@ def read_gsheet():
                 "currency":   currency,
                 "asset_type": asset_type,
                 "is_cash":    True,
+                "source_sheet": SHEET_NAME,
+                "source_row":   source_row,
             })
             continue
 
@@ -584,6 +603,13 @@ def read_gsheet():
         ticker = TICKER_MAP.get(name, "")
         if ticker == "XLSX_PRICE":
             ticker = KS_TICKER_MAP.get(name, "XLSX_PRICE")
+        if not ticker:
+            print(
+                "  ⚠ PORTFOLIO_PARSE_WARNING "
+                f"source_sheet={SHEET_NAME} source_row={source_row} "
+                f"asset_type={asset_type} name={name} account={account} "
+                f"quantity_raw={cell(row, 4)} drop_reason=missing_ticker_mapping"
+            )
 
         holdings.append({
             "name":               name,
@@ -597,6 +623,8 @@ def read_gsheet():
             "is_cash":            False,
             "base_usdkrw":        base_usdkrw,
             "precision_cost_krw": precision_cost_krw,
+            "source_sheet":       SHEET_NAME,
+            "source_row":         source_row,
         })
 
     print(f"  ✅ 구글시트 직접 읽기 완료 ({len(holdings)}개 항목)")

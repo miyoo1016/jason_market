@@ -37,6 +37,23 @@ ASSETS = [
     ('VIX (공포지수)',   '^VIX'),
 ]
 
+def _assets_with_holdings():
+    """기본 관심종목에 Google Sheet 최신 보유종목을 추가한다."""
+    assets = list(ASSETS)
+    seen = {ticker for _, ticker in assets}
+    try:
+        from xlsx_sync import load_portfolio
+        for h in load_portfolio():
+            ticker = h.get('ticker')
+            if not ticker or ticker == 'CASH' or ticker in seen:
+                continue
+            name = h.get('name') or ticker
+            assets.append((name, ticker))
+            seen.add(ticker)
+    except Exception:
+        pass
+    return assets
+
 def get_gold_krx():
     """KRX 금현물 — 네이버 증권 API (M04020000, 한국거래소 공식)"""
     try:
@@ -106,7 +123,7 @@ def main():
     print(f"  {'자산':<16}  {'현재가':>13}  {'등락률':>8}  {'방향'}")
     print(f"  {'─'*54}")
 
-    for name, ticker in ASSETS:
+    for name, ticker in _assets_with_holdings():
         result = get_data(ticker, name)
         if result:
             price, pct = result

@@ -4,7 +4,7 @@ from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
 """포트폴리오 리스크 분석 - Jason Market
 개별 자산 변동성/Beta/MaxDD 및 포트폴리오 VaR/Sharpe 분석
 - 현금 포함 전체 평가금액 산출
-- 동일 종목 계좌 통합 (합산 수량·가중 평단가)
+- Google Sheet 보유 행 기준 포트 리스트
 - HTML: 종목별 리스크 카드 + 종합 지표"""
 
 import os
@@ -119,14 +119,14 @@ def load_holdings():
     """
     xlsx 전체 포트폴리오 로드.
     - 현금 포함 (is_cash=True)
-    - 동일 (name, ticker) 중복 → 수량 합산 / 평단가 가중 평균
+    - 동일 계좌 안의 동일 (name, ticker)만 합산
     반환: (합산_holdings_list, 'portfolio')
     """
     raw = load_portfolio()
     if not raw:
         return [], 'empty'
 
-    # 동일 종목 통합 (key = (name, ticker))
+    # 동일 계좌 안의 동일 종목만 통합 (key = (account, name, ticker))
     merged = {}
     for h in raw:
         is_cash = h.get('is_cash', False) or h.get('ticker') == 'CASH'
@@ -135,12 +135,12 @@ def load_holdings():
         qty     = float(h.get('qty', 0))
         avg     = float(h.get('avg_price', 0))
         cur     = h.get('currency', 'KRW')
-        key     = (name, ticker)
+        acc     = h.get('account', '')
+        key     = (acc, name, ticker)
 
         if is_cash:
             # 현금: avg_price = 금액, qty = 1
             cash_amt = avg  # qty=1 이므로 avg_price 자체가 금액
-            acc      = h.get('account', '')
             if key in merged:
                 merged[key]['avg_price'] += cash_amt
                 if acc and acc not in merged[key]['accounts']:

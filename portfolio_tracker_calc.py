@@ -10,6 +10,18 @@ from portfolio_tracker_prices import fetch_all_prices, get_price
 def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
     """모든 계좌 손익 계산 → (accounts_data, updated_cash_tracker)"""
     usdkrw, prev_usdkrw = usdkrw_tuple
+    for h in holdings:
+        if not h.get('is_cash') and not h.get('ticker') and float(h.get('qty', 0) or 0) > 0:
+            print(
+                "  ⚠ PORTFOLIO_DROP_WARNING "
+                f"source_sheet={h.get('source_sheet', '')} "
+                f"source_row={h.get('source_row', '')} "
+                f"asset_type={h.get('asset_type', '')} "
+                f"name={h.get('name', '')} "
+                f"account={h.get('account', '')} "
+                f"quantity_raw={h.get('qty', '')} "
+                "drop_reason=missing_ticker_mapping"
+            )
     valid = [h for h in holdings if h.get('ticker') and float(h.get('qty', 0)) > 0]
     price_cache = fetch_all_prices(valid, usdkrw)
     
