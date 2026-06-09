@@ -30,7 +30,7 @@ def print_terminal(accounts_data: dict, usdkrw: float, timestamp: str, data_sour
                         f"{'-':>22} "
                         f"{'-':>22}")
             else:
-                daily_s = format_daily_pnl_with_pct(r['daily_profit_krw'], r['val_krw'])
+                daily_s = format_daily_pnl_with_pct(r['daily_profit_krw'], r['val_krw'], r.get('change_pct'))
                 total_s = format_total_pnl_with_pct(r['profit_krw'], r['pct'])
                 line = (f"  │ {r['name']:<16} {r['qty']:>8} "
                         f"{r['avg']:>12} {r['price']:>12} "

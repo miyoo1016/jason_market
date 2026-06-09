@@ -114,8 +114,14 @@ def _fetch_naver_kr_live(ticker: str) -> dict | None:
         sign = _direction_sign(over.get('compareToPreviousPrice')) or _direction_sign(d.get('compareToPreviousPrice')) or 1
         diff_raw = _num(over.get('compareToPreviousClosePrice')) or _num(d.get('compareToPreviousClosePrice'))
         ratio_raw = _num(over.get('fluctuationsRatio')) or _num(d.get('fluctuationsRatio'))
-        diff = diff_raw * sign if diff_raw is not None else None
-        ratio = ratio_raw * sign if ratio_raw is not None else None
+
+        diff = diff_raw
+        if diff is not None and diff > 0 and sign < 0:
+            diff = -diff
+
+        ratio = ratio_raw
+        if ratio is not None and ratio > 0 and sign < 0:
+            ratio = -ratio
 
         prev = price - diff if diff is not None else None
         if (not prev or prev <= 0) and ratio is not None and ratio > -99:
@@ -381,24 +387,58 @@ def _apply_canonical_prices(cache: dict, holdings: list) -> None:
             continue
 
         if prev is None:
+            audit.append(
+                f"PREV_CLOSE_MISSING key={key} name={name} ticker={ticker}"
+            )
             prev = curr
 
-        computed_pct = ((float(curr) - float(prev)) / float(prev) * 100) if prev else 0.0
-        if _is_kr_listed(ticker) and source == 'GoogleSheet':
-            audit.append(
-                f"PRICE_SOURCE_WRONG key={key} name={name} ticker={ticker} "
-                "source=GoogleSheet"
-            )
+        final_change_pct = 0.0
+        computed_pct = 0.0
+        if prev and prev > 0:
+            computed_pct = ((float(curr) / float(prev)) - 1) * 100
+            live_pct = diag.get('live_change_pct')
+
+            if live_pct is None:
+                final_change_pct = computed_pct
+            else:
+                live_pct = float(live_pct)
+                # Check sign mismatch
+                if (computed_pct > 0 and live_pct < 0) or (computed_pct < 0 and live_pct > 0):
+                    audit.append(
+                        f"CHANGE_PCT_SIGN_MISMATCH key={key} name={name} ticker={ticker} "
+                        f"computed={computed_pct:.2f} live={live_pct:.2f}"
+                    )
+                    final_change_pct = computed_pct
+                else:
+                    final_change_pct = live_pct
+                    if abs(computed_pct - live_pct) >= 0.2:
+                        audit.append(
+                            f"CHANGE_PCT_RECOMPUTED key={key} name={name} ticker={ticker} "
+                            f"computed={computed_pct:.2f} live={live_pct:.2f}"
+                        )
+
+        is_kr = _is_kr_listed(ticker)
+        if is_kr:
+            if source != 'naver_live':
+                audit.append(
+                    f"DOMESTIC_NOT_LIVE_SOURCE key={key} name={name} ticker={ticker} "
+                    f"source={source}"
+                )
+            if source == 'GoogleSheet':
+                audit.append(
+                    f"PRICE_CHANGE_SOURCE_MIXED key={key} name={name} ticker={ticker} "
+                    "GoogleSheet is forbidden for domestic stock"
+                )
+            elif source == 'yahoo_quote':
+                audit.append(
+                    f"PRICE_CHANGE_SOURCE_MIXED key={key} name={name} ticker={ticker} "
+                    "Yahoo is forbidden for domestic stock"
+                )
+
         if is_fallback:
             audit.append(
                 f"LIVE_QUOTE_FAILED_FALLBACK key={key} name={name} ticker={ticker} "
                 f"fallback_reason={fallback_reason}"
-            )
-        live_pct = diag.get('live_change_pct')
-        if live_pct is not None and abs(computed_pct - float(live_pct)) > 0.2:
-            audit.append(
-                f"CHANGE_PCT_MISMATCH key={key} name={name} ticker={ticker} "
-                f"computed={computed_pct:.2f} live={float(live_pct):.2f}"
             )
 
         entry = {
@@ -412,7 +452,7 @@ def _apply_canonical_prices(cache: dict, holdings: list) -> None:
             'curr': float(curr),
             'prev': float(prev),
             'prev_close': float(prev),
-            'change_pct': computed_pct,
+            'change_pct': final_change_pct,
             'currency': h.get('currency', 'KRW'),
             'source': source,
             'provider': provider,

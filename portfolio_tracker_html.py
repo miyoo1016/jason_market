@@ -49,7 +49,7 @@ def _build_account_sections(accounts_data: dict) -> str:
             else:
                 pc = _pnl_color(r['profit_krw'])
                 pdc = _pnl_color(r['daily_profit_krw'])
-                daily_html = format_daily_pnl_with_pct(r['daily_profit_krw'], r['val_krw'])
+                daily_html = format_daily_pnl_with_pct(r['daily_profit_krw'], r['val_krw'], r.get('change_pct'))
                 profit_html = format_total_pnl_with_pct(r['profit_krw'], r['pct'])
                 # USD의 경우 환차 이익 표시 태그 추가
                 fx_info = ""

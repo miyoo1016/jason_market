@@ -102,7 +102,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                     'val_krw': cash_krw, 'profit_krw': 0,
                     'daily_profit_krw': 0, 'pct': 0,
                     'fx_pnl': 0, 'price_pnl': 0, 'base_fx': 0,
-                    'is_precision': False,
+                    'is_precision': False, 'change_pct': 0,
                 })
                 continue
 
@@ -165,6 +165,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                 'price_is_fallback': price_entry.get('is_fallback'),
                 'price_stale_warning': price_entry.get('stale_warning'),
                 'price_fallback_reason': price_entry.get('fallback_reason'),
+                'change_pct': price_entry.get('change_pct', 0),
             })
 
         acc_profit = sum(r['profit_krw'] for r in rows if not r['is_cash'])
