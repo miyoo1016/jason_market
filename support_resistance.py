@@ -59,9 +59,10 @@ def _data_warnings(name, ticker, hist, curr, prev_close):
         if abs((curr - prev_close) / prev_close * 100) >= 20:
             warnings.append('DATA_CHECK: 최근 등락률 ±20% 이상')
         med60 = float(hist['Close'].tail(60).median())
+        upper_mult = 3 if ticker == '000660.KS' else 2
         if med60 <= 0 or np.isnan(med60):
             warnings.append('DATA_INVALID: 60일 중앙값 계산 불가')
-        elif curr >= med60 * 2 or curr <= med60 * 0.5:
+        elif curr >= med60 * upper_mult or curr <= med60 * 0.5:
             warnings.append('DATA_CHECK: 현재가가 60일 중앙값 대비 2배/0.5배 범위 밖')
         if ticker == '^KS11' and (curr >= 20000 or curr <= 500):
             warnings.append('DATA_CHECK: 코스피 지수 통상 범위 이탈')
@@ -874,19 +875,51 @@ def build_summary_lines(all_results):
         if r.get('breakout', {}).get('long_candle') and r.get('breakout', {}).get('volume_spike')
     ]
     series_check = [r for r in clean if r.get('series_scale_check')]
+    high_near_s = ', '.join(
+        f"{r['name']} {nearest_pct(r['curr'], r['high_52w']):+.1f}%"
+        for r in high_near[:5]
+    ) or '없음'
+    near_res_s = ', '.join(
+        f"{r['name']} +{p:.1f}%"
+        for r, p in near_res[:5]
+    ) or '없음'
+    near_sup_s = ', '.join(
+        f"{r['name']} {p:.1f}%"
+        for r, p in near_sup[:5]
+    ) or '없음'
+    support_gap_s = ', '.join(
+        f"{r['name']}({p:.1f}%)" if p is not None else f"{r['name']}(N/A)"
+        for r, p in support_gap[:5]
+    ) or '없음'
+    macro_s = ', '.join(
+        f"{r['ticker']} 관찰선"
+        for r in macro
+    ) or '없음'
+    box_upper_s = ', '.join(
+        f"{r['name']}({r.get('box', {}).get('status')})"
+        for r in box_upper[:5]
+    ) or '없음'
+    prev_high_watch_s = ', '.join(
+        f"{r['name']}({r.get('previous_high', {}).get('status')})"
+        for r in prev_high_watch[:5]
+    ) or '없음'
+    down_or_reversal_s = ', '.join(
+        f"{r['name']}({r.get('trend', {}).get('status')})"
+        for r in down_or_reversal[:5]
+    ) or '없음'
     return [
         f"데이터 경고: {', '.join(r['name'] for r in warned) + ' — 원천 가격 이상으로 계산 제외' if warned else '없음'}",
         f"시계열 점검: {', '.join(r['name'] for r in series_check) or '없음'}",
-        f"52주 고점 근접 종목: {', '.join(f'{r['name']} {nearest_pct(r['curr'], r['high_52w']):+.1f}%' for r in high_near[:5]) or '없음'}",
-        f"근접 저항 5% 이내 종목: {', '.join(f'{r['name']} +{p:.1f}%' for r, p in near_res[:5]) or '없음'}",
-        f"근접 지지 5% 이내 종목: {', '.join(f'{r['name']} {p:.1f}%' for r, p in near_sup[:5]) or '없음'}",
-        f"지지 공백: {', '.join(f'{r['name']}({p:.1f}%)' if p is not None else f'{r['name']}(N/A)' for r, p in support_gap[:5]) or '없음'}",
-        f"매크로 관찰: {', '.join(f'{r['ticker']} 관찰선' for r in macro) or '없음'}",
+        f"52주 고점 근접 종목: {high_near_s}",
+        f"근접 저항 5% 이내 종목: {near_res_s}",
+        f"근접 지지 5% 이내 종목: {near_sup_s}",
+        f"지지 공백: {support_gap_s}",
+        f"매크로 관찰: {macro_s}",
         f"해석 제한: {', '.join(r['name'] for r in limited) or '없음'}",
         f"상승추세 종목: {', '.join(r['name'] for r in uptrend[:5]) or '없음'}",
-        f"박스 상단 근접: {', '.join(f'{r['name']}({r.get('box', {}).get('status')})' for r in box_upper[:5]) or '없음'}",
-        f"전고점/52주 고점 근접: {', '.join(f'{r['name']}({r.get('previous_high', {}).get('status')})' for r in prev_high_watch[:5]) or '없음'}",
-        f"하락추세/반전 시도: {', '.join(f'{r['name']}({r.get('trend', {}).get('status')})' for r in down_or_reversal[:5]) or '없음'}",
+        f"박스 상단 근접: {box_upper_s}",
+        f"전고점/52주 고점 근접: {prev_high_watch_s}",
+        f"하락추세/반전 시도: {down_or_reversal_s}",
         f"거래량 동반 돌파 관찰: {', '.join(r['name'] for r in volume_breakout[:5]) or '없음'}",
     ]
 

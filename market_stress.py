@@ -261,7 +261,9 @@ def main():
     print(f"  - VIX30/VIX3M : {r.get('r_30_3m',0):.3f} {r.get('l2','')}")
     print(f"  - VIX3M/VIX6M : {r.get('r_3m_6m',0):.3f} {r.get('l3','')}")
     print(f"## ② VVIX: {r.get('vvix_state','')}")
-    print(f"## ③ 수익률 곡선: {f'{r.get('yc_spread',0):+.2f}%'} (10Y-3M) / {f'{r.get('spread_10y_2y',0):+.2f}%'} (10Y-2Y)")
+    yc_spread_s = f"{r.get('yc_spread', 0):+.2f}%"
+    spread_10y_2y_s = f"{r.get('spread_10y_2y', 0):+.2f}%"
+    print(f"## ③ 수익률 곡선: {yc_spread_s} (10Y-3M) / {spread_10y_2y_s} (10Y-2Y)")
     print(f"## ④ 신용 스프레드")
     print(f"  - HYG/IEF 비율 : {r.get('cr_ratio',0):.4f}")
     print(f"    ├ HYG 당일 등락 : {r.get('h_chg',0):+.1f}%")

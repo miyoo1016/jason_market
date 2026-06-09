@@ -5,6 +5,13 @@ import subprocess, json
 import yfinance as yf
 from datetime import datetime
 from jm_lib.colors import ALERT, AMBER, CYAN, RESET, GREEN, RED, WARN
+from portfolio_tracker_prices import (
+    describe_price_basis,
+    fetch_all_prices,
+    get_usdkrw,
+    normalize_price_key,
+    print_price_audit,
+)
 
 
 EXTREME = ['극도공포','극도탐욕','강력매도','강력매수','매우높음','즉시청산']
@@ -20,6 +27,7 @@ ASSETS = [
     ('SPY (S&P500)',     'SPY'),
     ('Google (알파벳)',  'GOOGL'),
     ('삼성전자',         '005930.KS'),
+    ('SK하이닉스',       '000660.KS'),
     ('KOSPI (코스피)',   '^KS11'),
     ('KODEX 나스닥100', '379810.KS'),
     ('KODEX S&P500',    '379800.KS'),
@@ -37,13 +45,15 @@ ASSETS = [
     ('VIX (공포지수)',   '^VIX'),
 ]
 
-def _assets_with_holdings():
+def _assets_with_holdings(holdings=None):
     """기본 관심종목에 Google Sheet 최신 보유종목을 추가한다."""
     assets = list(ASSETS)
     seen = {ticker for _, ticker in assets}
     try:
-        from xlsx_sync import load_portfolio
-        for h in load_portfolio():
+        if holdings is None:
+            from xlsx_sync import load_portfolio
+            holdings = load_portfolio()
+        for h in holdings:
             ticker = h.get('ticker')
             if not ticker or ticker == 'CASH' or ticker in seen:
                 continue
@@ -120,19 +130,63 @@ def main():
     print(f"\n{'━'*60}")
     print(f"  Jason 실시간 시세   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'━'*60}")
-    print(f"  {'자산':<16}  {'현재가':>13}  {'등락률':>8}  {'방향'}")
-    print(f"  {'─'*54}")
+    holdings = []
+    price_cache = {}
+    try:
+        from xlsx_sync import load_portfolio
+        holdings = load_portfolio()
+        usdkrw, _ = get_usdkrw()
+        valid = [h for h in holdings if h.get('ticker') and h.get('ticker') != 'CASH']
+        price_inputs = list(valid)
+        seen_tickers = {h.get('ticker') for h in valid}
+        for name, ticker in ASSETS:
+            if not ticker or ticker in seen_tickers:
+                continue
+            price_inputs.append({
+                'name': name,
+                'ticker': ticker,
+                'qty': 1,
+                'avg_price': 1,
+                'currency': 'KRW' if ticker.endswith('.KS') or ticker == 'GOLD_KRX' else 'USD',
+                'asset_type': '',
+            })
+            seen_tickers.add(ticker)
+        price_cache = fetch_all_prices(price_inputs, usdkrw)
+        print(f"  가격 기준: {describe_price_basis(price_cache)}")
+        print_price_audit(price_cache)
+    except Exception as e:
+        print(f"  ⚠ canonical price map 생성 실패: {e}")
 
-    for name, ticker in _assets_with_holdings():
-        result = get_data(ticker, name)
+    canonical = price_cache.get('_canonical', {})
+    print(f"  {'자산':<16}  {'현재가':>13}  {'등락률':>8}  {'방향'}  {'소스':<18}")
+    print(f"  {'─'*76}")
+
+    for name, ticker in _assets_with_holdings(holdings):
+        key = normalize_price_key(name, ticker)
+        entry = canonical.get(key)
+        if entry:
+            price = entry['price']
+            pct = entry.get('change_pct', 0)
+            source = entry.get('source', 'canonical')
+            if entry.get('is_fallback'):
+                source = (
+                    f"{source} read_time={entry.get('read_time', '')} "
+                    f"stale_warning={entry.get('stale_warning', '')}"
+                )
+            elif entry.get('quote_time'):
+                source = f"{source} quote_time={entry.get('quote_time', '')}"
+            result = (price, pct)
+        else:
+            result = get_data(ticker, name)
+            source = 'live'
         if result:
             price, pct = result
             arrow = '▲' if pct >= 0 else '▼'
-            print(f"  {name}  {fmt_price(price, ticker)}  {pct:>+7.2f}%  {arrow}")
+            print(f"  {name}  {fmt_price(price, ticker)}  {pct:>+7.2f}%  {arrow}  source={source:<11}")
         else:
             print(f"  {name}  {'데이터 없음':>13}")
 
-    print(f"  {'─'*54}")
+    print(f"  {'─'*76}")
     print(f"  ※ 주식·ETF: 전일 종가 대비 | 선물·FX·크립토·지수: 00:00 GMT 시가 대비\n")
 
 if __name__ == '__main__':

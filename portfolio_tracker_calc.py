@@ -4,7 +4,13 @@
 from datetime import datetime
 
 from portfolio_tracker_base import load_cash_tracker
-from portfolio_tracker_prices import fetch_all_prices, get_price
+from portfolio_tracker_prices import (
+    describe_price_basis,
+    fetch_all_prices,
+    get_price,
+    get_price_entry,
+    print_price_audit,
+)
 
 
 def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
@@ -24,6 +30,8 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
             )
     valid = [h for h in holdings if h.get('ticker') and float(h.get('qty', 0)) > 0]
     price_cache = fetch_all_prices(valid, usdkrw)
+    print(f"  가격 기준: {describe_price_basis(price_cache)}")
+    print_price_audit(price_cache)
     
 
     tracker = load_cash_tracker()       # 기존 저장값
@@ -102,6 +110,7 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
             price, prev_close = get_price(h, price_cache, usdkrw)
             if price is None:
                 continue
+            price_entry = get_price_entry(h, price_cache)
 
             base_fx = h.get('base_usdkrw', usdkrw)
             is_usd = (cur == 'USD')
@@ -148,7 +157,14 @@ def calc_data(holdings: list, usdkrw_tuple: tuple) -> tuple:
                 'val_krw': current_krw, 'profit_krw': profit_krw,
                 'daily_profit_krw': daily_profit_krw, 'pct': pct,
                 'fx_pnl': fx_pnl, 'price_pnl': price_pnl, 'base_fx': base_fx,
-                'is_precision': (p_cost is not None)
+                'is_precision': (p_cost is not None),
+                'price_source': price_entry.get('source'),
+                'price_provider': price_entry.get('provider'),
+                'price_quote_time': price_entry.get('quote_time'),
+                'price_read_time': price_entry.get('read_time'),
+                'price_is_fallback': price_entry.get('is_fallback'),
+                'price_stale_warning': price_entry.get('stale_warning'),
+                'price_fallback_reason': price_entry.get('fallback_reason'),
             })
 
         acc_profit = sum(r['profit_krw'] for r in rows if not r['is_cash'])
